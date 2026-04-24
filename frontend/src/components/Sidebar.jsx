@@ -277,6 +277,7 @@ export const Sidebar = ({
                       <div className="flex gap-2 mb-3">
                         <button
                           type="button"
+                          data-onboarding="route-build"
                           onClick={onToggleRouteMode}
                           disabled={!isRouteEditMode && !canEnableRouteMode}
                           title={routeBuildTitle}

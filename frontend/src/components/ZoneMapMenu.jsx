@@ -21,7 +21,7 @@ export function ZoneMapMenu({ zones, activeZoneId, onSelectZone, className = '' 
   if (!zones?.length) return null;
 
   return (
-    <div ref={rootRef} className={`absolute top-2 left-2 z-[125] ${className}`}>
+    <div ref={rootRef} data-onboarding="zone-map-menu" className={`absolute top-2 left-2 z-[125] ${className}`}>
       <button
         type="button"
         aria-label={open ? 'Закрыть список зон' : 'Выбрать зону'}

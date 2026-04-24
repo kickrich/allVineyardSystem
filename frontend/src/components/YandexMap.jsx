@@ -1193,6 +1193,12 @@ export function YandexMap({
         }
         return;
       }
+      if (placementMode) {
+        if (typeof onMapClick === 'function') {
+          onMapClick(clickPoint);
+        }
+        return;
+      }
       const zonesForHit = normalizedZones.length
         ? normalizedZones
         : (activeBoundary ? [{ id: null, boundary: activeBoundary }] : []);
@@ -1250,7 +1256,16 @@ export function YandexMap({
     map.events.add('click', handleClick);
 
     return () => map.events.remove('click', handleClick);
-  }, [onMapClick, onZoneClick, activeBoundary, normalizedZones, mapLoaded, drawRectZoneMode, routeEditMode]);
+  }, [
+    onMapClick,
+    onZoneClick,
+    activeBoundary,
+    normalizedZones,
+    mapLoaded,
+    drawRectZoneMode,
+    routeEditMode,
+    placementMode,
+  ]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current) return;

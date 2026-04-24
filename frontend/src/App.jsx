@@ -4,12 +4,14 @@ import { Sidebar } from './components/Sidebar';
 import { ShabloneScreen } from './components/Shablone_Screen';
 import { YandexMap } from './components/YandexMap';
 import { ZoneMapMenu } from './components/ZoneMapMenu';
+import { WorkspaceOnboarding } from './components/WorkspaceOnboarding';
 import { DroneModal } from './components/Drone_OnClick_List_Sidebar';
 import { DroneParking } from './components/Drone_Parking';
 import { WeatherWidget } from './components/WeatherWidget';
 import { AuthScreen } from './components/AuthScreen';
 import { dronesData, initialMapCenter, flightStatus } from './constants/drones_data';
 import { MISSION_TEMPLATES_STORAGE_KEY } from './constants/mission';
+import { resetWorkspaceOnboardingForLogin } from './constants/onboarding';
 import {
   fetchDronesFromBackend,
   fetchUsersFromBackend,
@@ -632,6 +634,16 @@ function App() {
       lat: latlng.lat,
       lng: latlng.lng
     };
+
+    if (Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4) {
+      if (!isPointInsideZoneBoundary(activeZoneBoundary, positionToSet)) {
+        addToDroneLog(
+          droneToPlace,
+          '⚠️ Разместите дрон внутри контура активной зоны (выберите зону в меню на карте, если контур не подсвечен).'
+        );
+        return;
+      }
+    }
 
     setDrones(prev =>
       prev.map(d => {
@@ -2050,12 +2062,33 @@ function App() {
     [activeZoneId, newZoneKmlName, addToZoneLog]
   );
 
+  const handleOnboardingBeforeStep = useCallback((stepId) => {
+    if (typeof window === 'undefined') return;
+    const narrow = window.matchMedia('(max-width: 1023px)').matches;
+    if (!narrow) return;
+    if (stepId === 'place-drone') {
+      setParkingOpen(true);
+      setSidebarOpen(false);
+    }
+    if (stepId === 'route-build') {
+      setSidebarOpen(true);
+      setParkingOpen(false);
+    }
+  }, []);
+
   const handleDroneClick = (drone) => {
     setSelectedDroneForModal(drone);
   };
 
   if (!authReady) {
-    return <AuthScreen onLoggedIn={() => setAuthReady(true)} />;
+    return (
+      <AuthScreen
+        onLoggedIn={() => {
+          resetWorkspaceOnboardingForLogin();
+          setAuthReady(true);
+        }}
+      />
+    );
   }
   const workspaceVisible = hasStarted && !exitingToTemplates;
 
@@ -2391,6 +2424,7 @@ function App() {
                     />
                     <button
                       type="button"
+                      data-onboarding="zone-draw"
                       onClick={toggleDrawRectZoneMode}
                       title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
                       aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
@@ -2426,6 +2460,7 @@ function App() {
                   zoneFitNonce={zoneFitNonce}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
+                  placementMode={placementMode && droneToPlace != null}
                 />
                 <ZoneMapMenu
                   zones={backendZones}
@@ -2439,7 +2474,7 @@ function App() {
                   >
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm text-yellow-100 leading-snug">
-                        Кликните по карте, чтобы поставить дрон
+                        Кликните внутри контура активной зоны на карте, чтобы поставить дрон
                         {(() => {
                           const d = drones.find((x) => x.id === droneToPlace);
                           return d ? ` «${d.name}»` : '';
@@ -2552,6 +2587,10 @@ function App() {
           drone={selectedDroneForModal}
           onClose={() => setSelectedDroneForModal(null)}
         />
+      )}
+
+      {workspaceVisible && hasStarted && !templateEditMode && (
+        <WorkspaceOnboarding enabled onBeforeStep={handleOnboardingBeforeStep} />
       )}
 
       {false && hasStarted && (

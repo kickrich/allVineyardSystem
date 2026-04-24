@@ -161,7 +161,7 @@ export const DroneParking = ({
                     )}
                   </div>
                   <div className="space-y-2">
-                    {availableDrones.map(drone => (
+                    {availableDrones.map((drone, idx) => (
                       <div
                         key={drone.id}
                         className="bg-gray-900/50 border border-gray-700 rounded-lg p-3 hover:bg-gray-800/50 transition-colors hover:border-gray-600"
@@ -175,7 +175,9 @@ export const DroneParking = ({
                           
                           </div>
                           <button
+                            type="button"
                             onClick={() => onPlaceDrone(drone.id)}
+                            {...(idx === 0 ? { 'data-onboarding': 'place-drone' } : {})}
                             className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors hover:scale-105 flex items-center whitespace-nowrap shrink-0"
                             title="Разместить дрон на карте"
                           >
