@@ -2221,24 +2221,21 @@ function App() {
                   )}
                 </div>
               )}
-              <div className="absolute top-2 right-2 z-[100] flex justify-end">
-                <div className="relative flex flex-col items-end gap-2">
-                  <button
-                    type="button"
-                    onClick={toggleDrawRectZoneMode}
-                    title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                    aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                    className={`w-11 h-11 rounded-lg text-white text-xl leading-none flex items-center justify-center border ${
-                      drawRectZoneMode
-                        ? 'bg-amber-900 border-amber-500 ring-2 ring-amber-400/70'
-                        : 'bg-amber-950/90 border-amber-800 hover:bg-amber-900'
-                    }`}
-                  >
-                    {drawRectZoneMode ? '×' : '▭'}
-                  </button>
-                </div>
-              </div>
-              <div className="absolute bottom-4 left-4 right-4 z-10 bg-gray-800/95 border border-gray-600 rounded-xl p-4 shadow-xl max-w-md">
+              <div className="pointer-events-none absolute bottom-4 left-0 right-4 z-[100] flex flex-col items-start gap-2">
+                <button
+                  type="button"
+                  onClick={toggleDrawRectZoneMode}
+                  title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
+                  aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
+                  className={`pointer-events-auto w-11 h-11 shrink-0 rounded-lg text-white text-xl leading-none flex items-center justify-center border ${
+                    drawRectZoneMode
+                      ? 'bg-amber-900 border-amber-500 ring-2 ring-amber-400/70'
+                      : 'bg-amber-950/90 border-amber-800 hover:bg-amber-900'
+                  }`}
+                >
+                  {drawRectZoneMode ? '×' : '▭'}
+                </button>
+                <div className="pointer-events-auto w-full max-w-md bg-gray-800/95 border border-gray-600 rounded-xl p-4 shadow-xl">
                 <h3 className="font-semibold text-white mb-2">
                   {templateEditMode === 'create' ? 'Создание шаблона маршрута' : 'Редактирование маршрута'}
                 </h3>
@@ -2285,6 +2282,7 @@ function App() {
                   >
                     Отмена
                   </button>
+                </div>
                 </div>
               </div>
             </div>
