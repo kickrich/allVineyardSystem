@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flightStatus } from '../constants/drones_data';
+import { RouteShiftSegmentsPopup } from './RouteShiftSegmentsPopup';
 
 if (typeof window !== 'undefined') {
   if (!window.yandexMapsLoading) window.yandexMapsLoading = false;
@@ -168,6 +169,106 @@ function areSamePolylineCoords(currentCoords, nextCoords) {
   return true;
 }
 
+/**
+ * Порог в «глобальных пикселях» Яндекс.Карт (MapEvent.globalPixels / projection.toGlobalPixels).
+ * Одна система координат; масштаб зависит от zoom — порог слегка уменьшается на мелком масштабе.
+ */
+const ROUTE_SEGMENT_SHIFT_MAX_GLOBAL_BASE = 36;
+
+function distancePointToSegment2D(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-6) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** Клик в тех же глобальных пикселях, что и toGlobalPixels у вершин (MapEvent). */
+function getClickGlobalPixels(e) {
+  if (typeof e?.get !== 'function') return null;
+  const gp = e.get('globalPixels');
+  if (Array.isArray(gp) && gp.length >= 2 && gp.every(Number.isFinite)) {
+    return { x: gp[0], y: gp[1] };
+  }
+  return null;
+}
+
+function geoToGlobalPixelsPoint(map, lat, lng) {
+  if (!map || ![lat, lng].every(Number.isFinite)) return null;
+  try {
+    const projection = map.options.get('projection');
+    if (!projection || typeof projection.toGlobalPixels !== 'function') return null;
+    const zoom = map.getZoom();
+    const gp = projection.toGlobalPixels([lat, lng], zoom);
+    if (!Array.isArray(gp) || gp.length < 2 || !gp.every(Number.isFinite)) return null;
+    return { x: gp[0], y: gp[1] };
+  } catch {
+    return null;
+  }
+}
+
+/** Индекс отрезка path[i]→path[i+1] или -1 (path: [lat,lng]). */
+function findNearestRouteSegmentGlobalPixels(map, path, clickGp, maxDistGp) {
+  if (!map || !clickGp || !Array.isArray(path) || path.length < 2) return -1;
+  let best = -1;
+  let bestD = maxDistGp;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const [la0, ln0] = path[i];
+    const [la1, ln1] = path[i + 1];
+    if (![la0, ln0, la1, ln1].every(Number.isFinite)) continue;
+    const p0 = geoToGlobalPixelsPoint(map, la0, ln0);
+    const p1 = geoToGlobalPixelsPoint(map, la1, ln1);
+    if (!p0 || !p1) continue;
+    const d = distancePointToSegment2D(clickGp.x, clickGp.y, p0.x, p0.y, p1.x, p1.y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Расстояние от точки до отрезка на земле (м) — для клика по GeoObject-полилинии (coords на линии). */
+function distancePointToSegmentMeters(lat, lng, lat1, lng1, lat2, lng2) {
+  const latRad = (lat * Math.PI) / 180;
+  const cosLat = Math.cos(latRad) || 1e-6;
+  const mPerLng = 111_320 * cosLat;
+  const mPerLat = 111_320;
+  const x = (lng - lng1) * mPerLng;
+  const y = (lat - lat1) * mPerLat;
+  const dx = (lng2 - lng1) * mPerLng;
+  const dy = (lat2 - lat1) * mPerLat;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-4) return Math.hypot(x, y);
+  let t = (x * dx + y * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = t * dx;
+  const py = t * dy;
+  return Math.hypot(x - px, y - py);
+}
+
+function findNearestRouteSegmentMeters(path, lat, lng, maxM) {
+  if (!Array.isArray(path) || path.length < 2) return -1;
+  let best = -1;
+  let bestD = maxM;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const [la0, ln0] = path[i];
+    const [la1, ln1] = path[i + 1];
+    if (![la0, ln0, la1, ln1].every(Number.isFinite)) continue;
+    const d = distancePointToSegmentMeters(lat, lng, la0, ln0, la1, ln1);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Клик по полилинии маршрута: coords почти на линии — узкий порог (м). */
+const ROUTE_SEGMENT_SHIFT_POLYLINE_CLICK_MAX_M = 11;
+
 export function YandexMap({
   drones,
   mapCenter,
@@ -198,6 +299,10 @@ export function YandexMap({
   draftRectBoundary = null,
   /** Режим рисования прямоугольника мышью (зажал-потянул-отпустил). */
   drawRectZoneMode = false,
+  /** Индексы отрезков path[i]→path[i+1], помеченных как «смещение» (разворот между рядами). */
+  routeShiftSegmentIndices = [],
+  /** Переключить метку смещения для отрезка с индексом i (клик по отрезку или из списка). */
+  onRouteShiftSegmentToggle,
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -218,6 +323,10 @@ export function YandexMap({
   const editingPolylineRef = useRef(null);
   const previewPolylineRef = useRef(null);
   const routeEditPolylineRef = useRef(null);
+  const routeEditPathRef = useRef(routeEditPath);
+  const routeShiftHighlightPolylinesRef = useRef([]);
+  const routeShiftPolylineClickHandlerRef = useRef(null);
+  const onRouteShiftSegmentToggleRef = useRef(onRouteShiftSegmentToggle);
   const routeEditGeometryChangeHandlerRef = useRef(null);
   const isSyncingRouteEditRef = useRef(false);
   const zonePolygonRef = useRef(null);
@@ -232,12 +341,15 @@ export function YandexMap({
   const lastZoneFitNonceRef = useRef(zoneFitNonce);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [error, setError] = useState(null);
+  const [routeShiftPanelOpen, setRouteShiftPanelOpen] = useState(false);
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
 
   dronesRef.current = drones;
   routeEditModeRef.current = routeEditMode;
   placementModeRef.current = placementMode;
+  routeEditPathRef.current = routeEditPath;
+  onRouteShiftSegmentToggleRef.current = onRouteShiftSegmentToggle;
 
   const API_KEY = '2b39244b-bae4-482a-b3a8-d4b21860b4e8';
 
@@ -749,6 +861,12 @@ export function YandexMap({
         routeEditGeometryChangeHandlerRef.current = null;
       }
       if (routeEditPolylineRef.current) {
+        if (routeShiftPolylineClickHandlerRef.current) {
+          try {
+            routeEditPolylineRef.current.events.remove('click', routeShiftPolylineClickHandlerRef.current);
+          } catch { /* ignore */ }
+          routeShiftPolylineClickHandlerRef.current = null;
+        }
         try { map.geoObjects.remove(routeEditPolylineRef.current); } catch { /* ignore */ }
         routeEditPolylineRef.current = null;
       }
@@ -785,6 +903,32 @@ export function YandexMap({
       };
       routeEditGeometryChangeHandlerRef.current = handleRouteGeometryChange;
       polyline.geometry.events.add('change', handleRouteGeometryChange);
+
+      const handleRoutePolylineClick = (pe) => {
+        const fn = onRouteShiftSegmentToggleRef.current;
+        if (typeof fn !== 'function') return;
+        const coords = typeof pe.get === 'function' ? pe.get('coords') : null;
+        if (!Array.isArray(coords) || coords.length < 2) return;
+        const lat = coords[0];
+        const lng = coords[1];
+        const curPath = routeEditPathRef.current;
+        if (!Array.isArray(curPath) || curPath.length < 2) return;
+        const seg = findNearestRouteSegmentMeters(
+          curPath,
+          lat,
+          lng,
+          ROUTE_SEGMENT_SHIFT_POLYLINE_CLICK_MAX_M
+        );
+        if (seg < 0) return;
+        try {
+          if (typeof pe.stopPropagation === 'function') pe.stopPropagation();
+        } catch {
+          /* ignore */
+        }
+        fn(seg);
+      };
+      polyline.events.add('click', handleRoutePolylineClick);
+      routeShiftPolylineClickHandlerRef.current = handleRoutePolylineClick;
     } else {
       const polyline = routeEditPolylineRef.current;
       const current = polyline.geometry.getCoordinates();
@@ -804,6 +948,53 @@ export function YandexMap({
       /* ignore */
     }
   }, [mapLoaded, routeEditMode, routeEditPath, onRoutePathChange]);
+
+  useEffect(() => {
+    if (!routeEditMode) setRouteShiftPanelOpen(false);
+  }, [routeEditMode]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
+    const map = mapInstanceRef.current;
+    const clearHighlights = () => {
+      routeShiftHighlightPolylinesRef.current.forEach((pl) => {
+        try {
+          map.geoObjects.remove(pl);
+        } catch {
+          /* ignore */
+        }
+      });
+      routeShiftHighlightPolylinesRef.current = [];
+    };
+    clearHighlights();
+    if (!routeEditMode) return;
+    const path = Array.isArray(routeEditPath) ? routeEditPath : [];
+    const marks = Array.isArray(routeShiftSegmentIndices) ? routeShiftSegmentIndices : [];
+    if (path.length < 2 || marks.length === 0) return;
+    marks.forEach((idx) => {
+      if (!Number.isInteger(idx) || idx < 0 || idx >= path.length - 1) return;
+      const a = path[idx];
+      const b = path[idx + 1];
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) return;
+      const coords = [
+        [a[0], a[1]],
+        [b[0], b[1]],
+      ];
+      const pl = new window.ymaps.Polyline(
+        coords,
+        {},
+        {
+          strokeColor: '#c084fc',
+          strokeWidth: 8,
+          strokeOpacity: 0.95,
+          interactivityModel: 'default#transparent',
+        }
+      );
+      map.geoObjects.add(pl);
+      routeShiftHighlightPolylinesRef.current.push(pl);
+    });
+    return clearHighlights;
+  }, [mapLoaded, routeEditMode, routeEditPath, routeShiftSegmentIndices]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
@@ -1206,6 +1397,20 @@ export function YandexMap({
       if (!Array.isArray(coords) || coords.length < 2) return;
       const clickPoint = { lat: coords[0], lng: coords[1] };
       if (routeEditMode) {
+        const path = Array.isArray(routeEditPathRef.current) ? routeEditPathRef.current : [];
+        if (path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
+          const clickGp = getClickGlobalPixels(e);
+          if (clickGp) {
+            const zoom = typeof map.getZoom === 'function' ? map.getZoom() : 13;
+            const zoomFactor = Math.pow(2, Math.max(0, 15 - zoom));
+            const maxGp = ROUTE_SEGMENT_SHIFT_MAX_GLOBAL_BASE * zoomFactor;
+            const seg = findNearestRouteSegmentGlobalPixels(map, path, clickGp, maxGp);
+            if (seg >= 0) {
+              onRouteShiftSegmentToggle(seg);
+              return;
+            }
+          }
+        }
         if (typeof onMapClick === 'function') {
           onMapClick(clickPoint);
         }
@@ -1283,6 +1488,7 @@ export function YandexMap({
     drawRectZoneMode,
     routeEditMode,
     placementMode,
+    onRouteShiftSegmentToggle,
   ]);
 
   useEffect(() => {
@@ -1577,9 +1783,23 @@ export function YandexMap({
             routeEditGeometryChangeHandlerRef.current = null;
           }
           if (routeEditPolylineRef.current) {
+            if (routeShiftPolylineClickHandlerRef.current) {
+              try {
+                routeEditPolylineRef.current.events.remove('click', routeShiftPolylineClickHandlerRef.current);
+              } catch { /* ignore */ }
+              routeShiftPolylineClickHandlerRef.current = null;
+            }
             try { mapInstanceRef.current.geoObjects.remove(routeEditPolylineRef.current); } catch { }
             routeEditPolylineRef.current = null;
           }
+          routeShiftHighlightPolylinesRef.current.forEach((pl) => {
+            try {
+              mapInstanceRef.current.geoObjects.remove(pl);
+            } catch {
+              /* ignore */
+            }
+          });
+          routeShiftHighlightPolylinesRef.current = [];
 
           mapInstanceRef.current.destroy();
         } catch { }
@@ -1620,17 +1840,47 @@ export function YandexMap({
     drawRectZoneMode ||
     (editingPath && editingPath.length >= 0);
 
+  const shiftCount = Array.isArray(routeShiftSegmentIndices) ? routeShiftSegmentIndices.length : 0;
+  const showRouteShiftUi =
+    routeEditMode &&
+    Array.isArray(routeEditPath) &&
+    routeEditPath.length >= 2 &&
+    typeof onRouteShiftSegmentToggle === 'function';
+
   return (
-    <div className={`w-full h-full bg-gray-900 rounded overflow-hidden relative ${cursorAddPoint ? 'cursor-route-edit' : ''}`}>
+    <div
+      className={`relative h-full w-full overflow-hidden rounded bg-gray-900 ${cursorAddPoint ? 'cursor-route-edit' : ''}`}
+    >
       <div
         ref={mapContainerRef}
-        className="w-full h-full"
+        className="h-full w-full"
         style={{
           height: '100%',
           width: '100%',
           cursor: cursorAddPoint ? 'crosshair' : 'grab',
         }}
       />
+      {showRouteShiftUi && (
+        <>
+          <button
+            type="button"
+            className="pointer-events-auto absolute bottom-24 right-3 z-[165] max-w-[min(56vw,220px)] truncate rounded-xl border border-violet-500/60 bg-violet-950/90 px-3 py-2 text-left text-sm font-medium text-violet-100 shadow-lg backdrop-blur-sm hover:bg-violet-900/95 sm:bottom-20"
+            title="Список отрезков с меткой «смещение» между рядами"
+            onClick={() => setRouteShiftPanelOpen(true)}
+          >
+            Смещения · {shiftCount}
+          </button>
+          <RouteShiftSegmentsPopup
+            open={routeShiftPanelOpen}
+            onClose={() => setRouteShiftPanelOpen(false)}
+            segmentIndices={routeShiftSegmentIndices}
+            pathPointCount={routeEditPath.length}
+            onToggleSegment={(seg) => {
+              onRouteShiftSegmentToggle(seg);
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }

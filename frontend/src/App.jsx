@@ -49,8 +49,6 @@ const EXIT_PANELS_MS = VIEW_TRANSITION_MS;
 const DESKTOP_SWITCH_EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
 /** Минимальная дистанция (м): если дрон ближе к первой точке — перелёт до неё не добавляется */
 const FIRST_WAYPOINT_TRANSIT_THRESHOLD_M = 10;
-/** Радиус (м): клик рядом с точкой замыкает маршрут в этой точке. */
-const ROUTE_LOOP_SNAP_THRESHOLD_M = 15;
 /** Минимальный интервал между одинаковыми предупреждениями о выходе маршрута за зону. */
 const ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS = 1200;
 const TEMPLATE_ROUTE_REJECT_COOLDOWN_MS = 1200;
@@ -592,6 +590,61 @@ function App() {
     if (!d?.path?.length) return [];
     return d.path;
   }, [drones, selectedDroneForSidebar]);
+
+  /** Индексы отрезков path[i]→path[i+1] с меткой «смещение» (разворот между рядами), по id дрона — для будущей отправки на backend. */
+  const [routeShiftSegmentsByDroneId, setRouteShiftSegmentsByDroneId] = useState({});
+
+  const selectedRouteShiftSegments = useMemo(() => {
+    if (selectedDroneForSidebar == null) return [];
+    const raw = routeShiftSegmentsByDroneId[String(selectedDroneForSidebar)];
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(raw.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b);
+  }, [routeShiftSegmentsByDroneId, selectedDroneForSidebar]);
+
+  useEffect(() => {
+    if (selectedDroneForSidebar == null) return;
+    const drone = drones.find((d) => d.id === selectedDroneForSidebar);
+    const len = drone?.path?.length ?? 0;
+    const maxSeg = len >= 2 ? len - 2 : -1;
+    const id = String(selectedDroneForSidebar);
+    setRouteShiftSegmentsByDroneId((prev) => {
+      const cur = prev[id];
+      if (!Array.isArray(cur) || !cur.length) return prev;
+      if (maxSeg < 0) {
+        if (!cur.length) return prev;
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      }
+      const next = cur.filter((i) => i >= 0 && i <= maxSeg);
+      if (next.length === cur.length) return prev;
+      const copy = { ...prev };
+      if (!next.length) delete copy[id];
+      else copy[id] = next;
+      return copy;
+    });
+  }, [drones, selectedDroneForSidebar]);
+
+  const toggleRouteShiftSegment = useCallback(
+    (segmentIndex) => {
+      if (selectedDroneForSidebar == null) return;
+      const drone = drones.find((d) => d.id === selectedDroneForSidebar);
+      const n = drone?.path?.length ?? 0;
+      if (n < 2 || !Number.isInteger(segmentIndex)) return;
+      if (segmentIndex < 0 || segmentIndex > n - 2) return;
+      const id = String(selectedDroneForSidebar);
+      setRouteShiftSegmentsByDroneId((prev) => {
+        const cur = [...(prev[id] || [])];
+        const j = cur.indexOf(segmentIndex);
+        if (j >= 0) cur.splice(j, 1);
+        else cur.push(segmentIndex);
+        cur.sort((a, b) => a - b);
+        return { ...prev, [id]: cur };
+      });
+    },
+    [selectedDroneForSidebar, drones]
+  );
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parkingOpen, setParkingOpen] = useState(false);
   const [workspaceTourOpen, setWorkspaceTourOpen] = useState(false);
@@ -744,22 +797,6 @@ function App() {
       if (!isPointInsideZoneBoundary(activeZoneBoundary, latlng)) {
         return;
       }
-      const snappedPointIndex = templateDraftPath.findIndex((point) => {
-        if (!Array.isArray(point) || point.length < 2) return false;
-        return calculateDistance(latlng.lat, latlng.lng, point[0], point[1]) <= ROUTE_LOOP_SNAP_THRESHOLD_M;
-      });
-      if (snappedPointIndex >= 0 && templateDraftPath.length >= 2) {
-        const loopPoint = templateDraftPath[snappedPointIndex];
-        const lastPoint = templateDraftPath[templateDraftPath.length - 1];
-        const alreadyClosed =
-          Array.isArray(lastPoint) &&
-          lastPoint[0] === loopPoint[0] &&
-          lastPoint[1] === loopPoint[1];
-        if (!alreadyClosed) {
-          setTemplateDraftPath((prev) => [...prev, [loopPoint[0], loopPoint[1]]]);
-        }
-        return;
-      }
       addTemplateDraftPoint(latlng);
       return;
     }
@@ -776,46 +813,6 @@ function App() {
         }
         if (!isPointInsideZoneBoundary(activeZoneBoundary, latlng)) {
           addToDroneLog(selectedDroneForSidebar, '⚠️ Точку можно поставить только внутри активной зоны');
-          return;
-        }
-        const path = Array.isArray(drone.path) ? drone.path : [];
-        const snappedPointIndex = path.findIndex((point) => {
-          if (!Array.isArray(point) || point.length < 2) return false;
-          return calculateDistance(latlng.lat, latlng.lng, point[0], point[1]) <= ROUTE_LOOP_SNAP_THRESHOLD_M;
-        });
-
-        if (snappedPointIndex >= 0 && path.length >= 2) {
-          const loopPoint = path[snappedPointIndex];
-          const lastPoint = path[path.length - 1];
-          const alreadyClosed =
-            Array.isArray(lastPoint) &&
-            lastPoint[0] === loopPoint[0] &&
-            lastPoint[1] === loopPoint[1];
-          if (!alreadyClosed) {
-            setDrones((prev) =>
-              prev.map((d) =>
-                d.id === selectedDroneForSidebar
-                  ? { ...d, path: [...d.path, [loopPoint[0], loopPoint[1]]] }
-                  : d
-              )
-            );
-            setTimeout(() => {
-              const missionParams = calculateMissionParameters(selectedDroneForSidebar);
-              if (missionParams) {
-                setDrones((prev) =>
-                  prev.map((d) =>
-                    d.id === selectedDroneForSidebar
-                      ? { ...d, missionParameters: missionParams }
-                      : d
-                  )
-                );
-              }
-            }, 0);
-          }
-          addToDroneLog(selectedDroneForSidebar, '🔁 Маршрут закольцован', {
-            pointNumber: snappedPointIndex + 1,
-          });
-          setIsRouteEditMode(false);
           return;
         }
         addRoutePoint(selectedDroneForSidebar, latlng);
@@ -973,35 +970,6 @@ function App() {
     );
     addToDroneLog(droneId, '🗑️ Маршрут очищен');
   };
-
-  const unloopRoute = useCallback((droneId) => {
-    if (!droneId) droneId = selectedDroneForSidebar;
-    if (!droneId) return;
-    const drone = drones.find((d) => d.id === droneId);
-    const path = drone?.path;
-    if (!Array.isArray(path) || path.length < 2) return;
-    const last = path[path.length - 1];
-    const loopIndex = path.slice(0, -1).findIndex((p) => Array.isArray(p) && p[0] === last?.[0] && p[1] === last?.[1]);
-    if (loopIndex < 0) return;
-
-    const nextPath = path.slice(0, -1);
-    const missionParams = computeMissionParamsFromPath(nextPath, drone.maxSpeed, drone.battery);
-    setDrones((prev) =>
-      prev.map((d) =>
-        d.id === droneId
-          ? {
-              ...d,
-              path: nextPath,
-              missionParameters: missionParams ?? d.missionParameters,
-            }
-          : d
-      )
-    );
-    addToDroneLog(droneId, '↔️ Маршрут разомкнут', {
-      fromPoint: loopIndex + 1,
-    });
-    setIsRouteEditMode(true);
-  }, [drones, selectedDroneForSidebar, computeMissionParamsFromPath]);
 
   const calculateMissionParameters = (droneId) => {
     const drone = drones.find(d => d.id === droneId);
@@ -2453,6 +2421,8 @@ function App() {
                   routeEditMode={isRouteEditMode}
                   routeEditPath={selectedRouteEditPath}
                   onRoutePathChange={handleRoutePathChange}
+                  routeShiftSegmentIndices={selectedRouteShiftSegments}
+                  onRouteShiftSegmentToggle={toggleRouteShiftSegment}
                   previewPath={templateToApplyId ? (missionTemplates.find(t => t.id === templateToApplyId)?.path) ?? null : null}
                   zones={zonesForMap}
                   zoneBoundary={activeZoneBoundary}
@@ -2568,7 +2538,6 @@ function App() {
                 onAddRoutePoint={addRoutePoint}
                 onUndoLastPoint={undoLastPoint}
                 onClearRoute={clearRoute}
-                onUnloopRoute={unloopRoute}
                 onClearLogs={() => setGlobalMissionLog([])}
                 onDroneClick={handleDroneClick}
                 isRouteEditMode={isRouteEditMode}

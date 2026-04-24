@@ -17,7 +17,6 @@ export const Sidebar = ({
   onAddRoutePoint,
   onUndoLastPoint,
   onClearRoute,
-  onUnloopRoute,
   onClearLogs,
   onDroneClick,
   isRouteEditMode = false,
@@ -115,14 +114,6 @@ export const Sidebar = ({
         : selectedDrone.isFlying
           ? 'Во время полёта маршрут недоступен'
           : 'Включить режим: клики по карте внутри зоны добавляют точки маршрута';
-
-  const isRouteLooped = useMemo(() => {
-    if (!Array.isArray(selectedDrone?.path) || selectedDrone.path.length < 2) return false;
-    const last = selectedDrone.path[selectedDrone.path.length - 1];
-    return selectedDrone.path
-      .slice(0, -1)
-      .some((p) => Array.isArray(p) && p[0] === last?.[0] && p[1] === last?.[1]);
-  }, [selectedDrone?.path]);
 
   useEffect(() => {
     if (!selectedDroneId && visibleDrones.length > 0 && onSelectDrone) {
@@ -346,17 +337,6 @@ export const Sidebar = ({
                           Очистить маршрут
                         </button>
                       </div>
-                      <button
-                        onClick={() => onUnloopRoute?.(selectedDrone.id)}
-                        disabled={!isRouteLooped}
-                        className={`w-full mt-2 py-2 rounded transition-colors ${
-                          isRouteLooped
-                            ? 'bg-gray-700 hover:bg-gray-600'
-                            : 'bg-gray-700 cursor-not-allowed opacity-50'
-                        }`}
-                      >
-                        Разомкнуть маршрут
-                      </button>
 
                   
                     </>
