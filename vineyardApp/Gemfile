@@ -70,6 +70,5 @@ gem 'aws-sdk-s3'
 
 gem "pagy", "~> 43.4"
 
-gem "dotenv-rails"
 gem "ruby-vips", require: false
 gem "fiddle"

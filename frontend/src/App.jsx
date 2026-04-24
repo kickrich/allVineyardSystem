@@ -3,6 +3,7 @@ import { SearchBox } from './components/Search_Box';
 import { Sidebar } from './components/Sidebar';
 import { ShabloneScreen } from './components/Shablone_Screen';
 import { YandexMap } from './components/YandexMap';
+import { ZoneMapMenu } from './components/ZoneMapMenu';
 import { DroneModal } from './components/Drone_OnClick_List_Sidebar';
 import { DroneParking } from './components/Drone_Parking';
 import { WeatherWidget } from './components/WeatherWidget';
@@ -1989,14 +1990,14 @@ function App() {
 
   const pendingKmlActionRef = useRef('create');
 
-  const handleActiveZoneSelect = useCallback((e) => {
-    const id = Number(e.target.value);
-    if (!Number.isFinite(id)) return;
-    setActiveZoneId(id);
-    setZoneFitNonce((n) => n + 1);
+  const applyActiveZoneId = useCallback((id) => {
+    const n = Number(id);
+    if (!Number.isFinite(n)) return;
+    setActiveZoneId(n);
+    setZoneFitNonce((x) => x + 1);
     const u = backendContextRef.current.userId;
     if (u != null) {
-      backendContextRef.current = { userId: u, zoneId: id };
+      backendContextRef.current = { userId: u, zoneId: n };
     }
   }, []);
 
@@ -2170,6 +2171,11 @@ function App() {
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                 />
+                <ZoneMapMenu
+                  zones={backendZones}
+                  activeZoneId={activeZoneId}
+                  onSelectZone={applyActiveZoneId}
+                />
               </div>
               {(drawRectZoneMode || draftRectBoundary) && (
                 <div className="absolute top-2 left-2 z-[130] w-[min(82vw,340px)] rounded-xl border border-amber-600/40 bg-gray-900/80 p-2 backdrop-blur-sm">
@@ -2225,20 +2231,6 @@ function App() {
               )}
               <div className="absolute top-2 right-2 z-[100] flex justify-end">
                 <div className="relative flex flex-col items-end gap-2">
-                  {backendZones.length > 0 && (
-                    <select
-                      value={activeZoneId ?? ''}
-                      onChange={handleActiveZoneSelect}
-                      className="px-3 py-2 rounded-lg bg-gray-900/90 border border-gray-600 text-white text-sm"
-                      title="Активная зона"
-                    >
-                      {backendZones.map((z) => (
-                        <option key={z.id} value={z.id}>
-                          {z.name || `Зона ${z.id}`}
-                        </option>
-                      ))}
-                    </select>
-                  )}
                   <button
                     type="button"
                     onClick={toggleDrawRectZoneMode}
@@ -2477,6 +2469,11 @@ function App() {
                   zoneFitNonce={zoneFitNonce}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
+                />
+                <ZoneMapMenu
+                  zones={backendZones}
+                  activeZoneId={activeZoneId}
+                  onSelectZone={applyActiveZoneId}
                 />
               </div>
 
