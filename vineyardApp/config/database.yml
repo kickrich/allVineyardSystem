@@ -2,6 +2,8 @@ default: &default
   adapter: postgresql
   encoding: unicode
   pool: <%= ENV.fetch("DB_POOL", 5).to_i %>
+  # Без явного порта Rails использует 5432. Второй инстанс на Windows часто на 5433 — как в backend.
+  port: <%= ENV.fetch("DB_PORT", 5433).to_i %>
 
 development:
   <<: *default
