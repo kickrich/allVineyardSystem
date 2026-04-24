@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { flightStatus } from '../constants/drones_data';
 
 if (typeof window !== 'undefined') {
   if (!window.yandexMapsLoading) window.yandexMapsLoading = false;
@@ -7,6 +8,63 @@ if (typeof window !== 'undefined') {
 
 /** Длительность плавного подгона вида при смене зоны (мс). */
 const ZONE_FIT_ANIMATION_MS = 520;
+
+/** Появление / исчезновение маркера: длина диагонали по земле (м) и длительность (мс), симметрично. */
+const DRONE_PLACE_OFFSET_M = 72;
+const DRONE_PLACE_DURATION_MS = 400;
+
+/** Лёгкое «зависание» на точке: амплитуда по север–юг (м) и период (мс). */
+const DRONE_HOVER_AMPLITUDE_M = 3.5;
+const DRONE_HOVER_PERIOD_MS = 2000;
+
+/** Перемещение дрона (м) — выключаем «зависание»; через мс после остановки снова включаем. */
+const DRONE_MOTION_THRESHOLD_M = 1.5;
+const DRONE_MOTION_HOVER_RESUME_MS = 500;
+
+function easeOutCubic(t) {
+  return 1 - (1 - t) ** 3;
+}
+
+/** Миссия / полёт: нельзя тянуть маркер; в sync — сброс к точным координатам из props. */
+function isDroneHoverSuspended(drone) {
+  if (!drone) return false;
+  if (drone.status === 'в полете') return true;
+  if (drone.isFlying) return true;
+  const fs = drone.flightStatus;
+  return (
+    fs === flightStatus.FLYING ||
+    fs === flightStatus.TAKEOFF ||
+    fs === flightStatus.LANDING ||
+    fs === flightStatus.PAUSED
+  );
+}
+
+/** Обновляет последнюю позицию из props; возвращает true, пока «зависание» должно быть выключено после движения. */
+function touchDroneMotionMap(motionRef, idStr, lat, lng, now) {
+  let st = motionRef.current[idStr];
+  if (!st) {
+    motionRef.current[idStr] = { lat, lng, resumeHoverAt: 0 };
+    return false;
+  }
+  const latRad = (lat * Math.PI) / 180;
+  const cosLat = Math.cos(latRad) || 1e-6;
+  const movedM = Math.hypot((lat - st.lat) * 111_320, (lng - st.lng) * 111_320 * cosLat);
+  if (movedM > DRONE_MOTION_THRESHOLD_M) {
+    st.resumeHoverAt = now + DRONE_MOTION_HOVER_RESUME_MS;
+  }
+  st.lat = lat;
+  st.lng = lng;
+  return st.resumeHoverAt > now;
+}
+
+/** Сместить точку на offsetM по азимуту: 0 — север, π/2 — восток (случайный угол для прилёта/улёта). */
+function offsetLatLngByMetersAndBearing(latDeg, lngDeg, offsetM, bearingRad) {
+  const latRad = (latDeg * Math.PI) / 180;
+  const cosLat = Math.cos(latRad) || 1e-6;
+  const dLat = (offsetM / 111_320) * Math.cos(bearingRad);
+  const dLng = (offsetM / (111_320 * cosLat)) * Math.sin(bearingRad);
+  return [latDeg + dLat, lngDeg + dLng];
+}
 
 /** boundary с API: [[lng, lat], ...] — замкнутый полигон. */
 function boundaryToYandexRing(boundary) {
@@ -142,6 +200,16 @@ export function YandexMap({
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const droneMarkersRef = useRef({});
+  const dronePlaceAnimRafRef = useRef({});
+  const dronePlaceAnimActiveRef = useRef(new Set());
+  const droneRemoveAnimActiveRef = useRef(new Set());
+  const dronePlaceTargetKeyRef = useRef(new Map());
+  const droneMarkerPositionKeyRef = useRef(new Map());
+  const droneHoverPhaseRef = useRef({});
+  const droneHoverLoopRafRef = useRef(null);
+  const droneMotionForHoverRef = useRef({});
+  const droneDragActiveRef = useRef(new Set());
+  const dronesRef = useRef(drones);
   const routePolylinesRef = useRef({});
   const editingPolylineRef = useRef(null);
   const previewPolylineRef = useRef(null);
@@ -162,6 +230,8 @@ export function YandexMap({
   const [error, setError] = useState(null);
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
+
+  dronesRef.current = drones;
 
   const API_KEY = '2b39244b-bae4-482a-b3a8-d4b21860b4e8';
 
@@ -221,6 +291,82 @@ export function YandexMap({
     document.head.appendChild(script);
   }, []);
 
+  const cancelDroneMarkerAnim = (droneId) => {
+    const id = String(droneId);
+    const h = dronePlaceAnimRafRef.current[id];
+    if (h != null) cancelAnimationFrame(h);
+    delete dronePlaceAnimRafRef.current[id];
+    dronePlaceAnimActiveRef.current.delete(id);
+    droneRemoveAnimActiveRef.current.delete(id);
+    dronePlaceTargetKeyRef.current.delete(id);
+  };
+
+  const finishRemoveDroneMarker = (map, droneId, placemark) => {
+    const idStr = String(droneId);
+    try {
+      if (placemark && map?.geoObjects) map.geoObjects.remove(placemark);
+    } catch {
+      /* ignore */
+    }
+    if (droneMarkersRef.current[droneId] === placemark) {
+      delete droneMarkersRef.current[droneId];
+    }
+    droneMarkerPositionKeyRef.current.delete(idStr);
+    if (routePolylinesRef.current[droneId] && map?.geoObjects) {
+      try {
+        map.geoObjects.remove(routePolylinesRef.current[droneId]);
+      } catch {
+        /* ignore */
+      }
+      delete routePolylinesRef.current[droneId];
+    }
+  };
+
+  const runDroneRemoveFlyOut = (map, droneId, placemark) => {
+    const idStr = String(droneId);
+    if (droneRemoveAnimActiveRef.current.has(idStr)) return;
+    cancelDroneMarkerAnim(droneId);
+    let from;
+    try {
+      from = placemark.geometry.getCoordinates();
+    } catch {
+      finishRemoveDroneMarker(map, droneId, placemark);
+      return;
+    }
+    try {
+      placemark.options.set('draggable', false);
+    } catch {
+      /* ignore */
+    }
+    const removeBearing = Math.random() * 2 * Math.PI;
+    const to = offsetLatLngByMetersAndBearing(from[0], from[1], DRONE_PLACE_OFFSET_M, removeBearing);
+    droneRemoveAnimActiveRef.current.add(idStr);
+    const t0 = performance.now();
+    const step = (now) => {
+      if (droneMarkersRef.current[droneId] !== placemark) {
+        cancelDroneMarkerAnim(droneId);
+        return;
+      }
+      const u = Math.min(1, (now - t0) / DRONE_PLACE_DURATION_MS);
+      const k = easeOutCubic(u);
+      const lat = from[0] + (to[0] - from[0]) * k;
+      const lng = from[1] + (to[1] - from[1]) * k;
+      try {
+        placemark.geometry.setCoordinates([lat, lng]);
+      } catch {
+        /* ignore */
+      }
+      if (u < 1) {
+        dronePlaceAnimRafRef.current[idStr] = requestAnimationFrame(step);
+      } else {
+        delete dronePlaceAnimRafRef.current[idStr];
+        droneRemoveAnimActiveRef.current.delete(idStr);
+        finishRemoveDroneMarker(map, droneId, placemark);
+      }
+    };
+    dronePlaceAnimRafRef.current[idStr] = requestAnimationFrame(step);
+  };
+
   const initMap = () => {
     if (!mapContainerRef.current || !window.ymaps) return;
     if (mapInstanceRef.current) return;
@@ -246,11 +392,21 @@ export function YandexMap({
     });
   };
 
-  const createDroneMarker = (map, drone) => {
+  const createDroneMarker = (map, drone, { animatePlaceIn = false } = {}) => {
     if (!drone.position || !drone.isVisible) return;
 
+    const target = [Number(drone.position.lat), Number(drone.position.lng)];
+    const startCoords = animatePlaceIn
+      ? offsetLatLngByMetersAndBearing(
+          target[0],
+          target[1],
+          DRONE_PLACE_OFFSET_M,
+          Math.random() * 2 * Math.PI
+        )
+      : target;
+
     const placemark = new window.ymaps.Placemark(
-      [drone.position.lat, drone.position.lng],
+      startCoords,
       {
         balloonContent: `
           <div style="padding: 10px; font-family: Arial;">
@@ -266,14 +422,18 @@ export function YandexMap({
         iconImageHref: '/ico.png',
         iconImageSize: [35, 35],
         iconImageOffset: [-17, -17],
-        draggable: drone.status !== 'в полете',
+        draggable: !isDroneHoverSuspended(drone),
         balloonOffset: [0, -50],
         balloonAutoPan: false,
         hideIconOnBalloonOpen: false
       }
     );
-    if (drone.status !== 'в полете') {
+    if (!isDroneHoverSuspended(drone)) {
+      placemark.events.add('dragstart', () => {
+        droneDragActiveRef.current.add(String(drone.id));
+      });
       placemark.events.add('dragend', (e) => {
+        droneDragActiveRef.current.delete(String(drone.id));
         const coords = e.get('target').geometry.getCoordinates();
         if (onDronePositionChange) {
           onDronePositionChange(drone.id, { lat: coords[0], lng: coords[1] });
@@ -283,6 +443,41 @@ export function YandexMap({
 
     map.geoObjects.add(placemark);
     droneMarkersRef.current[drone.id] = placemark;
+
+    const idStr = String(drone.id);
+    if (animatePlaceIn) {
+      cancelDroneMarkerAnim(drone.id);
+      dronePlaceAnimActiveRef.current.add(idStr);
+      dronePlaceTargetKeyRef.current.set(idStr, `${target[0]},${target[1]}`);
+      const from = startCoords;
+      const t0 = performance.now();
+      const step = (now) => {
+        if (droneMarkersRef.current[drone.id] !== placemark) {
+          cancelDroneMarkerAnim(drone.id);
+          return;
+        }
+        const u = Math.min(1, (now - t0) / DRONE_PLACE_DURATION_MS);
+        const e = easeOutCubic(u);
+        const lat = from[0] + (target[0] - from[0]) * e;
+        const lng = from[1] + (target[1] - from[1]) * e;
+        try {
+          placemark.geometry.setCoordinates([lat, lng]);
+        } catch {
+          /* ignore */
+        }
+        if (u < 1) {
+          dronePlaceAnimRafRef.current[idStr] = requestAnimationFrame(step);
+        } else {
+          delete dronePlaceAnimRafRef.current[idStr];
+          dronePlaceAnimActiveRef.current.delete(idStr);
+          dronePlaceTargetKeyRef.current.delete(idStr);
+          droneMarkerPositionKeyRef.current.set(idStr, `${target[0]},${target[1]}`);
+        }
+      };
+      dronePlaceAnimRafRef.current[idStr] = requestAnimationFrame(step);
+    } else {
+      droneMarkerPositionKeyRef.current.set(idStr, `${target[0]},${target[1]}`);
+    }
   };
 
   const createDroneRoute = (map, drone) => {
@@ -323,16 +518,52 @@ export function YandexMap({
     const map = mapInstanceRef.current;
     drones.forEach(drone => {
       const existingMarker = droneMarkersRef.current[drone.id];
+      const idStr = String(drone.id);
 
       if (drone.isVisible && drone.position) {
+        const pos = [Number(drone.position.lat), Number(drone.position.lng)];
+        const posKey = `${pos[0]},${pos[1]}`;
         if (existingMarker) {
-          existingMarker.geometry.setCoordinates([drone.position.lat, drone.position.lng]);
+          if (droneRemoveAnimActiveRef.current.has(idStr)) {
+            cancelDroneMarkerAnim(drone.id);
+            existingMarker.geometry.setCoordinates(pos);
+            droneMarkerPositionKeyRef.current.set(idStr, posKey);
+            try {
+              existingMarker.options.set('draggable', !isDroneHoverSuspended(drone));
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+          if (dronePlaceAnimActiveRef.current.has(idStr)) {
+            const tKey = dronePlaceTargetKeyRef.current.get(idStr);
+            if (tKey === posKey) {
+              return;
+            }
+            cancelDroneMarkerAnim(drone.id);
+            existingMarker.geometry.setCoordinates(pos);
+            droneMarkerPositionKeyRef.current.set(idStr, posKey);
+            return;
+          }
+          if (isDroneHoverSuspended(drone)) {
+            existingMarker.geometry.setCoordinates(pos);
+            droneMarkerPositionKeyRef.current.set(idStr, posKey);
+            delete droneHoverPhaseRef.current[idStr];
+            return;
+          }
+          const lastKey = droneMarkerPositionKeyRef.current.get(idStr);
+          if (lastKey === posKey) {
+            return;
+          }
+          existingMarker.geometry.setCoordinates(pos);
+          droneMarkerPositionKeyRef.current.set(idStr, posKey);
         } else {
-          createDroneMarker(map, drone);
+          createDroneMarker(map, drone, { animatePlaceIn: true });
         }
       } else if (existingMarker) {
-        map.geoObjects.remove(existingMarker);
-        delete droneMarkersRef.current[drone.id];
+        if (!droneRemoveAnimActiveRef.current.has(idStr)) {
+          runDroneRemoveFlyOut(map, drone.id, existingMarker);
+        }
       }
       if (drone.path && drone.path.length > 1) {
         createDroneRoute(map, drone);
@@ -343,8 +574,9 @@ export function YandexMap({
     });
     Object.keys(droneMarkersRef.current).forEach(droneId => {
       if (!drones.some(d => d.id.toString() === droneId)) {
-        map.geoObjects.remove(droneMarkersRef.current[droneId]);
-        delete droneMarkersRef.current[droneId];
+        if (droneRemoveAnimActiveRef.current.has(String(droneId))) return;
+        const marker = droneMarkersRef.current[droneId];
+        runDroneRemoveFlyOut(map, droneId, marker);
       }
     });
     Object.keys(routePolylinesRef.current).forEach(droneId => {
@@ -355,6 +587,84 @@ export function YandexMap({
     });
 
   }, [drones, selectedDroneId, mapLoaded]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current) return;
+
+    const tick = (now) => {
+      if (!mapInstanceRef.current) {
+        droneHoverLoopRafRef.current = null;
+        return;
+      }
+      const list = dronesRef.current || [];
+      const amp = DRONE_HOVER_AMPLITUDE_M / 111_320;
+      const omega = (2 * Math.PI) / DRONE_HOVER_PERIOD_MS;
+
+      for (const drone of list) {
+        if (!drone.isVisible || !drone.position) continue;
+        const idStr = String(drone.id);
+        if (dronePlaceAnimActiveRef.current.has(idStr)) continue;
+        if (droneRemoveAnimActiveRef.current.has(idStr)) continue;
+        if (droneDragActiveRef.current.has(idStr)) continue;
+
+        const placemark = droneMarkersRef.current[drone.id];
+        if (!placemark) continue;
+
+        const baseLat = Number(drone.position.lat);
+        const baseLng = Number(drone.position.lng);
+        if (touchDroneMotionMap(droneMotionForHoverRef, idStr, baseLat, baseLng, now)) {
+          try {
+            placemark.geometry.setCoordinates([baseLat, baseLng]);
+          } catch {
+            /* ignore */
+          }
+          delete droneHoverPhaseRef.current[idStr];
+          continue;
+        }
+        let phase = droneHoverPhaseRef.current[idStr];
+        if (phase == null) {
+          phase = Math.random() * DRONE_HOVER_PERIOD_MS;
+          droneHoverPhaseRef.current[idStr] = phase;
+        }
+        const delta = amp * Math.sin(omega * (now + phase));
+        try {
+          placemark.geometry.setCoordinates([baseLat + delta, baseLng]);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const listIds = new Set(
+        list.filter((d) => d.isVisible && d.position).map((d) => String(d.id))
+      );
+      for (const k of Object.keys(droneMotionForHoverRef.current)) {
+        if (!listIds.has(k)) delete droneMotionForHoverRef.current[k];
+      }
+      for (const k of Object.keys(droneHoverPhaseRef.current)) {
+        if (!listIds.has(k)) {
+          delete droneHoverPhaseRef.current[k];
+          continue;
+        }
+        const d = list.find((x) => String(x.id) === k);
+        if (!d?.position || isDroneHoverSuspended(d)) {
+          delete droneHoverPhaseRef.current[k];
+          continue;
+        }
+        const m = droneMotionForHoverRef.current[k];
+        if (m && m.resumeHoverAt > now) delete droneHoverPhaseRef.current[k];
+      }
+
+      droneHoverLoopRafRef.current = requestAnimationFrame(tick);
+    };
+
+    droneHoverLoopRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (droneHoverLoopRafRef.current != null) {
+        cancelAnimationFrame(droneHoverLoopRafRef.current);
+        droneHoverLoopRafRef.current = null;
+      }
+    };
+  }, [mapLoaded]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
@@ -1181,6 +1491,22 @@ export function YandexMap({
 
   useEffect(() => {
     return () => {
+      Object.keys(dronePlaceAnimRafRef.current).forEach(id => {
+        const h = dronePlaceAnimRafRef.current[id];
+        if (h != null) cancelAnimationFrame(h);
+      });
+      dronePlaceAnimRafRef.current = {};
+      dronePlaceAnimActiveRef.current.clear();
+      droneRemoveAnimActiveRef.current.clear();
+      dronePlaceTargetKeyRef.current.clear();
+      droneMarkerPositionKeyRef.current.clear();
+      if (droneHoverLoopRafRef.current != null) {
+        cancelAnimationFrame(droneHoverLoopRafRef.current);
+        droneHoverLoopRafRef.current = null;
+      }
+      droneHoverPhaseRef.current = {};
+      droneMotionForHoverRef.current = {};
+      droneDragActiveRef.current.clear();
       if (mapInstanceRef.current) {
         try {
           Object.values(droneMarkersRef.current).forEach(marker => {
