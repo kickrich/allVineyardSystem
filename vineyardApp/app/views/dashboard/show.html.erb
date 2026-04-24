@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Vineyard Monitor - Детали видео</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <%= csrf_meta_tags %>
+  <%= csp_meta_tag %>
+
+  <%= stylesheet_link_tag "application", "data-turbo-track": "reload" %>
+  <%= javascript_include_tag "application", "data-turbo-track": "reload", type: "module" %>
+  <style>
+    .vineyard-schema svg {
+      background-color: #f9fafb;
+      border-radius: 0.5rem;
+    }
+    .vineyard-schema circle {
+      transition: r 0.2s ease;
+      cursor: pointer;
+    }
+    .vineyard-schema circle:hover {
+      r: 10;
+      filter: drop-shadow(0 4px 3px rgb(0 0 0 / 0.07));
+    }
+    .progress-bar {
+      transition: width 0.3s ease;
+    }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 12px 24px;
+      border-radius: 8px;
+      color: white;
+      z-index: 1000;
+      animation: slideIn 0.3s ease;
+    }
+    .toast.success { background-color: #10b981; }
+    .toast.error { background-color: #ef4444; }
+    .toast.info { background-color: #3b82f6; }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    .btn-primary {
+      background-color: #3b82f6;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      transition: background-color 0.2s;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn-primary:hover {
+      background-color: #2563eb;
+    }
+    .btn-danger {
+      background-color: #ef4444;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      transition: background-color 0.2s;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn-danger:hover {
+      background-color: #dc2626;
+    }
+    .btn-link {
+      background-color: #f3f4f6;
+      color: #374151;
+      padding: 8px 16px;
+      border-radius: 8px;
+      transition: all 0.2s;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn-link:hover {
+      background-color: #e5e7eb;
+      color: #1f2937;
+    }
+    .btn-sm {
+      padding: 4px 12px;
+      font-size: 0.875rem;
+    }
+    .delete-shard-btn {
+      background-color: #fee2e2;
+      color: #991b1b;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      transition: all 0.2s;
+      border: none;
+      cursor: pointer;
+    }
+    .delete-shard-btn:hover {
+      background-color: #fecaca;
+      color: #7f1a1a;
+    }
+    
+    .pagination {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 24px;
+      flex-wrap: wrap;
+    }
+    .pagination a, .pagination span {
+      padding: 8px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      text-decoration: none;
+      color: #374151;
+      transition: all 0.2s;
+    }
+    .pagination a:hover {
+      background-color: #f3f4f6;
+      border-color: #9ca3af;
+    }
+    .pagination .current {
+      background-color: #3b82f6;
+      border-color: #3b82f6;
+      color: white;
+    }
+    .pagination .disabled {
+      color: #9ca3af;
+      cursor: not-allowed;
+    }
+    .pagination .prev, .pagination .next {
+      font-weight: 500;
+    }
+  </style>
+</head>
+
+<body class="bg-gray-100">
+  <div class="container mx-auto px-4 py-8">
+    <div class="mb-6 flex justify-between items-center">
+      <%= link_to "← Назад к списку", root_path, class: "text-blue-600 hover:text-blue-800" %>
+    </div>
+
+    <h1 class="text-3xl font-bold text-gray-800 mb-2"><%= @video.name %></h1>
+    <p class="text-gray-600 mb-8">ID: #<%= @video.id %></p>
+
+    <% if @video.uploading? && @video.video_shards.none? %>
+      <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
+        <strong>Обработка не стартует сама.</strong>
+        Сначала загрузите видео хотя бы одного ряда блоком ниже — после этого статус станет «processing», задача уйдёт в CV.
+      </div>
+    <% end %>
+
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-700 mb-4">Загрузить новый ряд</h2>
+      
+      <div class="mb-4">
+        <input type="number" id="newShardIndex" min="1" 
+               placeholder="Номер ряда"
+               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      
+      <div>
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer bg-gray-50"
+             id="uploadShardZone">
+          <div class="upload-prompt-shard">
+            <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+              <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H8a4 4 0 01-4-4v-8m32 0l-6-6m-6 6l6-6m0 0v-8a4 4 0 00-4-4h-8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <p class="mt-2 text-sm text-gray-600">Перетащите видео сюда или</p>
+            <p class="mt-1 text-sm text-gray-600">
+              <label for="shardFileInput" class="text-blue-600 hover:text-blue-800 cursor-pointer font-medium">
+                выберите файл
+              </label>
+            </p>
+            <p class="text-xs text-gray-400 mt-2">MP4, MOV, AVI, MKV до 2ГБ</p>
+            <input type="file" id="shardFileInput" name="video" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska" class="hidden">
+          </div>
+          <div class="upload-preview-shard hidden">
+            <p class="text-sm font-medium text-gray-700 mb-2" id="newFileName"></p>
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+              <div class="bg-blue-600 h-2.5 rounded-full new-upload-progress" style="width: 0%"></div>
+            </div>
+            <p class="text-xs text-gray-500" id="newUploadStatus"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-700 mb-4">Статистика</h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4" id="stats-container">
+        <div class="text-center p-4 bg-gray-50 rounded-lg">
+          <p class="text-sm text-gray-600 mb-1">Статус</p>
+          <span class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full 
+            <%= status_color(@video.status) %>">
+            <%= @video.status %>
+          </span>
+        </div>
+        
+        <div class="text-center p-4 bg-gray-50 rounded-lg">
+          <p class="text-sm text-gray-600 mb-1">Создано</p>
+          <p class="text-lg font-semibold"><%= @video.created_at.strftime("%d.%m.%Y %H:%M") %></p>
+        </div>
+        
+        <div class="text-center p-4 bg-gray-50 rounded-lg">
+          <p class="text-sm text-gray-600 mb-1">Рядов</p>
+          <p class="text-lg font-semibold" id="shards_count"><%= @video.video_shards.count %></p>
+        </div>
+        
+        <div class="text-center p-4 bg-gray-50 rounded-lg">
+          <p class="text-sm text-gray-600 mb-1">Обработано</p>
+          <p class="text-lg font-semibold" id="processed_shards"><%= @video.video_shards.where(status: :completed).count %> / <%= @video.video_shards.count %></p>
+        </div>
+      </div>
+      
+      <div class="mt-4">
+        <div class="flex justify-between mb-2">
+          <span class="text-sm text-gray-600">Прогресс обработки</span>
+          <span class="text-sm text-gray-600" id="progress_percent"><%= @video.processing_progress %>%</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
+          <div class="bg-blue-600 h-2.5 rounded-full transition-all" id="progress_bar" style="width: <%= @video.processing_progress %>%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-700 mb-6">Результаты анализа</h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="bg-green-50 rounded-lg p-6 text-center">
+          <p class="text-sm text-green-600 mb-2">Всего кустов</p>
+          <p class="text-4xl font-bold text-green-700" id="total_bushes"><%= @video.total_bushes_count %></p>
+        </div>
+        
+        <div class="bg-red-50 rounded-lg p-6 text-center">
+          <p class="text-sm text-red-600 mb-2">Всего пробелов</p>
+          <p class="text-4xl font-bold text-red-700" id="total_gaps"><%= @video.total_gaps_count %></p>
+        </div>
+        
+        <div class="bg-purple-50 rounded-lg p-6 text-center">
+          <p class="text-sm text-purple-600 mb-2">Среднее расстояние между кустами</p>
+          <p class="text-4xl font-bold text-purple-700" id="avg_spacing">
+            <%= number_with_precision(@video.avg_bush_spacing, precision: 2) %>
+            <span class="text-sm">px</span>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-700 mb-4">Список рядов</h2>
+      
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Номер ряда</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Статус</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Кусты</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Пробелы</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Среднее расстояние</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Прогресс</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Действия</th>
+            </tr>
+          </thead>
+          <tbody class="bg-white divide-y divide-gray-200" id="shards-table-body">
+            <% @shards.each do |shard| %>
+              <tr class="hover:bg-gray-50" data-shard-id="<%= shard.id %>" data-shard-index="<%= shard.shard_index %>">
+                <td class="px-4 py-2 text-sm text-gray-900"><%= shard.shard_index %></td>
+                <td class="px-4 py-2">
+                  <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                    <%= shard.status == 'completed' ? 'bg-green-100 text-green-800' : 
+                       shard.status == 'processing' ? 'bg-yellow-100 text-yellow-800' : 
+                       shard.status == 'error' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800' %>">
+                    <%= shard.status %>
+                  </span>
+                </td>
+                <td class="px-4 py-2 text-sm text-gray-900"><%= shard.bushes_count || '-' %></td>
+                <td class="px-4 py-2 text-sm text-gray-900"><%= shard.gaps_count || '-' %></td>
+                <td class="px-4 py-2 text-sm text-gray-900">
+                  <%= number_with_precision(shard.bush_spacing_avg, precision: 2) if shard.bush_spacing_avg %>
+                </td>
+                <td class="px-4 py-2">
+                  <% if shard.status == 'processing' && shard.job_id.present? %>
+                    <div class="w-32 bg-gray-200 rounded-full h-1.5">
+                      <div class="bg-blue-600 h-1.5 rounded-full progress-bar" 
+                           style="width: 0%" 
+                           data-shard-id="<%= shard.id %>"
+                           data-shard-index="<%= shard.shard_index %>">
+                      </div>
+                    </div>
+                  <% elsif shard.status == 'pending' %>
+                    <span class="text-xs text-gray-500">Ожидание</span>
+                  <% elsif shard.status == 'completed' %>
+                    <span class="text-xs text-green-600">Готово</span>
+                  <% elsif shard.status == 'error' %>
+                    <% err_msg = shard.result_json&.dig("last_error", "message").presence %>
+                    <span class="text-xs text-red-600 block max-w-md" title="<%= err_msg %>">
+                      Ошибка<% if err_msg.present? %>: <%= truncate(err_msg, length: 100) %><% end %>
+                    </span>
+                  <% end %>
+                </td>
+                <td class="px-4 py-2">
+                  <button class="delete-shard-btn"
+                          data-shard-id="<%= shard.id %>"
+                          data-shard-index="<%= shard.shard_index %>">
+                    Удалить
+                  </button>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+      
+      <div class="pagination">
+        <%== @shards_pagy.series_nav(:bootstrap, slots: 7) %>
+      </div>
+
+      <div class="text-center text-sm text-gray-500 mt-4">
+        Показано <%= @shards_pagy.from %> - <%= @shards_pagy.to %> из <%= @shards_pagy.count %> рядов
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-md p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-semibold text-gray-700">Схема участка</h2>
+        <div class="flex gap-2">
+          <button id="zoomInBtn" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors text-lg font-bold" title="Приблизить">+</button>
+          <button id="zoomOutBtn" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors text-lg font-bold" title="Отдалить">-</button>
+          <button id="resetViewBtn" class="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors" title="Сбросить вид">Сброс</button>
+          <button id="fitViewBtn" class="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors" title="Показать всё">Показать всё</button>
+        </div>
+      </div>
+      
+      <div class="border border-gray-200 rounded-lg p-4 bg-gray-50" style="height: 600px; position: relative; overflow: hidden;">
+        <div id="mapContainer" style="width: 100%; height: 100%; position: relative; overflow: hidden;">
+          <svg id="vineyardMap" width="100%" height="100%" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" style="cursor: grab; background-color: #f9fafb;">
+            
+            <defs>
+              <pattern id="gridMain" patternUnits="userSpaceOnUse" width="50" height="50">
+                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#cbd5e1" stroke-width="1"/>
+              </pattern>
+              <pattern id="gridFine" patternUnits="userSpaceOnUse" width="10" height="10">
+                <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>
+              </pattern>
+            </defs>
+            
+            <g id="gridLayer">
+              <rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#gridFine)"/>
+              <rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#gridMain)"/>
+            </g>
+            
+            <g id="contentLayer">
+              <% if @video.video_shards.any? %>
+                <% 
+                  all_rows = @video.video_shards.order(:shard_index)
+                  row_height = 70
+                  start_y = 50
+                  
+                  max_row_length = [all_rows.map { |r| r.row_sequence.size }.max || 0, 1].max
+                  max_rows = all_rows.count
+                  
+                  available_width = 900
+                  bush_spacing = (available_width / max_row_length).clamp(25, 60)
+                  start_x = 80
+                  
+                  total_bushes = @video.total_bushes_count
+                  total_gaps = @video.total_gaps_count
+                %>
+                
+                <% all_rows.each_with_index do |shard, row_idx| %>
+                  <% y_pos = start_y + row_idx * row_height %>
+                  
+                  <text x="25" y="<%= y_pos + 12 %>" class="text-sm fill-gray-700 font-medium" font-size="13" font-weight="bold">
+                    Ряд <%= shard.shard_index %>
+                  </text>
+                  
+                  <line x1="70" y1="<%= y_pos + 5 %>" x2="960" y2="<%= y_pos + 5 %>" 
+                        stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="6,4"/>
+                  
+                  <% if shard.row_sequence.present? %>
+                    <% 
+                      first_x = start_x
+                      last_x = start_x + (shard.row_sequence.size - 1) * bush_spacing
+                    %>
+                    
+                    <line x1="<%= first_x - 10 %>" y1="<%= y_pos + 5 %>" 
+                          x2="<%= last_x + 10 %>" y2="<%= y_pos + 5 %>" 
+                          stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="6,4"/>
+                    
+                    <% shard.row_sequence.each_with_index do |item, idx| %>
+                      <% x_pos = start_x + idx * bush_spacing %>
+                      
+                      <% if item == 'bush' %>
+                        <g class="vine-bush" data-row="<%= shard.shard_index %>" data-pos="<%= idx + 1 %>" data-type="bush">
+                          <circle cx="<%= x_pos %>" cy="<%= y_pos + 5 %>" r="10" 
+                                  fill="#10b981" fill-opacity="0.5" stroke="#059669" stroke-width="2" 
+                                  class="cursor-pointer transition-all duration-200 hover:r-14 hover:fill-green-400"/>
+                        </g>
+                      <% else %>
+                        <g class="vine-gap" data-row="<%= shard.shard_index %>" data-pos="<%= idx + 1 %>" data-type="gap">
+                          <circle cx="<%= x_pos %>" cy="<%= y_pos + 5 %>" r="10" 
+                                  fill="#fecaca" fill-opacity="0.5" stroke="#ef4444" stroke-width="2" 
+                                  class="cursor-pointer transition-all duration-200 hover:r-13 hover:fill-red-200"/>
+                        </g>
+                      <% end %>
+                    <% end %>
+                  <% else %>
+                    <text x="500" y="<%= y_pos + 8 %>" text-anchor="middle" class="text-sm fill-gray-400" font-size="12">
+                      Нет данных
+                    </text>
+                  <% end %>
+                <% end %>
+                
+              <% else %>
+                <text x="500" y="300" text-anchor="middle" class="text-gray-500" font-size="16">
+                  Нет загруженных рядов
+                </text>
+              <% end %>
+            </g>
+          </svg>
+        </div>
+      </div>
+      
+      <div class="mt-4 pt-4 border-t border-gray-200 flex justify-between items-center">
+        <div class="flex gap-6">
+          <div class="flex items-center gap-2">
+            <div class="w-5 h-5 bg-green-500 rounded-full" style="background-color: #10b981; border: 2px solid #059669; opacity: 0.85"></div>
+            <span class="text-sm text-gray-600">Куст</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="w-5 h-5 rounded-full" style="background-color: #fecaca; border: 2px solid #ef4444; opacity: 0.85"></div>
+            <span class="text-sm text-gray-600">Пробел</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let startTime = Date.now();
+    let updateInterval;
+    
+    function showToast(message, type) {
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+    
+    function formatTime(seconds) {
+      if (seconds < 60) return Math.round(seconds) + ' сек';
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.round(seconds % 60);
+      return mins + ' мин ' + secs + ' сек';
+    }
+    
+    function getNextShardIndex() {
+      const shardIndexes = Array.from(document.querySelectorAll('#shards-table-body tr')).map(row => {
+        return parseInt(row.querySelector('td:first-child').textContent);
+      }).filter(n => !isNaN(n));
+      
+      shardIndexes.sort((a, b) => a - b);
+      
+      let nextIndex = 1;
+      for (let i = 0; i < shardIndexes.length; i++) {
+        if (shardIndexes[i] === nextIndex) {
+          nextIndex++;
+        } else if (shardIndexes[i] > nextIndex) {
+          break;
+        }
+      }
+      
+      return nextIndex;
+    }
+    
+    const uploadZone = document.getElementById('uploadShardZone');
+    const shardFileInput = document.getElementById('shardFileInput');
+    const newShardIndex = document.getElementById('newShardIndex');
+    const uploadPromptShard = document.querySelector('.upload-prompt-shard');
+    const uploadPreviewShard = document.querySelector('.upload-preview-shard');
+    const newFileName = document.getElementById('newFileName');
+    const newUploadProgress = document.querySelector('.new-upload-progress');
+    const newUploadStatus = document.getElementById('newUploadStatus');
+    
+    if (uploadZone) {
+      uploadZone.addEventListener('click', () => shardFileInput.click());
+      shardFileInput.addEventListener('change', handleShardUpload);
+      
+      uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadZone.classList.add('border-blue-500', 'bg-blue-50');
+      });
+      
+      uploadZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('border-blue-500', 'bg-blue-50');
+      });
+      
+      uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('border-blue-500', 'bg-blue-50');
+        const file = e.dataTransfer.files[0];
+        if (file) {
+          shardFileInput.files = e.dataTransfer.files;
+          handleShardUpload({ target: { files: [file] } });
+        }
+      });
+    }
+    
+    function handleShardUpload(e) {
+      const file = e.target.files[0];
+      let shardIndex = newShardIndex.value;
+      
+      if (!shardIndex) {
+        shardIndex = getNextShardIndex();
+        newShardIndex.value = shardIndex;
+      }
+      
+      if (!file) return;
+      
+      const allowedTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska'];
+      const ext = (file.name || '').split('.').pop().toLowerCase();
+      const allowedExt = ['mp4', 'mov', 'avi', 'mkv'];
+      const typeOk = allowedTypes.includes(file.type);
+      const extOk = allowedExt.includes(ext);
+      if (!typeOk && !extOk) {
+        showToast('Неподдерживаемый формат видео (нужен MP4, MOV, AVI или MKV)', 'error');
+        return;
+      }
+      
+      newFileName.textContent = file.name;
+      uploadPromptShard.classList.add('hidden');
+      uploadPreviewShard.classList.remove('hidden');
+      newUploadStatus.textContent = 'Загрузка...';
+      newUploadStatus.classList.remove('text-red-600', 'text-green-600');
+      newUploadProgress.style.width = '0%';
+      
+      const formData = new FormData();
+      formData.append('video', file);
+      formData.append('shard_index', shardIndex);
+      
+      fetch(`/api/videos/<%= @video.id %>/upload_shard`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-CSRF-Token': document.querySelector('[name="csrf-token"]').content
+        }
+      })
+      .then(response => {
+        const contentType = response.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+
+        const parseBody = () => isJson ? response.json() : response.text().then(t => ({ error: t }));
+
+        if (!response.ok) {
+          return parseBody().then(data => {
+            const err = data?.error;
+            const msg = Array.isArray(err) ? err.join('; ') : (err || 'Ошибка загрузки');
+            throw new Error(msg);
+          });
+        }
+
+        return parseBody().then(data => {
+          if (!isJson) {
+            throw new Error('Сервер вернул не-JSON ответ. Проверь логи сервера.');
+          }
+          return data;
+        });
+      })
+      .then(data => {
+        newUploadStatus.textContent = `Ряд ${shardIndex} загружен, начинаем обработку...`;
+        newUploadProgress.style.width = '100%';
+        showToast(`Ряд ${shardIndex} загружен`, 'success');
+        
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        newUploadStatus.textContent = error.message || 'Ошибка загрузки';
+        newUploadStatus.classList.add('text-red-600');
+        showToast(error.message || 'Ошибка загрузки', 'error');
+        
+        setTimeout(() => {
+          uploadPromptShard.classList.remove('hidden');
+          uploadPreviewShard.classList.add('hidden');
+          newUploadProgress.style.width = '0%';
+          shardFileInput.value = '';
+        }, 3000);
+      });
+    }
+    
+    document.querySelectorAll('.delete-shard-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const shardId = btn.dataset.shardId;
+        const shardIndex = btn.dataset.shardIndex;
+        
+        if (!confirm(`Удалить ряд ${shardIndex}? Статистика будет пересчитана.`)) {
+          return;
+        }
+        
+        const row = btn.closest('tr');
+        
+        try {
+          const response = await fetch(`/video/<%= @video.id %>/shards/${shardId}`, {
+            method: 'DELETE',
+            headers: {
+              'X-CSRF-Token': document.querySelector('[name="csrf-token"]').content,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            }
+          });
+          
+          const data = await response.json();
+          
+          if (response.ok && data.success) {
+            row.remove();
+            
+            document.getElementById('total_bushes').textContent = data.statistics.total_bushes;
+            document.getElementById('total_gaps').textContent = data.statistics.total_gaps;
+            document.getElementById('avg_spacing').innerHTML = data.statistics.avg_spacing.toFixed(2) + '<span class="text-sm">px</span>';
+            document.getElementById('shards_count').textContent = data.statistics.shards_count;
+            document.getElementById('processed_shards').textContent = `${data.statistics.processed_shards} / ${data.statistics.shards_count}`;
+            document.getElementById('progress_percent').textContent = data.statistics.progress + '%';
+            document.getElementById('progress_bar').style.width = data.statistics.progress + '%';
+            
+            const tbody = document.getElementById('shards-table-body');
+            if (tbody.children.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">Нет загруженных рядов</td></tr>';
+            }
+            
+            showToast(`Ряд ${shardIndex} удален`, 'success');
+          } else {
+            showToast(data.error || 'Ошибка удаления', 'error');
+          }
+        } catch (error) {
+          console.error('Error:', error);
+          showToast('Ошибка при удалении', 'error');
+        }
+      });
+    });
+    
+    document.querySelectorAll('.progress-bar').forEach(el => {
+      const shardId = el.dataset.shardId;
+      const shardIndex = el.dataset.shardIndex;
+      
+      const updateProgress = () => {
+        fetch(`/api/videos/<%= @video.id %>/shards/${shardIndex}/status`)
+          .then(res => res.json())
+          .then(data => {
+            if (!document.body.contains(el)) return;
+            
+            if (data.status === 'processing' && data.progress) {
+              el.style.width = data.progress + '%';
+              setTimeout(updateProgress, 2000);
+            } else if (data.status === 'completed') {
+              el.style.width = '100%';
+              setTimeout(() => window.location.reload(), 2000);
+            } else if (data.status === 'error') {
+              el.style.width = '0%';
+              el.classList.add('bg-red-600');
+            }
+          })
+          .catch(console.error);
+      };
+      
+      if (el.style.width === '0%') {
+        updateProgress();
+      }
+    });
+    
+    (function() {
+      const svg = document.getElementById('vineyardMap');
+      const container = document.getElementById('mapContainer');
+      
+      if (!svg) return;
+      
+      let isDragging = false;
+      let startX, startY;
+      let currentViewBox = { x: 0, y: 0, width: 1000, height: 600 };
+      
+      function getViewBox() {
+        const vb = svg.getAttribute('viewBox');
+        if (vb) {
+          const parts = vb.split(' ').map(Number);
+          return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+        }
+        return { x: 0, y: 0, width: 1000, height: 600 };
+      }
+      
+      function getContentBounds() {
+        const contentLayer = document.getElementById('contentLayer');
+        if (!contentLayer) return { minX: 0, minY: 0, maxX: 1000, maxY: 600, width: 1000, height: 600 };
+        
+        const bbox = contentLayer.getBBox();
+        if (bbox.width === 0 && bbox.height === 0) {
+          return { minX: 0, minY: 0, maxX: 1000, maxY: 600, width: 1000, height: 600 };
+        }
+        
+        return {
+          minX: bbox.x - 30,
+          minY: bbox.y - 30,
+          maxX: bbox.x + bbox.width + 30,
+          maxY: bbox.y + bbox.height + 30,
+          width: bbox.width + 60,
+          height: bbox.height + 60
+        };
+      }
+      
+      function updateGridPosition() {
+        const gridLayer = document.getElementById('gridLayer');
+        if (!gridLayer) return;
+        
+        const vb = getViewBox();
+        
+        gridLayer.setAttribute('transform', `translate(${vb.x}, ${vb.y})`);
+      }
+      
+      function setViewBox(x, y, width, height) {
+        const bounds = getContentBounds();
+        
+        const minScale = 0.3;
+        const maxScale = 5;
+        const currentScale = 1000 / width;
+        
+        let newWidth = width;
+        let newHeight = height;
+        
+        if (currentScale > maxScale) {
+          newWidth = 1000 / maxScale;
+          newHeight = 600 / maxScale;
+        } else if (currentScale < minScale) {
+          newWidth = 1000 / minScale;
+          newHeight = 600 / minScale;
+        }
+        
+        let newX = x;
+        let newY = y;
+        
+        const minX = bounds.minX;
+        const maxX = bounds.maxX - newWidth;
+        const minY = bounds.minY;
+        const maxY = bounds.maxY - newHeight;
+        
+        newX = Math.min(Math.max(newX, minX), maxX);
+        newY = Math.min(Math.max(newY, minY), maxY);
+        
+        if (newWidth > bounds.width) {
+          newX = (bounds.minX + bounds.maxX - newWidth) / 2;
+        }
+        if (newHeight > bounds.height) {
+          newY = (bounds.minY + bounds.maxY - newHeight) / 2;
+        }
+        
+        svg.setAttribute('viewBox', `${newX} ${newY} ${newWidth} ${newHeight}`);
+        currentViewBox = { x: newX, y: newY, width: newWidth, height: newHeight };
+        
+        updateGridPosition();
+      }
+      
+      function zoomIn() {
+        const vb = getViewBox();
+        const scale = 1.2;
+        const newWidth = vb.width / scale;
+        const newHeight = vb.height / scale;
+        const newX = vb.x + (vb.width - newWidth) / 2;
+        const newY = vb.y + (vb.height - newHeight) / 2;
+        setViewBox(newX, newY, newWidth, newHeight);
+      }
+      
+      function zoomOut() {
+        const vb = getViewBox();
+        const scale = 0.8;
+        const newWidth = vb.width / scale;
+        const newHeight = vb.height / scale;
+        const newX = vb.x + (vb.width - newWidth) / 2;
+        const newY = vb.y + (vb.height - newHeight) / 2;
+        setViewBox(newX, newY, newWidth, newHeight);
+      }
+      
+      function resetView() {
+        const bounds = getContentBounds();
+        const containerRect = container.getBoundingClientRect();
+        
+        const scaleX = containerRect.width / bounds.width;
+        const scaleY = containerRect.height / bounds.height;
+        const scale = Math.min(scaleX, scaleY);
+        
+        const newWidth = 1000 / scale;
+        const newHeight = 600 / scale;
+        const newX = bounds.minX;
+        const newY = bounds.minY;
+        
+        setViewBox(newX, newY, newWidth, newHeight);
+      }
+      
+      function fitView() {
+        const bounds = getContentBounds();
+        const containerRect = container.getBoundingClientRect();
+        
+        const scaleX = containerRect.width / bounds.width;
+        const scaleY = containerRect.height / bounds.height;
+        const scale = Math.min(scaleX, scaleY) * 0.95;
+        
+        const newWidth = 1000 / scale;
+        const newHeight = 600 / scale;
+        const newX = bounds.minX;
+        const newY = bounds.minY;
+        
+        setViewBox(newX, newY, newWidth, newHeight);
+      }
+      
+      function onMouseDown(e) {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        svg.style.cursor = 'grabbing';
+        e.preventDefault();
+      }
+      
+      function onMouseMove(e) {
+        if (!isDragging) return;
+        
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        
+        const vb = getViewBox();
+        const newX = vb.x - dx * (vb.width / container.clientWidth);
+        const newY = vb.y - dy * (vb.height / container.clientHeight);
+        
+        setViewBox(newX, newY, vb.width, vb.height);
+        
+        startX = e.clientX;
+        startY = e.clientY;
+      }
+      
+      function onMouseUp() {
+        isDragging = false;
+        svg.style.cursor = 'grab';
+      }
+      
+      function onWheel(e) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          zoomIn();
+        } else {
+          zoomOut();
+        }
+      }
+      
+      svg.style.cursor = 'grab';
+      
+      svg.addEventListener('mousedown', onMouseDown);
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+      container.addEventListener('wheel', onWheel, { passive: false });
+      
+      const zoomInBtn = document.getElementById('zoomInBtn');
+      const zoomOutBtn = document.getElementById('zoomOutBtn');
+      const resetViewBtn = document.getElementById('resetViewBtn');
+      const fitViewBtn = document.getElementById('fitViewBtn');
+      
+      if (zoomInBtn) zoomInBtn.addEventListener('click', zoomIn);
+      if (zoomOutBtn) zoomOutBtn.addEventListener('click', zoomOut);
+      if (resetViewBtn) resetViewBtn.addEventListener('click', resetView);
+      if (fitViewBtn) fitViewBtn.addEventListener('click', fitView);
+      
+      updateGridPosition();
+      
+      const bushes = document.querySelectorAll('.vine-bush');
+      const gaps = document.querySelectorAll('.vine-gap');
+      
+      bushes.forEach(bush => {
+        bush.addEventListener('click', (e) => {
+          const row = bush.dataset.row;
+          const pos = bush.dataset.pos;
+          showToast(`Куст в ряду ${row}, позиция ${pos}`, 'info');
+          e.stopPropagation();
+        });
+      });
+      
+      gaps.forEach(gap => {
+        gap.addEventListener('click', (e) => {
+          const row = gap.dataset.row;
+          const pos = gap.dataset.pos;
+          showToast(`Пробел в ряду ${row}, позиция ${pos}`, 'info');
+          e.stopPropagation();
+        });
+      });
+      
+      setTimeout(fitView, 100);
+      
+      window.addEventListener('resize', () => {
+        setTimeout(updateGridPosition, 100);
+      });
+    })();
+  </script>
+</body>
+</html>

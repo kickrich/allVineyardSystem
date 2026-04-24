@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+opencv-python
+numpy
+onnxruntime
+requests
+python-multipart
+python-dotenv
+boto3

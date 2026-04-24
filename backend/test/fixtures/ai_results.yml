@@ -1,0 +1,17 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  mission: one
+  status: MyString
+  bushes_count: 1
+  rows_count: 1
+  avg_distance_between_rows: 1.5
+  avg_distance_between_bushes: 1.5
+
+two:
+  mission: two
+  status: MyString
+  bushes_count: 1
+  rows_count: 1
+  avg_distance_between_rows: 1.5
+  avg_distance_between_bushes: 1.5
