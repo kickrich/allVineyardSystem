@@ -7,7 +7,6 @@ export function PositionButton({ drones, onSetPosition }) {
   const handleStartSetPosition = () => {
     if (selectedDrone) {
       setIsSettingPosition(true);
-      alert(`Выберите новую позицию на карте для ${selectedDrone.name}. Кликните на карте в нужном месте.`);
     }
   };
 
@@ -16,7 +15,6 @@ export function PositionButton({ drones, onSetPosition }) {
       onSetPosition(selectedDrone.id, latlng);
       setIsSettingPosition(false);
       setSelectedDrone(null);
-      alert(`Позиция дрона ${selectedDrone.name} обновлена!`);
     }
   };
 

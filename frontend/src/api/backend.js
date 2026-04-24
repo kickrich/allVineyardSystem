@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiPostForm, apiPatchForm, clearApiSession } from './client';
+import { apiGet, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession } from './client';
 
 const DEFAULT_DEV_EMAIL = import.meta.env.VITE_API_EMAIL ?? 'operator@drones.local';
 const DEFAULT_DEV_PASSWORD = import.meta.env.VITE_API_PASSWORD ?? 'password123';
@@ -87,6 +87,21 @@ export async function fetchDronesFromBackend() {
   return Array.isArray(drones) ? drones : [];
 }
 
+/** POST /api/v1/drones — создать дрона в БД. */
+export async function createDroneInBackend({ name, model, battery = 100, status = 'idle' } = {}) {
+  if (!name || !String(name).trim()) throw new Error('Укажите имя дрона');
+  if (!model || !String(model).trim()) throw new Error('Укажите модель дрона');
+  const response = await apiPost('/api/v1/drones', {
+    drone: {
+      name: String(name).trim(),
+      model: String(model).trim(),
+      battery,
+      status,
+    },
+  });
+  return extractData(response);
+}
+
 export async function fetchUsersFromBackend() {
   const response = await apiGet('/api/v1/users');
   const users = extractData(response);
@@ -139,6 +154,32 @@ export async function updateZoneWithKml(zoneId, file) {
   fd.append('zone[kml_file]', file, file.name);
   const response = await apiPatchForm(`/api/v1/zones/${zoneId}`, fd);
   return extractData(response);
+}
+
+/** PATCH /api/v1/zones/:id — обновить boundary [[lng, lat], ...] и/или имя. */
+export async function updateZoneWithBoundary(zoneId, boundary, name = null) {
+  if (zoneId == null) {
+    throw new Error('Выберите зону для редактирования');
+  }
+  if (!Array.isArray(boundary) || boundary.length < 4) {
+    throw new Error('Некорректный контур зоны');
+  }
+  const zonePatch = { boundary };
+  if (typeof name === 'string' && name.trim()) {
+    zonePatch.name = name.trim();
+  }
+  const response = await apiPatch(`/api/v1/zones/${zoneId}`, {
+    zone: zonePatch,
+  });
+  return extractData(response);
+}
+
+/** DELETE /api/v1/zones/:id — удалить зону. */
+export async function deleteZoneInBackend(zoneId) {
+  if (zoneId == null) {
+    throw new Error('Выберите зону для удаления');
+  }
+  await apiDelete(`/api/v1/zones/${zoneId}`);
 }
 
 export async function syncDroneStateToBackend(droneId, dronePatch) {

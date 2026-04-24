@@ -4,6 +4,7 @@ export const DroneParking = ({
   drones = [], 
   onPlaceDrone,
   onRemoveDrone,
+  onCreateDrone,
   onBackToTemplates,
   onClose
 }) => {
@@ -70,7 +71,7 @@ export const DroneParking = ({
       <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden h-full flex flex-col w-full">
         <div className="bg-gradient-to-r from-gray-700 to-gray-800 p-4">
           <div className="flex justify-between items-center gap-2">
-            <h2 className="text-xl font-bold text-white">Стоянка для дронов</h2>
+            <h2 className="text-xl font-bold text-white leading-tight whitespace-nowrap min-w-0 truncate">Стоянка для дронов</h2>
             {onClose && (
               <button
                 type="button"
@@ -144,9 +145,21 @@ export const DroneParking = ({
               {/* Доступные дроны */}
               {availableDrones.length > 0 && (
                 <div>
-                  <h3 className="text-lg font-semibold text-white mb-3">
-                    Доступные дроны
-                  </h3>
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <h3 className="text-lg font-semibold text-white">
+                      Доступные дроны
+                    </h3>
+                    {onCreateDrone && (
+                      <button
+                        type="button"
+                        onClick={onCreateDrone}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors whitespace-nowrap shrink-0"
+                        title="Создать дрона в backend и добавить в стоянку"
+                      >
+                        Создать
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     {availableDrones.map(drone => (
                       <div
@@ -163,7 +176,7 @@ export const DroneParking = ({
                           </div>
                           <button
                             onClick={() => onPlaceDrone(drone.id)}
-                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors hover:scale-105 flex items-center"
+                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors hover:scale-105 flex items-center whitespace-nowrap shrink-0"
                             title="Разместить дрон на карте"
                           >
                             Разместить
@@ -179,6 +192,15 @@ export const DroneParking = ({
                 <div className="text-center py-8 text-gray-500">
                   <div className="text-4xl mb-2">🛸</div>
                   <p>Нет доступных дронов</p>
+                  {onCreateDrone && (
+                    <button
+                      type="button"
+                      onClick={onCreateDrone}
+                      className="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 min-h-[44px] rounded text-sm transition-colors"
+                    >
+                      + Создать дрона
+                    </button>
+                  )}
                 </div>
               )}
             </div>

@@ -180,7 +180,7 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             const response = await window.ymaps.geocode(searchText, { results: 1 });
 
             if (response.geoObjects.getLength() === 0) {
-                alert('Ничего не найдено. Попробуйте другой запрос.');
+                console.warn('Search: nothing found');
                 return;
             }
 
@@ -219,7 +219,7 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             try {
                 await alternativeSearch(searchText);
             } catch (altError) {
-                alert('Ошибка поиска. Проверьте соединение с интернетом.');
+                console.warn('Search failed (alternativeSearch):', altError);
             }
         } finally {
             setIsLoading(false);
