@@ -210,6 +210,8 @@ export function YandexMap({
   const droneMotionForHoverRef = useRef({});
   const droneDragActiveRef = useRef(new Set());
   const dronesRef = useRef(drones);
+  const routeEditModeRef = useRef(false);
+  const placementModeRef = useRef(false);
   const routePolylinesRef = useRef({});
   const editingPolylineRef = useRef(null);
   const previewPolylineRef = useRef(null);
@@ -232,6 +234,8 @@ export function YandexMap({
   const lastMapZoomRef = useRef(mapZoom);
 
   dronesRef.current = drones;
+  routeEditModeRef.current = routeEditMode;
+  placementModeRef.current = placementMode;
 
   const API_KEY = '2b39244b-bae4-482a-b3a8-d4b21860b4e8';
 
@@ -524,7 +528,20 @@ export function YandexMap({
         const pos = [Number(drone.position.lat), Number(drone.position.lng)];
         const posKey = `${pos[0]},${pos[1]}`;
         if (existingMarker) {
-          if (droneRemoveAnimActiveRef.current.has(idStr)) {
+          if (routeEditMode || placementMode) {
+            cancelDroneMarkerAnim(drone.id);
+            existingMarker.geometry.setCoordinates(pos);
+            droneMarkerPositionKeyRef.current.set(idStr, posKey);
+            delete droneHoverPhaseRef.current[idStr];
+            try {
+              existingMarker.options.set(
+                'draggable',
+                !isDroneHoverSuspended(drone) && !placementMode
+              );
+            } catch {
+              /* ignore */
+            }
+          } else if (droneRemoveAnimActiveRef.current.has(idStr)) {
             cancelDroneMarkerAnim(drone.id);
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
@@ -533,30 +550,24 @@ export function YandexMap({
             } catch {
               /* ignore */
             }
-            return;
-          }
-          if (dronePlaceAnimActiveRef.current.has(idStr)) {
+          } else if (dronePlaceAnimActiveRef.current.has(idStr)) {
             const tKey = dronePlaceTargetKeyRef.current.get(idStr);
-            if (tKey === posKey) {
-              return;
+            if (tKey !== posKey) {
+              cancelDroneMarkerAnim(drone.id);
+              existingMarker.geometry.setCoordinates(pos);
+              droneMarkerPositionKeyRef.current.set(idStr, posKey);
             }
-            cancelDroneMarkerAnim(drone.id);
-            existingMarker.geometry.setCoordinates(pos);
-            droneMarkerPositionKeyRef.current.set(idStr, posKey);
-            return;
-          }
-          if (isDroneHoverSuspended(drone)) {
+          } else if (isDroneHoverSuspended(drone)) {
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
             delete droneHoverPhaseRef.current[idStr];
-            return;
+          } else {
+            const lastKey = droneMarkerPositionKeyRef.current.get(idStr);
+            if (lastKey !== posKey) {
+              existingMarker.geometry.setCoordinates(pos);
+              droneMarkerPositionKeyRef.current.set(idStr, posKey);
+            }
           }
-          const lastKey = droneMarkerPositionKeyRef.current.get(idStr);
-          if (lastKey === posKey) {
-            return;
-          }
-          existingMarker.geometry.setCoordinates(pos);
-          droneMarkerPositionKeyRef.current.set(idStr, posKey);
         } else {
           createDroneMarker(map, drone, { animatePlaceIn: true });
         }
@@ -586,7 +597,7 @@ export function YandexMap({
       }
     });
 
-  }, [drones, selectedDroneId, mapLoaded]);
+  }, [drones, selectedDroneId, mapLoaded, routeEditMode, placementMode]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current) return;
@@ -596,6 +607,11 @@ export function YandexMap({
         droneHoverLoopRafRef.current = null;
         return;
       }
+      if (routeEditModeRef.current || placementModeRef.current) {
+        droneHoverLoopRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
       const list = dronesRef.current || [];
       const amp = DRONE_HOVER_AMPLITUDE_M / 111_320;
       const omega = (2 * Math.PI) / DRONE_HOVER_PERIOD_MS;
