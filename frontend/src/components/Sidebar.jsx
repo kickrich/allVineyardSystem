@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { flightStatus } from '../constants/drones_data';
+import { getTourDemoDrone, isTourDemoDrone } from '../constants/tourDemoDrone';
 import { calculateDistance, calculateOptimalSpeed, calculateFlightTime } from '../utils/flightCalculator';
 
 export const Sidebar = ({
@@ -29,13 +30,22 @@ export const Sidebar = ({
   isDroneAtMissionStart,
   /** Активная зона имеет контур (можно строить маршрут). */
   workZoneReady = false,
+  /** Идёт тур: показываем панель как при размещённом дроне (демо), если на карте никого нет. */
+  instructionTourActive = false,
   onClose
 }) => {
   const [activeTab, setActiveTab] = useState('control');
 
-  const visibleDrones = dronesData.filter(d => d.isVisible);
+  const tourDemoDrone = useMemo(() => getTourDemoDrone(), []);
+  const visibleDrones = dronesData.filter((d) => d.isVisible);
+  const listForPicker =
+    visibleDrones.length > 0 ? visibleDrones : instructionTourActive ? [tourDemoDrone] : [];
   const selectedDrone =
-    visibleDrones.find(d => d.id === selectedDroneId) || visibleDrones[0] || null;
+    listForPicker.find((d) => d.id === selectedDroneId) ??
+    (instructionTourActive && visibleDrones.length === 0 ? tourDemoDrone : null) ??
+    (visibleDrones.length > 0 ? visibleDrones[0] : null);
+
+  const tourUiPreview = isTourDemoDrone(selectedDrone);
 
   const flyingDrones = visibleDrones.filter(d => d.isFlying);
 
@@ -93,7 +103,7 @@ export const Sidebar = ({
     typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
 
   const canEnableRouteMode = Boolean(
-    workZoneReady && selectedDrone && !selectedDrone.isFlying
+    (workZoneReady || tourUiPreview) && selectedDrone && !selectedDrone.isFlying
   );
 
   const routeBuildTitle = isRouteEditMode
@@ -119,6 +129,10 @@ export const Sidebar = ({
       onSelectDrone(visibleDrones[0].id);
     }
   }, [selectedDroneId, visibleDrones, onSelectDrone]);
+
+  useEffect(() => {
+    if (instructionTourActive) setActiveTab('control');
+  }, [instructionTourActive]);
 
   return (
     <div className="w-full lg:w-80 bg-gray-800/95 lg:bg-gray-800/85 border border-gray-700/70 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full">
@@ -184,7 +198,7 @@ export const Sidebar = ({
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'control' && (
           <div className="space-y-4">
-            {visibleDrones.length === 0 && (
+            {listForPicker.length === 0 && (
               <div className="text-center py-10 text-gray-400">
                 <div className="text-4xl mb-3">🛸</div>
                 <p className="text-base">Нет дронов на карте</p>
@@ -193,22 +207,24 @@ export const Sidebar = ({
                 </p>
               </div>
             )}
-            {visibleDrones.length > 0 && (
+            {listForPicker.length > 0 && (
               <div className="space-y-2">
-                {visibleDrones.map(drone => (
+                {listForPicker.map((drone) => (
                 <div
                   key={drone.id}
-                  className={`p-3 rounded-lg cursor-pointer transition-all duration-200
-                    ${selectedDroneId === drone.id 
+                  className={`p-3 rounded-lg transition-all duration-200
+                    ${selectedDrone?.id === drone.id
                       ? 'ring-2 ring-blue-300 border border-blue-500/40 bg-blue-900/35 shadow-sm'
                       : 'bg-gray-900/45 border border-gray-700/60 hover:bg-gray-800/60 hover:border-gray-600'
-                    }`}
-                  onClick={() => onSelectDrone(drone.id)}
+                    } ${isTourDemoDrone(drone) ? 'cursor-default' : 'cursor-pointer'}`}
+                  onClick={() => {
+                    if (!isTourDemoDrone(drone)) onSelectDrone(drone.id);
+                  }}
                 >
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-3">
                       <div className={`w-3 h-3 rounded-full ${
-                        selectedDroneId === drone.id 
+                        selectedDrone?.id === drone.id
                           ? 'bg-blue-400' 
                           : drone.isFlying 
                             ? 'bg-green-400 animate-pulse' 
@@ -245,7 +261,14 @@ export const Sidebar = ({
               </div>
             )}
             {selectedDrone && (
-              <div className="border-t border-gray-700 pt-4">
+              <div
+                className={`border-t border-gray-700 pt-4 ${tourUiPreview ? 'pointer-events-none select-none' : ''}`}
+              >
+                {tourUiPreview && (
+                  <p className="mb-2 rounded-lg border border-blue-500/40 bg-blue-950/50 px-2 py-1.5 text-center text-[11px] text-blue-200/95">
+                    Пример интерфейса тура — кнопки не выполняют действия
+                  </p>
+                )}
                 <h3 className="text-lg font-semibold text-white mb-3">
                   Управление: {selectedDrone.name}
                 </h3>
@@ -349,21 +372,17 @@ export const Sidebar = ({
                   >
                     📍 К первой точке миссии
                   </button>
-                  {!flightAllowedByWeather && weatherFlightReasons.length > 0 && (
+                  {!flightAllowedByWeather && weatherFlightReasons.length > 0 && !tourUiPreview && (
                     <div className="mt-2 px-3 py-2 rounded-lg bg-amber-900/40 border border-amber-600 text-amber-200 text-xs">
                       ⚠️ Неблагоприятные условия для полёта: {weatherFlightReasons.join(', ')}
                     </div>
                   )}
-                  <div className="mt-4">
+                  <div className="mt-4" data-onboarding="mission-first-waypoint">
                     <h4 className="font-semibold text-white mb-2">Управление полетом</h4>
                     <div className="grid grid-cols-2 gap-2">
                       {selectedDroneStatus === flightStatus.IDLE && selectedDronePathLength >= 2 && (
                         <>
-                          {!atMissionStart && (
-                            <div className="col-span-2 rounded-lg border border-amber-600/50 bg-amber-900/25 px-3 py-2 text-center text-xs text-amber-100">
-                              Подведите дрон к первой точке маршрута (или «К первой точке миссии»), затем запускайте миссию.
-                            </div>
-                          )}
+                          
                           <button
                             type="button"
                             onClick={() => onStartFlight(selectedDrone.id)}
@@ -371,7 +390,7 @@ export const Sidebar = ({
                             title={
                               atMissionStart
                                 ? 'Запустить миссию'
-                                : 'Сначала разместите дрон у стартовой точки маршрута'
+                                : 'Миссия стартует только с первой точки маршрута — подведите дрон в радиус ~10 м от неё'
                             }
                             className={`col-span-2 py-2 min-h-[44px] rounded flex items-center justify-center gap-2 ${
                               atMissionStart
@@ -421,8 +440,15 @@ export const Sidebar = ({
                           {selectedDronePathLength >= 2 && (
                             <>
                               {!atMissionStart && (
-                                <div className="col-span-2 rounded-lg border border-amber-600/50 bg-amber-900/25 px-3 py-2 text-center text-xs text-amber-100">
-                                  Для перезапуска дрон должен быть у первой точки маршрута.
+                                <div className="col-span-2 rounded-lg border border-amber-600/50 bg-amber-900/25 px-3 py-2 text-left text-xs text-amber-100 leading-snug space-y-1.5">
+                                  <p>
+                                    <strong className="text-amber-50">Перезапуск</strong> снова возможен только у{' '}
+                                    <strong className="text-white">первой точки</strong> маршрута (~10 м), по той же
+                                    причине, что и первый запуск.
+                                  </p>
+                                  <p className="text-amber-200/95">
+                                    Подведите дрон к старту или «К первой точке миссии».
+                                  </p>
                                 </div>
                               )}
                               <button
@@ -432,7 +458,7 @@ export const Sidebar = ({
                                 title={
                                   atMissionStart
                                     ? 'Перезапустить миссию'
-                                    : 'Сначала подведите дрон к стартовой точке'
+                                    : 'Перезапуск только с первой точки (~10 м) — подведите дрон'
                                 }
                                 className={`col-span-2 py-2 rounded flex items-center justify-center gap-2 ${
                                   atMissionStart

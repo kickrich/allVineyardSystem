@@ -594,6 +594,7 @@ function App() {
   }, [drones, selectedDroneForSidebar]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parkingOpen, setParkingOpen] = useState(false);
+  const [workspaceTourOpen, setWorkspaceTourOpen] = useState(false);
 
   const createDroneFromParking = useCallback(async () => {
     try {
@@ -2063,15 +2064,10 @@ function App() {
   );
 
   const handleOnboardingBeforeStep = useCallback((stepId) => {
-    if (typeof window === 'undefined') return;
-    const narrow = window.matchMedia('(max-width: 1023px)').matches;
-    if (!narrow) return;
+    setSidebarOpen(true);
     if (stepId === 'place-drone') {
       setParkingOpen(true);
-      setSidebarOpen(false);
-    }
-    if (stepId === 'route-build') {
-      setSidebarOpen(true);
+    } else {
       setParkingOpen(false);
     }
   }, []);
@@ -2537,7 +2533,11 @@ function App() {
         </main>
 
         <div
-          className={`fixed right-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-80 lg:max-w-none lg:flex-shrink-0 ${
+          className={`fixed right-0 top-0 bottom-0 z-50 transform transition-transform duration-300 ease-out lg:relative lg:flex-shrink-0 ${
+            workspaceTourOpen && sidebarOpen
+              ? 'w-[min(calc(100vw-12px),28rem)] max-w-none lg:w-80 lg:max-w-none'
+              : 'w-[85%] max-w-sm lg:w-80 lg:max-w-none'
+          } ${
             workspaceVisible
               ? `${sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} opacity-100`
               : 'pointer-events-none translate-x-[100vw] opacity-0'
@@ -2575,6 +2575,7 @@ function App() {
                 weatherFlightReasons={weatherFlightReasons}
                 isDroneAtMissionStart={isDroneAtMissionStart}
                 workZoneReady={workZoneReady}
+                instructionTourActive={workspaceTourOpen}
                 onClose={() => setSidebarOpen(false)}
               />
             </div>
@@ -2590,7 +2591,12 @@ function App() {
       )}
 
       {workspaceVisible && hasStarted && !templateEditMode && (
-        <WorkspaceOnboarding enabled onBeforeStep={handleOnboardingBeforeStep} />
+        <WorkspaceOnboarding
+          enabled
+          onBeforeStep={handleOnboardingBeforeStep}
+          onTourOpenChange={setWorkspaceTourOpen}
+          layoutKey={`${sidebarOpen}-${parkingOpen}-${workspaceTourOpen}`}
+        />
       )}
 
       {false && hasStarted && (
