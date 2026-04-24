@@ -17,16 +17,16 @@ const DRONE_PLACE_DURATION_MS = 400;
 const DRONE_HOVER_AMPLITUDE_M = 3.5;
 const DRONE_HOVER_PERIOD_MS = 2000;
 
-/** Перемещение дрона (м) — выключаем «зависание»; через мс после остановки снова включаем. */
-const DRONE_MOTION_THRESHOLD_M = 1.5;
-const DRONE_MOTION_HOVER_RESUME_MS = 500;
+/** Сдвиг позиции из props (м) — «зависание» полностью выключается; после паузы без движения снова включается. */
+const DRONE_MOTION_THRESHOLD_M = 0.35;
+const DRONE_MOTION_HOVER_RESUME_MS = 550;
 
 function easeOutCubic(t) {
   return 1 - (1 - t) ** 3;
 }
 
-/** Миссия / полёт: нельзя тянуть маркер; в sync — сброс к точным координатам из props. */
-function isDroneHoverSuspended(drone) {
+/** Полёт / миссия: нельзя тянуть маркер; в sync — жёстко к координатам из props (без «зависания»). */
+function isDroneFlyingLike(drone) {
   if (!drone) return false;
   if (drone.status === 'в полете') return true;
   if (drone.isFlying) return true;
@@ -39,21 +39,23 @@ function isDroneHoverSuspended(drone) {
   );
 }
 
-/** Обновляет последнюю позицию из props; возвращает true, пока «зависание» должно быть выключено после движения. */
+/** Любое изменение позиции из props — «зависание» выключается до паузы без новых координат. */
 function touchDroneMotionMap(motionRef, idStr, lat, lng, now) {
   let st = motionRef.current[idStr];
+  const key = `${Number(lat).toFixed(7)},${Number(lng).toFixed(7)}`;
   if (!st) {
-    motionRef.current[idStr] = { lat, lng, resumeHoverAt: 0 };
+    motionRef.current[idStr] = { lat, lng, key, resumeHoverAt: 0 };
     return false;
   }
   const latRad = (lat * Math.PI) / 180;
   const cosLat = Math.cos(latRad) || 1e-6;
   const movedM = Math.hypot((lat - st.lat) * 111_320, (lng - st.lng) * 111_320 * cosLat);
-  if (movedM > DRONE_MOTION_THRESHOLD_M) {
+  if (key !== st.key || movedM > DRONE_MOTION_THRESHOLD_M) {
     st.resumeHoverAt = now + DRONE_MOTION_HOVER_RESUME_MS;
   }
   st.lat = lat;
   st.lng = lng;
+  st.key = key;
   return st.resumeHoverAt > now;
 }
 
@@ -426,13 +428,13 @@ export function YandexMap({
         iconImageHref: '/ico.png',
         iconImageSize: [35, 35],
         iconImageOffset: [-17, -17],
-        draggable: !isDroneHoverSuspended(drone),
+        draggable: !isDroneFlyingLike(drone),
         balloonOffset: [0, -50],
         balloonAutoPan: false,
         hideIconOnBalloonOpen: false
       }
     );
-    if (!isDroneHoverSuspended(drone)) {
+    if (!isDroneFlyingLike(drone)) {
       placemark.events.add('dragstart', () => {
         droneDragActiveRef.current.add(String(drone.id));
       });
@@ -536,7 +538,7 @@ export function YandexMap({
             try {
               existingMarker.options.set(
                 'draggable',
-                !isDroneHoverSuspended(drone) && !placementMode
+                !isDroneFlyingLike(drone) && !placementMode
               );
             } catch {
               /* ignore */
@@ -546,7 +548,7 @@ export function YandexMap({
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
             try {
-              existingMarker.options.set('draggable', !isDroneHoverSuspended(drone));
+              existingMarker.options.set('draggable', !isDroneFlyingLike(drone));
             } catch {
               /* ignore */
             }
@@ -557,7 +559,7 @@ export function YandexMap({
               existingMarker.geometry.setCoordinates(pos);
               droneMarkerPositionKeyRef.current.set(idStr, posKey);
             }
-          } else if (isDroneHoverSuspended(drone)) {
+          } else if (isDroneFlyingLike(drone)) {
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
             delete droneHoverPhaseRef.current[idStr];
@@ -662,7 +664,7 @@ export function YandexMap({
           continue;
         }
         const d = list.find((x) => String(x.id) === k);
-        if (!d?.position || isDroneHoverSuspended(d)) {
+        if (!d?.position) {
           delete droneHoverPhaseRef.current[k];
           continue;
         }
