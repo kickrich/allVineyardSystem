@@ -10,6 +10,8 @@ export function RouteShiftSegmentsPopup({
   segmentIndices,
   pathPointCount,
   onToggleSegment,
+  /** Шаг тура: на карте уже нарисован пример, в списке своих отрезков может быть пусто. */
+  onboardingDemoActive = false,
 }) {
   if (!open || typeof document === 'undefined') return null;
 
@@ -49,12 +51,27 @@ export function RouteShiftSegmentsPopup({
           </button>
         </div>
         <div className="max-h-[min(52vh,440px)] overflow-y-auto px-4 py-3">
-          {list.length === 0 ? (
+          {list.length === 0 && onboardingDemoActive ? (
+            <div className="space-y-3 text-sm leading-relaxed text-gray-200">
+              <p>
+                На карте уже показан <strong className="text-amber-200">пример</strong>: четыре точки и три
+                отрезка оранжевой пунктирной линией; <strong className="text-violet-200">средний отрезок</strong>{' '}
+                подсвечен фиолетовым — это метка «смещение» (разворот между рядами). Так позже можно будет
+                резать видео: примерно один ряд виноградника — один файл.
+              </p>
+              <p className="text-gray-400">
+                У себя: нажмите «Построить маршрут», поставьте точки в зоне и кликните по линии нужного отрезка
+                (не по кругу узла редактора), чтобы включить или снять такую же метку.
+              </p>
+            </div>
+          ) : null}
+          {list.length === 0 && !onboardingDemoActive ? (
             <p className="text-sm text-gray-400">
               Пока нет отмеченных отрезков. Кликните точно по оранжевой линии между точками (не по узлу
               редактора).
             </p>
-          ) : (
+          ) : null}
+          {list.length > 0 ? (
             <ul className="flex flex-col gap-2">
               {list.map((seg) => (
                 <li
@@ -78,7 +95,7 @@ export function RouteShiftSegmentsPopup({
                 </li>
               ))}
             </ul>
-          )}
+          ) : null}
         </div>
         <div className="flex justify-between gap-2 border-t border-gray-700/90 px-4 py-3">
           <p className="self-center text-xs text-gray-500">

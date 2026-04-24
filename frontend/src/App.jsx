@@ -648,6 +648,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parkingOpen, setParkingOpen] = useState(false);
   const [workspaceTourOpen, setWorkspaceTourOpen] = useState(false);
+  const [workspaceOnboardingStepId, setWorkspaceOnboardingStepId] = useState(null);
 
   const createDroneFromParking = useCallback(async (nameFromModal) => {
     const suffix = `${Date.now()}`.slice(-6);
@@ -2035,14 +2036,23 @@ function App() {
     [activeZoneId, newZoneKmlName, addToZoneLog]
   );
 
-  const handleOnboardingBeforeStep = useCallback((stepId) => {
-    setSidebarOpen(true);
-    if (stepId === 'place-drone') {
-      setParkingOpen(true);
-    } else {
-      setParkingOpen(false);
-    }
+  const handleWorkspaceTourOpenChange = useCallback((open) => {
+    setWorkspaceTourOpen(open);
+    if (!open) setWorkspaceOnboardingStepId(null);
   }, []);
+
+  const handleOnboardingBeforeStep = useCallback(
+    (stepId) => {
+      setWorkspaceOnboardingStepId(stepId ?? null);
+      setSidebarOpen(true);
+      if (stepId === 'place-drone') {
+        setParkingOpen(true);
+      } else {
+        setParkingOpen(false);
+      }
+    },
+    []
+  );
 
   const handleDroneClick = (drone) => {
     setSelectedDroneForModal(drone);
@@ -2156,6 +2166,7 @@ function App() {
                   zones={backendZones}
                   activeZoneId={activeZoneId}
                   onSelectZone={applyActiveZoneId}
+                  showEmptyMenuDuringTour={workspaceTourOpen && backendZones.length === 0}
                 />
               </div>
               {(drawRectZoneMode || draftRectBoundary) && (
@@ -2415,6 +2426,7 @@ function App() {
                   onDraftRectBoundaryChange={handleDraftRectBoundaryChange}
                   onRectDrawComplete={handleRectDrawComplete}
                   onMapCenterChange={setMapCenter}
+                  onMapZoomChange={setMapZoom}
                   onDronePositionChange={handleDronePositionChange}
                   selectedDroneId={selectedDroneForSidebar}
                   forceResize={true}
@@ -2423,6 +2435,7 @@ function App() {
                   onRoutePathChange={handleRoutePathChange}
                   routeShiftSegmentIndices={selectedRouteShiftSegments}
                   onRouteShiftSegmentToggle={toggleRouteShiftSegment}
+                  workspaceOnboardingStepId={workspaceOnboardingStepId}
                   previewPath={templateToApplyId ? (missionTemplates.find(t => t.id === templateToApplyId)?.path) ?? null : null}
                   zones={zonesForMap}
                   zoneBoundary={activeZoneBoundary}
@@ -2436,6 +2449,7 @@ function App() {
                   zones={backendZones}
                   activeZoneId={activeZoneId}
                   onSelectZone={applyActiveZoneId}
+                  showEmptyMenuDuringTour={workspaceTourOpen && backendZones.length === 0}
                 />
                 {placementMode && droneToPlace && (
                   <div
@@ -2567,7 +2581,7 @@ function App() {
         <WorkspaceOnboarding
           enabled
           onBeforeStep={handleOnboardingBeforeStep}
-          onTourOpenChange={setWorkspaceTourOpen}
+          onTourOpenChange={handleWorkspaceTourOpenChange}
           layoutKey={`${sidebarOpen}-${parkingOpen}-${workspaceTourOpen}`}
         />
       )}

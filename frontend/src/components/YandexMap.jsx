@@ -269,6 +269,95 @@ function findNearestRouteSegmentMeters(path, lat, lng, maxM) {
 /** Клик по полилинии маршрута: coords почти на линии — узкий порог (м). */
 const ROUTE_SEGMENT_SHIFT_POLYLINE_CLICK_MAX_M = 11;
 
+/** Четыре точки [lat,lng] → три отрезка вокруг центра карты (для шага тура). */
+function buildOnboardingRouteShiftDemoPath(centerLat, centerLng) {
+  const lat0 = Number(centerLat);
+  const lng0 = Number(centerLng);
+  if (![lat0, lng0].every(Number.isFinite)) return null;
+  const dLat = 0.00036;
+  const dLng = 0.00055;
+  return [
+    [lat0 - dLat * 0.25, lng0 - dLng * 1.1],
+    [lat0 - dLat * 0.25, lng0 + dLng * 0.15],
+    [lat0 + dLat * 1.0, lng0 + dLng * 0.15],
+    [lat0 + dLat * 1.0, lng0 + dLng * 1.2],
+  ];
+}
+
+/**
+ * Прямоугольник зоны вокруг демо-маршрута (boundary API: [[lng, lat], ...] замкнутый).
+ * Не рисуем поверх уже загруженных зон с бэка — только если контура ещё нет.
+ */
+function buildOnboardingRouteShiftDemoZoneBoundary(centerLat, centerLng) {
+  const path = buildOnboardingRouteShiftDemoPath(centerLat, centerLng);
+  if (!path) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  for (const pair of path) {
+    const la = Number(pair[0]);
+    const ln = Number(pair[1]);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) continue;
+    minLat = Math.min(minLat, la);
+    maxLat = Math.max(maxLat, la);
+    minLng = Math.min(minLng, ln);
+    maxLng = Math.max(maxLng, ln);
+  }
+  if (!Number.isFinite(minLat)) return null;
+  const spanLat = Math.max(maxLat - minLat, 1e-7);
+  const spanLng = Math.max(maxLng - minLng, 1e-7);
+  const padLat = Math.max(spanLat * 0.85, 0.00022);
+  const padLng = Math.max(spanLng * 0.85, 0.00032);
+  const lat1 = minLat - padLat;
+  const lat2 = maxLat + padLat;
+  const lng1 = minLng - padLng;
+  const lng2 = maxLng + padLng;
+  return [
+    [lng1, lat1],
+    [lng2, lat1],
+    [lng2, lat2],
+    [lng1, lat2],
+    [lng1, lat1],
+  ];
+}
+
+/** Объединить прямоугольники getBounds() [[lat,lng],[lat,lng]] для setBounds карты. */
+function mergeYandexGeoBounds(boundsList) {
+  let minLat = Infinity;
+  let minLng = Infinity;
+  let maxLat = -Infinity;
+  let maxLng = -Infinity;
+  for (const b of boundsList) {
+    if (!Array.isArray(b) || b.length < 2) continue;
+    const [sw, ne] = b;
+    if (!Array.isArray(sw) || !Array.isArray(ne)) continue;
+    const lats = [sw[0], ne[0]];
+    const lngs = [sw[1], ne[1]];
+    for (const lat of lats) {
+      if (Number.isFinite(lat)) {
+        minLat = Math.min(minLat, lat);
+        maxLat = Math.max(maxLat, lat);
+      }
+    }
+    for (const lng of lngs) {
+      if (Number.isFinite(lng)) {
+        minLng = Math.min(minLng, lng);
+        maxLng = Math.max(maxLng, lng);
+      }
+    }
+  }
+  if (!Number.isFinite(minLat) || !Number.isFinite(minLng)) return null;
+  return [
+    [minLat, minLng],
+    [maxLat, maxLng],
+  ];
+}
+
+/** Какой из трёх отрезков (0..2) подсвечен как «смещение» в демо тура. */
+const ONBOARDING_DEMO_SHIFT_SEGMENT_INDEX = 1;
+const ONBOARDING_ROUTE_SHIFT_FIT_MS = 480;
+
 export function YandexMap({
   drones,
   mapCenter,
@@ -278,6 +367,8 @@ export function YandexMap({
   onRectDrawComplete,
   onZoneClick,
   onMapCenterChange,
+  /** После программного setBounds / зума — синхронизировать zoom из карты в состояние (например шаг 6 тура). */
+  onMapZoomChange,
   onDronePositionChange,
   placementMode = false,
   selectedDroneId = null,
@@ -303,6 +394,8 @@ export function YandexMap({
   routeShiftSegmentIndices = [],
   /** Переключить метку смещения для отрезка с индексом i (клик по отрезку или из списка). */
   onRouteShiftSegmentToggle,
+  /** Текущий id шага тура (WorkspaceOnboarding): на шаге route-shift-segments (последний) кнопка «Смещения» и демо на карте. */
+  workspaceOnboardingStepId = null,
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -325,6 +418,12 @@ export function YandexMap({
   const routeEditPolylineRef = useRef(null);
   const routeEditPathRef = useRef(routeEditPath);
   const routeShiftHighlightPolylinesRef = useRef([]);
+  const routeShiftDemoPolylinesRef = useRef([]);
+  const routeShiftDemoZonePolygonRef = useRef(null);
+  /** Фиксированный центр демо на шаге 6, чтобы после setBounds и смены mapCenter в App линия не «переезжала». */
+  const routeShiftDemoAnchorRef = useRef(null);
+  const routeShiftDemoDidFitRef = useRef(false);
+  const workspaceOnboardingStepIdRef = useRef(workspaceOnboardingStepId);
   const routeShiftPolylineClickHandlerRef = useRef(null);
   const onRouteShiftSegmentToggleRef = useRef(onRouteShiftSegmentToggle);
   const routeEditGeometryChangeHandlerRef = useRef(null);
@@ -342,6 +441,7 @@ export function YandexMap({
   const [mapLoaded, setMapLoaded] = useState(false);
   const [error, setError] = useState(null);
   const [routeShiftPanelOpen, setRouteShiftPanelOpen] = useState(false);
+  const [routeShiftDemoAnchorVersion, setRouteShiftDemoAnchorVersion] = useState(0);
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
 
@@ -350,6 +450,7 @@ export function YandexMap({
   placementModeRef.current = placementMode;
   routeEditPathRef.current = routeEditPath;
   onRouteShiftSegmentToggleRef.current = onRouteShiftSegmentToggle;
+  workspaceOnboardingStepIdRef.current = workspaceOnboardingStepId;
 
   const API_KEY = '2b39244b-bae4-482a-b3a8-d4b21860b4e8';
 
@@ -995,6 +1096,201 @@ export function YandexMap({
     });
     return clearHighlights;
   }, [mapLoaded, routeEditMode, routeEditPath, routeShiftSegmentIndices]);
+
+  /** Зафиксировать центр демо один раз при входе на шаг 6 (без mapCenter в deps основного эффекта — нет мигания после setBounds). */
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current) return;
+    if (workspaceOnboardingStepId !== 'route-shift-segments') return;
+    if (routeShiftDemoAnchorRef.current) return;
+    const map = mapInstanceRef.current;
+    let la = Array.isArray(mapCenter) && mapCenter.length >= 2 ? Number(mapCenter[0]) : NaN;
+    let ln = Array.isArray(mapCenter) && mapCenter.length >= 2 ? Number(mapCenter[1]) : NaN;
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) {
+      try {
+        const c = typeof map.getCenter === 'function' ? map.getCenter() : null;
+        if (Array.isArray(c) && c.length >= 2) {
+          la = Number(c[0]);
+          ln = Number(c[1]);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (Number.isFinite(la) && Number.isFinite(ln)) {
+      routeShiftDemoAnchorRef.current = [la, ln];
+      setRouteShiftDemoAnchorVersion((v) => v + 1);
+    }
+  }, [mapLoaded, workspaceOnboardingStepId, mapCenter]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
+    const map = mapInstanceRef.current;
+    const clearDemo = () => {
+      routeShiftDemoPolylinesRef.current.forEach((pl) => {
+        try {
+          map.geoObjects.remove(pl);
+        } catch {
+          /* ignore */
+        }
+      });
+      routeShiftDemoPolylinesRef.current = [];
+      if (routeShiftDemoZonePolygonRef.current) {
+        try {
+          map.geoObjects.remove(routeShiftDemoZonePolygonRef.current);
+        } catch {
+          /* ignore */
+        }
+        routeShiftDemoZonePolygonRef.current = null;
+      }
+    };
+
+    if (workspaceOnboardingStepId !== 'route-shift-segments') {
+      routeShiftDemoAnchorRef.current = null;
+      routeShiftDemoDidFitRef.current = false;
+      clearDemo();
+      return;
+    }
+
+    if (!routeShiftDemoAnchorRef.current) {
+      clearDemo();
+      return;
+    }
+
+    const [lat, lng] = routeShiftDemoAnchorRef.current;
+    const demoPath = buildOnboardingRouteShiftDemoPath(lat, lng);
+    if (!demoPath || demoPath.length < 4) {
+      clearDemo();
+      return;
+    }
+
+    const hasRealZone =
+      normalizedZones.length > 0 ||
+      (Array.isArray(zoneBoundary) && zoneBoundary.length >= 4);
+
+    clearDemo();
+
+    if (!hasRealZone) {
+      const demoZoneBoundary = buildOnboardingRouteShiftDemoZoneBoundary(lat, lng);
+      const zoneRing = boundaryToYandexRing(demoZoneBoundary);
+      if (zoneRing) {
+        const fillHex =
+          typeof zoneStrokeColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(zoneStrokeColor)
+            ? `${zoneStrokeColor}5e`
+            : 'rgba(52, 211, 153, 0.37)';
+        const zonePoly = new window.ymaps.Polygon(
+          [zoneRing],
+          {},
+          {
+            fillColor: fillHex,
+            strokeColor: zoneStrokeColor,
+            strokeWidth: 3,
+            strokeOpacity: 1,
+            interactivityModel: 'default#transparent',
+          }
+        );
+        map.geoObjects.add(zonePoly);
+        routeShiftDemoZonePolygonRef.current = zonePoly;
+      }
+    }
+
+    const main = new window.ymaps.Polyline(
+      demoPath,
+      {},
+      {
+        strokeColor: '#f59e0b',
+        strokeWidth: 5,
+        strokeOpacity: 0.92,
+        strokeStyle: 'shortdash',
+        interactivityModel: 'default#transparent',
+      }
+    );
+    map.geoObjects.add(main);
+    routeShiftDemoPolylinesRef.current.push(main);
+
+    const i = ONBOARDING_DEMO_SHIFT_SEGMENT_INDEX;
+    const segCoords = [
+      [demoPath[i][0], demoPath[i][1]],
+      [demoPath[i + 1][0], demoPath[i + 1][1]],
+    ];
+    const shiftPl = new window.ymaps.Polyline(
+      segCoords,
+      {},
+      {
+        strokeColor: '#c084fc',
+        strokeWidth: 10,
+        strokeOpacity: 0.95,
+        interactivityModel: 'default#transparent',
+      }
+    );
+    map.geoObjects.add(shiftPl);
+    routeShiftDemoPolylinesRef.current.push(shiftPl);
+
+    const boundsParts = [];
+    try {
+      const b0 = main.geometry?.getBounds?.();
+      if (b0) boundsParts.push(b0);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const b1 = shiftPl.geometry?.getBounds?.();
+      if (b1) boundsParts.push(b1);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const zp = routeShiftDemoZonePolygonRef.current;
+      const b2 = zp?.geometry?.getBounds?.();
+      if (b2) boundsParts.push(b2);
+    } catch {
+      /* ignore */
+    }
+
+    const merged = mergeYandexGeoBounds(boundsParts);
+    let syncViewportTimer = null;
+    if (merged && !routeShiftDemoDidFitRef.current) {
+      try {
+        map.setBounds(merged, {
+          checkZoomRange: true,
+          zoomMargin: 72,
+          duration: 280,
+          timingFunction: 'ease-in-out',
+        });
+      } catch {
+        /* ignore */
+      }
+      syncViewportTimer = window.setTimeout(() => {
+        try {
+          if (workspaceOnboardingStepIdRef.current !== 'route-shift-segments') return;
+          const c = typeof map.getCenter === 'function' ? map.getCenter() : null;
+          const z = typeof map.getZoom === 'function' ? map.getZoom() : null;
+          if (Array.isArray(c) && c.length >= 2 && typeof onMapCenterChange === 'function') {
+            onMapCenterChange([Number(c[0]), Number(c[1])]);
+          }
+          if (typeof z === 'number' && Number.isFinite(z) && typeof onMapZoomChange === 'function') {
+            onMapZoomChange(z);
+          }
+          routeShiftDemoDidFitRef.current = true;
+        } catch {
+          /* ignore */
+        }
+      }, ONBOARDING_ROUTE_SHIFT_FIT_MS - 40);
+    }
+
+    return () => {
+      if (syncViewportTimer != null) window.clearTimeout(syncViewportTimer);
+      clearDemo();
+    };
+  }, [
+    mapLoaded,
+    workspaceOnboardingStepId,
+    routeShiftDemoAnchorVersion,
+    normalizedZones.length,
+    zoneBoundary,
+    zoneStrokeColor,
+    onMapCenterChange,
+    onMapZoomChange,
+  ]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
@@ -1800,6 +2096,22 @@ export function YandexMap({
             }
           });
           routeShiftHighlightPolylinesRef.current = [];
+          routeShiftDemoPolylinesRef.current.forEach((pl) => {
+            try {
+              mapInstanceRef.current.geoObjects.remove(pl);
+            } catch {
+              /* ignore */
+            }
+          });
+          routeShiftDemoPolylinesRef.current = [];
+          if (routeShiftDemoZonePolygonRef.current) {
+            try {
+              mapInstanceRef.current.geoObjects.remove(routeShiftDemoZonePolygonRef.current);
+            } catch {
+              /* ignore */
+            }
+            routeShiftDemoZonePolygonRef.current = null;
+          }
 
           mapInstanceRef.current.destroy();
         } catch { }
@@ -1841,11 +2153,11 @@ export function YandexMap({
     (editingPath && editingPath.length >= 0);
 
   const shiftCount = Array.isArray(routeShiftSegmentIndices) ? routeShiftSegmentIndices.length : 0;
+  const onboardingRouteShiftStep = workspaceOnboardingStepId === 'route-shift-segments';
   const showRouteShiftUi =
-    routeEditMode &&
-    Array.isArray(routeEditPath) &&
-    routeEditPath.length >= 2 &&
-    typeof onRouteShiftSegmentToggle === 'function';
+    typeof onRouteShiftSegmentToggle === 'function' &&
+    (onboardingRouteShiftStep ||
+      (routeEditMode && Array.isArray(routeEditPath) && routeEditPath.length >= 2));
 
   return (
     <div
@@ -1864,6 +2176,7 @@ export function YandexMap({
         <>
           <button
             type="button"
+            data-onboarding="route-shift-segments"
             className="pointer-events-auto absolute bottom-24 right-3 z-[165] max-w-[min(56vw,220px)] truncate rounded-xl border border-violet-500/60 bg-violet-950/90 px-3 py-2 text-left text-sm font-medium text-violet-100 shadow-lg backdrop-blur-sm hover:bg-violet-900/95 sm:bottom-20"
             title="Список отрезков с меткой «смещение» между рядами"
             onClick={() => setRouteShiftPanelOpen(true)}
@@ -1874,7 +2187,8 @@ export function YandexMap({
             open={routeShiftPanelOpen}
             onClose={() => setRouteShiftPanelOpen(false)}
             segmentIndices={routeShiftSegmentIndices}
-            pathPointCount={routeEditPath.length}
+            pathPointCount={onboardingRouteShiftStep ? 4 : routeEditPath.length}
+            onboardingDemoActive={onboardingRouteShiftStep}
             onToggleSegment={(seg) => {
               onRouteShiftSegmentToggle(seg);
             }}

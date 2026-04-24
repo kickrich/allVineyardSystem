@@ -15,7 +15,7 @@ const STEPS = [
     target: 'zone-map-menu',
     title: 'Шаг 2. Активная зона',
     text:
-      'Откройте меню «гамбургер» в левом верхнем углу карты и выберите нужную зону — она станет активной. Маршрут можно строить только внутри контура активной зоны.',
+      'Меню зон — кнопка с тремя полосками в левом верхнем углу карты. Пока сохранённых зон нет, она видна только во время пошагового тура и подсвечена янтарным кольцом; откройте меню — внутри краткая подсказка. На шаге 2 тура сосредоточьтесь на выборе зоны здесь. Когда зоны появятся, выберите нужную — она станет активной. Маршрут можно строить только внутри контура активной зоны.',
   },
   {
     id: 'place-drone',
@@ -37,6 +37,13 @@ const STEPS = [
     title: 'Шаг 5. Старт миссии и первая точка',
     text:
       'Блок «Управление полётом» и кнопка «Начать миссию» появляются, когда в маршруте не меньше двух точек. Старт миссии разрешён только если маркер дрона совпадает с первой точкой маршрута (в приложении — примерно в радиусе 10 м): полёт по плану всегда начинается с этой точки. Переместите дрон кнопкой «К первой точке миссии, что бы иметь возможность запустить миссию.',
+  },
+  {
+    id: 'route-shift-segments',
+    target: 'route-shift-segments',
+    title: 'Шаг 6. Смещения между рядами',
+    text:
+      'Карта приблизится к примеру: внутри полупрозрачного контура зоны (как у вашей будущей зоны) — три отрезка оранжевой пунктирной линией, средний подсвечен фиолетовым: это «смещение» между рядами. Так в будущем нейросеть сможет резать видео: примерно один ряд — один файл. Если у вас уже есть сохранённая зона на карте, показывается только маршрут-пример поверх неё. Кнопка «Смещения» внизу справа открывает пояснение; свой маршрут вы потом построите в режиме «Построить маршрут» и отметите отрезки кликом по линии между точками.',
   },
 ];
 
@@ -172,13 +179,20 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
     const cardW = Math.min(vw * 0.92, 420);
     const tipLeft = Math.max(12, Math.min(cx - cardW / 2, vw - cardW - 12));
     const halfH = hasTarget ? rect.height / 2 : 0;
+    /** Шаг 6: карта с демо-зоной — без общего затемнения и без «дырки» с тенью на весь экран. */
+    const isRouteShiftOnboardingStep = step.id === 'route-shift-segments';
     let tipTop =
       cy > vh * 0.55 ? Math.max(72, cy - 240) : Math.min(vh - 120, cy + halfH + 16);
     const estCardPx = Math.min(400, vh * 0.52);
-    tipTop = Math.max(12, Math.min(tipTop, vh - estCardPx - 12));
+    const bottomGap = isRouteShiftOnboardingStep ? 40 : 12;
+    tipTop = Math.max(12, Math.min(tipTop, vh - estCardPx - bottomGap));
+    if (isRouteShiftOnboardingStep) {
+      tipTop = Math.max(12, tipTop - 72);
+    }
     const targetMissing = !queryTarget(step.target);
     /** Шаги панели: карточка слева от подсветки, по вертикали на уровне кнопок. */
-    const usePanelAdjacentCard = step.id === 'route-build' || step.id === 'mission-first-waypoint';
+    const usePanelAdjacentCard =
+      step.id === 'route-build' || step.id === 'mission-first-waypoint';
 
     const gap = 12;
     const minPanelCardW = 268;
@@ -224,6 +238,7 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
           {narrow &&
             (step.id === 'place-drone' ||
               step.id === 'route-build' ||
+              step.id === 'route-shift-segments' ||
               step.id === 'mission-first-waypoint') && (
               <p className="text-xs text-amber-200/90">
                 На узком экране панель открывается кнопкой «Панель» внизу; во время тура она шире, чтобы были видны все
@@ -269,11 +284,22 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
 
     return createPortal(
       <div className="fixed inset-0 z-[2400] flex flex-col pointer-events-auto" aria-hidden={false}>
-        <div className="absolute inset-0 z-0 bg-black/45" aria-hidden />
+        <div
+          className={
+            isRouteShiftOnboardingStep
+              ? 'absolute inset-0 z-0 bg-transparent'
+              : 'absolute inset-0 z-0 bg-black/45'
+          }
+          aria-hidden
+        />
         {hasTarget && (
           <>
             <div
-              className="absolute z-[1] rounded-xl ring-4 ring-amber-400 ring-offset-2 ring-offset-transparent shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] pointer-events-none transition-all duration-200"
+              className={
+                isRouteShiftOnboardingStep
+                  ? 'absolute z-[1] rounded-xl ring-4 ring-amber-400 ring-offset-2 ring-offset-gray-950/90 pointer-events-none transition-all duration-200'
+                  : 'absolute z-[1] rounded-xl ring-4 ring-amber-400 ring-offset-2 ring-offset-transparent shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] pointer-events-none transition-all duration-200'
+              }
               style={{
                 top: rect.top - 6,
                 left: rect.left - 6,
@@ -363,16 +389,19 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
               <h2 className="text-xl font-bold text-white mb-2">Как начать работу</h2>
               <ol className="list-decimal space-y-3 pl-5 text-sm text-gray-200 leading-relaxed">
                 <li>
-                  <strong className="text-white">Зона.</strong> Создайте или выберите зону с контуром на карте (кнопка
-                  прямоугольника или меню зон слева сверху на карте).
+                  <strong className="text-white">Зона.</strong> Создайте зону кнопкой прямоугольника справа вверху на
+                  карте. Пока зон нет, меню зон слева вверху (три полоски) показывается только во время{' '}
+                  <strong className="text-white">пошагового тура</strong> — с подсказкой внутри. После появления зон
+                  выберите активную зону в этом меню.
                 </li>
                 <li>
                   <strong className="text-white">Дрон.</strong> Из стоянки разместите дрон на карте внутри зоны.
                 </li>
                 <li>
-                  <strong className="text-white">Маршрут и миссия.</strong> В панели — «Построить маршрут» и точки на
-                  карте. Почему «Начать миссию» иногда недоступна и что такое первая точка — в{' '}
-                  <strong className="text-white">шаге 5</strong> пошагового тура.
+                  <strong className="text-white">Маршрут, миссия и смещения.</strong> В панели — «Построить маршрут» и
+                  точки на карте. Старт миссии с первой точкой — в{' '}
+                  <strong className="text-white">шаге 5</strong>, метки «смещение» на отрезках — в{' '}
+                  <strong className="text-white">шаге 6</strong> пошагового тура.
                 </li>
               </ol>
               <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
