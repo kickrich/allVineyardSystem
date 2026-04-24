@@ -27,6 +27,8 @@ export const Sidebar = ({
   weatherFlightReasons = [],
   /** Дрон в пределах стартовой точки маршрута (первая точка path). */
   isDroneAtMissionStart,
+  /** Активная зона имеет контур (можно строить маршрут). */
+  workZoneReady = false,
   onClose
 }) => {
   const [activeTab, setActiveTab] = useState('control');
@@ -89,6 +91,21 @@ export const Sidebar = ({
   const selectedDroneStatus = selectedDrone?.flightStatus || flightStatus.IDLE;
   const atMissionStart =
     typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
+
+  const canEnableRouteMode = Boolean(
+    workZoneReady && selectedDrone && !selectedDrone.isFlying
+  );
+
+  const routeBuildTitle = isRouteEditMode
+    ? 'Завершить редактирование маршрута'
+    : !workZoneReady
+      ? 'Сначала выберите или создайте зону с контуром на карте (меню зон слева или кнопка зоны справа)'
+      : !selectedDrone
+        ? 'Сначала выберите дрон в списке ниже'
+        : selectedDrone.isFlying
+          ? 'Во время полёта маршрут недоступен'
+          : 'Включить режим: клики по карте внутри зоны добавляют точки маршрута';
+
   const isRouteLooped = useMemo(() => {
     if (!Array.isArray(selectedDrone?.path) || selectedDrone.path.length < 2) return false;
     const last = selectedDrone.path[selectedDrone.path.length - 1];
@@ -259,13 +276,20 @@ export const Sidebar = ({
                     <>
                       <div className="flex gap-2 mb-3">
                         <button
+                          type="button"
                           onClick={onToggleRouteMode}
-                          className={`flex-1 py-2 min-h-[44px] rounded transition-colors ${isRouteEditMode
-                            ? 'bg-blue-600 hover:bg-blue-700'
-                            : 'bg-gray-700 hover:bg-gray-600'
-                            }`}
+                          disabled={!isRouteEditMode && !canEnableRouteMode}
+                          title={routeBuildTitle}
+                          aria-disabled={!isRouteEditMode && !canEnableRouteMode}
+                          className={`flex-1 py-2 min-h-[44px] rounded transition-colors ${
+                            isRouteEditMode
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                              : canEnableRouteMode
+                                ? 'bg-blue-700 hover:bg-blue-600 text-white'
+                                : 'bg-gray-700 text-gray-400 cursor-not-allowed opacity-80'
+                          }`}
                         >
-                          {isRouteEditMode ? 'Закончить' : 'Построить маршрут'}
+                          {isRouteEditMode ? 'Закончить маршрут' : 'Построить маршрут'}
                         </button>
                         <button
                           onClick={() => onDroneClick(selectedDrone)}
@@ -310,20 +334,7 @@ export const Sidebar = ({
                         Разомкнуть маршрут
                       </button>
 
-                      {isRouteEditMode && (
-                        <div className="bg-blue-900/30 p-3 rounded text-sm mt-2">
-                          <p className="text-blue-300">Режим добавления точек маршрута</p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Кликните по карте, чтобы добавить точку маршрута для {selectedDrone.name}
-                          </p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Для точной настройки тяните за узлы и сегменты маршрута прямо на карте.
-                          </p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Клик по уже существующей точке замыкает маршрут в этом месте.
-                          </p>
-                        </div>
-                      )}
+                  
                     </>
                   )}
                   <button

@@ -359,6 +359,10 @@ function App() {
     return /^#[0-9a-fA-F]{6}$/.test(saved) ? saved : '#22c55e';
   }, [activeZoneId, zoneColorsById]);
 
+  const workZoneReady = useMemo(
+    () => Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4,
+    [activeZoneBoundary]
+  );
   useEffect(() => {
     try {
       localStorage.setItem(ZONE_COLORS_STORAGE_KEY, JSON.stringify(zoneColorsById));
@@ -650,7 +654,6 @@ function App() {
       })
     );
     setSelectedDroneForSidebar(droneToPlace);
-    setMapCenter([positionToSet.lat, positionToSet.lng]);
     setPlacementMode(false);
     setDroneToPlace(null);
     addToGlobalLog(droneToPlace, `🛸 Дрон "${drone.name}" размещен на карте`, {
@@ -905,9 +908,15 @@ function App() {
       setIsRouteEditMode(false);
       return;
     }
-    if (!selectedDroneForSidebar) return;
+    if (!selectedDroneForSidebar) {
+      addToZoneLog('ℹ️ Сначала выберите дрон в списке панели (шаг 2).');
+      return;
+    }
     if (!Array.isArray(activeZoneBoundary) || activeZoneBoundary.length < 4) {
-      addToDroneLog(selectedDroneForSidebar, '⚠️ Сначала выберите или создайте активную зону');
+      addToDroneLog(
+        selectedDroneForSidebar,
+        '⚠️ Нужна активная зона с контуром на карте (шаг 1: меню зон слева или создание зоны).'
+      );
       return;
     }
     setIsRouteEditMode(true);
@@ -974,6 +983,7 @@ function App() {
     addToDroneLog(droneId, '↔️ Маршрут разомкнут', {
       fromPoint: loopIndex + 1,
     });
+    setIsRouteEditMode(true);
   }, [drones, selectedDroneForSidebar, computeMissionParamsFromPath]);
 
   const calculateMissionParameters = (droneId) => {
@@ -2299,29 +2309,6 @@ function App() {
                 }}
               >
             <div className="w-full flex flex-col gap-2 flex-1 min-h-0">
-              {placementMode && droneToPlace && (
-                <div className="bg-yellow-900/70 border border-yellow-500 rounded-lg p-3 mb-2 animate-pulse">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div>
-                        <p className="text-sm text-yellow-200">
-                          Кликните на карте, чтобы разместить дрон
-                          {(() => {
-                            const d = drones.find(d => d.id === droneToPlace);
-                            return d ? ` "${d.name}"` : '';
-                          })()}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={cancelDronePlacement}
-                      className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm transition-colors"
-                    >
-                      Отмена
-                    </button>
-                  </div>
-                </div>
-              )}
               <div className="flex flex-col gap-2 mb-2 relative z-[1100]">
                 <div className="flex flex-col lg:flex-row gap-2 lg:items-start">
                   <div className="flex-1 min-w-0">
@@ -2445,6 +2432,29 @@ function App() {
                   activeZoneId={activeZoneId}
                   onSelectZone={applyActiveZoneId}
                 />
+                {placementMode && droneToPlace && (
+                  <div
+                    className="pointer-events-auto absolute bottom-3 left-1/2 z-[200] w-[min(92vw,420px)] -translate-x-1/2 rounded-xl border border-yellow-500/70 bg-yellow-950/90 px-3 py-2.5 shadow-xl backdrop-blur-sm sm:bottom-4"
+                    style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))' }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-yellow-100 leading-snug">
+                        Кликните по карте, чтобы поставить дрон
+                        {(() => {
+                          const d = drones.find((x) => x.id === droneToPlace);
+                          return d ? ` «${d.name}»` : '';
+                        })()}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={cancelDronePlacement}
+                        className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 min-h-[40px]"
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Кнопки управления под картой (мобильные), в потоке — карта сжимается */}
@@ -2529,6 +2539,7 @@ function App() {
                 flightAllowedByWeather={weatherFlightSafe}
                 weatherFlightReasons={weatherFlightReasons}
                 isDroneAtMissionStart={isDroneAtMissionStart}
+                workZoneReady={workZoneReady}
                 onClose={() => setSidebarOpen(false)}
               />
             </div>
