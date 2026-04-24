@@ -1,0 +1,1 @@
+ActiveJob::Status.store = Rails.cache

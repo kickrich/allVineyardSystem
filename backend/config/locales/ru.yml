@@ -1,0 +1,21 @@
+ru:
+  api:
+    auth:
+      errors:
+        unauthorized: "Требуется авторизация"
+        invalid_credentials: "Неверный email или пароль"
+    errors:
+      record_not_found: "Запись не найдена"
+    drones:
+      errors:
+        delete_only_offline: "Нельзя удалить дрон, пока он в сети или на задании. Сначала переведите его в offline."
+    missions:
+      created: "Миссия создана"
+    users:
+      created: "Пользователь создан"
+      updated: "Пользователь обновлён"
+    zones:
+      created: "Зона создана"
+      updated: "Зона обновлена"
+      errors:
+        kml_parse: "Ошибка KML: %{details}"

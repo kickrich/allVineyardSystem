@@ -1,0 +1,34 @@
+services:
+  cv:
+    build: ./cvService
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./cvService/models:/app/models
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: vineyard-videos
+      MINIO_REGION: us-east-1
+      MINIO_SECURE: "false"
+    gpus: all
+    container_name: vineyard_cv_service
+    depends_on:
+      - minio
+
+  minio:
+    image: minio/minio:latest
+    container_name: vineyard_minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
