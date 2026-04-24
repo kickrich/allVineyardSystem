@@ -596,10 +596,13 @@ function App() {
   const [parkingOpen, setParkingOpen] = useState(false);
   const [workspaceTourOpen, setWorkspaceTourOpen] = useState(false);
 
-  const createDroneFromParking = useCallback(async () => {
+  const createDroneFromParking = useCallback(async (nameFromModal) => {
+    const suffix = `${Date.now()}`.slice(-6);
+    const trimmed =
+      typeof nameFromModal === 'string' ? nameFromModal.trim().slice(0, 120) : '';
+    const name = trimmed.length > 0 ? trimmed : `Дрон ${suffix}`;
     try {
-      const suffix = `${Date.now()}`.slice(-6);
-      await createDroneInBackend({ name: `Дрон ${suffix}`, model: 'DJI Mavic 3', battery: 100, status: 'idle' });
+      await createDroneInBackend({ name, model: 'DJI Mavic 3', battery: 100, status: 'idle' });
       const backendDrones = await fetchDronesFromBackend();
       if (backendDrones.length > 0) {
         setDrones(backendDrones.map(mapBackendDroneToFrontend));
@@ -610,6 +613,7 @@ function App() {
       }
     } catch (e) {
       console.warn('createDroneFromParking failed:', e?.message ?? e);
+      throw e;
     }
   }, []);
 
