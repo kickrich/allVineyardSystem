@@ -1,4 +1,21 @@
-const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+/**
+ * В development запросы должны идти на тот же origin, что и Vite (относительные /api/...),
+ * иначе прокси из vite.config.js не используется. Переменные окружения в системе часто
+ * оставляют VITE_API_BASE_URL=http://localhost:3000 и ломают связку с Puma (3001).
+ * Прямой URL на API в dev: VITE_API_DIRECT=true и тогда учитывается VITE_API_BASE_URL.
+ */
+function resolveApiBaseUrl() {
+  const raw = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+  const direct =
+    import.meta.env.VITE_API_DIRECT === 'true' ||
+    import.meta.env.VITE_API_DIRECT === '1';
+  if (import.meta.env.DEV && !direct) {
+    return '';
+  }
+  return raw;
+}
+
+const baseUrl = resolveApiBaseUrl();
 
 const TOKEN_KEY = 'api_token';
 const USER_KEY = 'api_user';

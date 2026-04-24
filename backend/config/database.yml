@@ -6,7 +6,8 @@ default: &default
   username: vineyard_user
   password: 1029
   host: localhost
-  port: <%= ENV.fetch("DB_PORT") { 5432 } %>
+  # Частый порт второго инстанса PostgreSQL на Windows; стандарт — 5432 (задайте DB_PORT=5432).
+  port: <%= ENV.fetch("DB_PORT") { 5433 } %>
 
 development:
   <<: *default
