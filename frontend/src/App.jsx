@@ -1202,6 +1202,16 @@ function App() {
     }
   }, []);
 
+  const isDroneAtMissionStart = useCallback((drone) => {
+    if (!drone?.path || drone.path.length < 2 || !drone.position) return false;
+    const first = drone.path[0];
+    if (!Array.isArray(first) || first.length < 2) return false;
+    return (
+      calculateDistance(drone.position.lat, drone.position.lng, first[0], first[1]) <=
+      FIRST_WAYPOINT_TRANSIT_THRESHOLD_M
+    );
+  }, []);
+
   const startDroneFlight = useCallback((droneId) => {
     const drone = drones.find(d => d.id === droneId);
     if (!drone || !drone.path || drone.path.length < 2) {
@@ -1214,20 +1224,12 @@ function App() {
       return;
     }
 
-    const firstWaypoint = drone.path[0];
-    const needTransitToFirst =
-      drone.position &&
-      firstWaypoint &&
-      calculateDistance(
-        drone.position.lat,
-        drone.position.lng,
-        firstWaypoint[0],
-        firstWaypoint[1]
-      ) > FIRST_WAYPOINT_TRANSIT_THRESHOLD_M;
+    if (!isDroneAtMissionStart(drone)) {
+      console.warn('Start flight blocked: drone must be at first waypoint');
+      return;
+    }
 
-    const flightPath = needTransitToFirst
-      ? [[drone.position.lat, drone.position.lng], ...drone.path]
-      : drone.path;
+    const flightPath = drone.path;
 
     const missionParams = computeMissionParamsFromPath(
       flightPath,
@@ -1247,16 +1249,14 @@ function App() {
       setIsRouteEditMode(false);
     }
 
-    const alreadyAtFirstPoint = !needTransitToFirst;
-
     setDrones(prev =>
       prev.map(d => {
         if (d.id !== droneId) return d;
         return {
           ...d,
-          flightStatus: alreadyAtFirstPoint ? flightStatus.FLYING : flightStatus.TAKEOFF,
+          flightStatus: flightStatus.FLYING,
           isFlying: true,
-          altitude: alreadyAtFirstPoint ? 100 : 50,
+          altitude: 100,
           currentMission: {
             startTime: new Date().toISOString(),
             totalWaypoints: d.path.length,
@@ -1284,39 +1284,8 @@ function App() {
     // Не PATCH в in_mission до POST /missions: backend требует idle при создании миссии;
     // in_mission выставляет start! на сервере.
     void createAndStartBackendMission(drone, drone.path);
-    if (needTransitToFirst) {
-      const transitDist = Math.round(
-        calculateDistance(
-          drone.position.lat,
-          drone.position.lng,
-          firstWaypoint[0],
-          firstWaypoint[1]
-        )
-      );
-      addToDroneLog(droneId, '📍 Перелёт до первой точки миссии', {
-        distance: `${transitDist} м`
-      });
-    }
-
-    if (alreadyAtFirstPoint) {
-      addToDroneLog(droneId, '🛸 Дрон уже в воздухе — начало маршрута');
-      setTimeout(() => startFlightMovement(droneId), 0);
-    } else {
-      setTimeout(() => {
-        setDrones(prev =>
-          prev.map(d => {
-            if (d.id !== droneId) return d;
-            return {
-              ...d,
-              flightStatus: flightStatus.FLYING,
-              altitude: 100
-            };
-          })
-        );
-        addToDroneLog(droneId, '🛫 Взлет выполнен', { altitude: 100 });
-        startFlightMovement(droneId);
-      }, 2000);
-    }
+    addToDroneLog(droneId, '🛸 Старт с первой точки маршрута');
+    setTimeout(() => startFlightMovement(droneId), 0);
   }, [
     drones,
     selectedDroneForSidebar,
@@ -1324,6 +1293,7 @@ function App() {
     addToDroneLog,
     computeMissionParamsFromPath,
     createAndStartBackendMission,
+    isDroneAtMissionStart,
   ]);
 
   const startFlightMovement = (droneId) => {
@@ -2558,6 +2528,7 @@ function App() {
                 onFlyToFirstWaypoint={flyDroneToFirstWaypoint}
                 flightAllowedByWeather={weatherFlightSafe}
                 weatherFlightReasons={weatherFlightReasons}
+                isDroneAtMissionStart={isDroneAtMissionStart}
                 onClose={() => setSidebarOpen(false)}
               />
             </div>

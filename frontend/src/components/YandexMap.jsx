@@ -5,6 +5,9 @@ if (typeof window !== 'undefined') {
   if (!window.yandexMapsLoaded) window.yandexMapsLoaded = false;
 }
 
+/** Длительность плавного подгона вида при смене зоны (мс). */
+const ZONE_FIT_ANIMATION_MS = 520;
+
 /** boundary с API: [[lng, lat], ...] — замкнутый полигон. */
 function boundaryToYandexRing(boundary) {
   if (!Array.isArray(boundary) || boundary.length < 4) return null;
@@ -562,7 +565,12 @@ export function YandexMap({
       try {
         const bounds = polygon.geometry.getBounds();
         if (bounds) {
-          map.setBounds(bounds, { checkZoomRange: true, zoomMargin: 24 });
+          map.setBounds(bounds, {
+            checkZoomRange: true,
+            zoomMargin: 24,
+            duration: ZONE_FIT_ANIMATION_MS,
+            timingFunction: 'ease-in-out',
+          });
         }
       } catch {
         /* ignore */

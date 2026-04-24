@@ -25,6 +25,8 @@ export const Sidebar = ({
   onFlyToFirstWaypoint,
   flightAllowedByWeather = true,
   weatherFlightReasons = [],
+  /** Дрон в пределах стартовой точки маршрута (первая точка path). */
+  isDroneAtMissionStart,
   onClose
 }) => {
   const [activeTab, setActiveTab] = useState('control');
@@ -85,6 +87,8 @@ export const Sidebar = ({
   };
   const selectedDronePathLength = selectedDrone?.path?.length || 0;
   const selectedDroneStatus = selectedDrone?.flightStatus || flightStatus.IDLE;
+  const atMissionStart =
+    typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
   const isRouteLooped = useMemo(() => {
     if (!Array.isArray(selectedDrone?.path) || selectedDrone.path.length < 2) return false;
     const last = selectedDrone.path[selectedDrone.path.length - 1];
@@ -342,12 +346,30 @@ export const Sidebar = ({
                     <h4 className="font-semibold text-white mb-2">Управление полетом</h4>
                     <div className="grid grid-cols-2 gap-2">
                       {selectedDroneStatus === flightStatus.IDLE && selectedDronePathLength >= 2 && (
-                        <button
-                          onClick={() => onStartFlight(selectedDrone.id)}
-                          className="col-span-2 bg-green-600 hover:bg-green-700 py-2 min-h-[44px] rounded flex items-center justify-center gap-2"
-                        >
-                          🚀 Начать миссию
-                        </button>
+                        <>
+                          {!atMissionStart && (
+                            <div className="col-span-2 rounded-lg border border-amber-600/50 bg-amber-900/25 px-3 py-2 text-center text-xs text-amber-100">
+                              Подведите дрон к первой точке маршрута (или «К первой точке миссии»), затем запускайте миссию.
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onStartFlight(selectedDrone.id)}
+                            disabled={!atMissionStart}
+                            title={
+                              atMissionStart
+                                ? 'Запустить миссию'
+                                : 'Сначала разместите дрон у стартовой точки маршрута'
+                            }
+                            className={`col-span-2 py-2 min-h-[44px] rounded flex items-center justify-center gap-2 ${
+                              atMissionStart
+                                ? 'bg-green-600 hover:bg-green-700'
+                                : 'cursor-not-allowed bg-gray-600 opacity-50'
+                            }`}
+                          >
+                            🚀 Начать миссию
+                          </button>
+                        </>
                       )}
                       {selectedDroneStatus === flightStatus.FLYING && (
                         <>
@@ -385,12 +407,30 @@ export const Sidebar = ({
                         <>
                           <div className="col-span-2 text-center text-sm text-green-300">✅ Миссия завершена</div>
                           {selectedDronePathLength >= 2 && (
-                            <button
-                              onClick={() => onStartFlight(selectedDrone.id)}
-                              className="col-span-2 bg-green-600 hover:bg-green-700 py-2 rounded flex items-center justify-center gap-2"
-                            >
-                              🔄 Перезапустить миссию
-                            </button>
+                            <>
+                              {!atMissionStart && (
+                                <div className="col-span-2 rounded-lg border border-amber-600/50 bg-amber-900/25 px-3 py-2 text-center text-xs text-amber-100">
+                                  Для перезапуска дрон должен быть у первой точки маршрута.
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => onStartFlight(selectedDrone.id)}
+                                disabled={!atMissionStart}
+                                title={
+                                  atMissionStart
+                                    ? 'Перезапустить миссию'
+                                    : 'Сначала подведите дрон к стартовой точке'
+                                }
+                                className={`col-span-2 py-2 rounded flex items-center justify-center gap-2 ${
+                                  atMissionStart
+                                    ? 'bg-green-600 hover:bg-green-700'
+                                    : 'cursor-not-allowed bg-gray-600 opacity-50'
+                                }`}
+                              >
+                                🔄 Перезапустить миссию
+                              </button>
+                            </>
                           )}
                         </>
                       )}
