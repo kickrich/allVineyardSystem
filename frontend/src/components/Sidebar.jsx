@@ -25,11 +25,8 @@ export const Sidebar = ({
   onFlyToFirstWaypoint,
   flightAllowedByWeather = true,
   weatherFlightReasons = [],
-  /** Дрон в пределах стартовой точки маршрута (первая точка path). */
   isDroneAtMissionStart,
-  /** Активная зона имеет контур (можно строить маршрут). */
   workZoneReady = false,
-  /** Идёт тур: показываем панель как при размещённом дроне (демо), если на карте никого нет. */
   instructionTourActive = false,
   onClose
 }) => {

@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { loginWithCredentials, registerUser } from '../api/backend';
 
-/**
- * Экран входа / регистрации до загрузки основного приложения.
- */
 export function AuthScreen({ onLoggedIn }) {
   const [mode, setMode] = useState('login');
   const [name, setName] = useState('');

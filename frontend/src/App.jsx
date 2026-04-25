@@ -50,16 +50,12 @@ import {
 const VIEW_TRANSITION_MS = 900;
 const EXIT_PANELS_MS = VIEW_TRANSITION_MS;
 const DESKTOP_SWITCH_EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
-/** Минимальная дистанция (м): если дрон ближе к первой точке — перелёт до неё не добавляется */
 const FIRST_WAYPOINT_TRANSIT_THRESHOLD_M = 10;
-/** Минимальный интервал между одинаковыми предупреждениями о выходе маршрута за зону. */
 const ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS = 1200;
 const TEMPLATE_ROUTE_REJECT_COOLDOWN_MS = 1200;
 const TELEMETRY_SEND_EVERY_MS = 1000;
 const ZONE_COLORS_STORAGE_KEY = 'zone_colors_v1';
 
-// Видео-логирование (для multipart upload после завершения миссии).
-// ВАЖНО: backend допускает только content_type ровно 'video/webm' или 'video/mp4'.
 const VIDEO_CANVAS_WIDTH = 640;
 const VIDEO_CANVAS_HEIGHT = 360;
 const VIDEO_RECORDING_FPS = 15;
@@ -154,11 +150,9 @@ function normalizedTemplatePoints(path) {
     : [];
 }
 
-/** Подобрать зону по шаблону: берём зону с максимальным числом точек шаблона внутри. */
 function inferZoneIdForTemplatePath(path, zones) {
   const points = normalizedTemplatePoints(path);
   if (!Array.isArray(zones) || zones.length === 0) return null;
-  // Если зона одна — связываем шаблон с ней, даже для старых/неполных шаблонов.
   if (zones.length === 1) {
     const onlyZoneId = zones[0]?.id;
     return onlyZoneId == null ? null : onlyZoneId;
@@ -180,9 +174,6 @@ function inferZoneIdForTemplatePath(path, zones) {
       bestZoneId = zid;
     }
   }
-  // Для привязки шаблона к зоне достаточно хотя бы одной точки внутри.
-  // Это специально мягкое правило для старых шаблонов, где часть траектории
-  // могла выходить за контур или быть построена до текущих ограничений.
   if (bestZoneId != null && bestHits >= 1) return bestZoneId;
   return null;
 }
@@ -574,9 +565,7 @@ function App() {
   useEffect(() => {
     try {
       localStorage.setItem(ZONE_COLORS_STORAGE_KEY, JSON.stringify(zoneColorsById));
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }, [zoneColorsById]);
 
   useEffect(() => {
@@ -628,9 +617,7 @@ function App() {
               const me = JSON.parse(raw);
               if (me?.id != null) userId = me.id;
             }
-          } catch {
-            /* ignore */
-          }
+          } catch {}
           if (userId == null) {
             const users = await fetchUsersFromBackend();
             if (users.length > 0) userId = users[0].id;
@@ -692,9 +679,7 @@ function App() {
   const [weatherFlightReasons, setWeatherFlightReasons] = useState([]);
   const activeTimersRef = useRef(new Map());
 
-  // throttle: не шлём телеметрию чаще чем раз в TELEMETRY_SEND_EVERY_MS
   const telemetryLastSentAtRef = useRef(new Map());
-  // защита от параллельных запросов
   const telemetrySendingRef = useRef(new Map());
 
   const videoRecordingByDroneRef = useRef(new Map());
@@ -710,9 +695,7 @@ function App() {
       if (rec?.recorder && rec.recorder.state !== 'inactive') {
         rec.recorder.stop();
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
 
     try {
       return await rec.blobPromise;
@@ -805,7 +788,6 @@ function App() {
     return d.path;
   }, [drones, selectedDroneForSidebar]);
 
-  /** Индексы отрезков path[i]→path[i+1] с меткой «смещение» (разворот между рядами), по id дрона — для будущей отправки на backend. */
   const [routeShiftSegmentsByDroneId, setRouteShiftSegmentsByDroneId] = useState({});
 
   const selectedRouteShiftSegments = useMemo(() => {
@@ -1298,9 +1280,7 @@ function App() {
         const me = JSON.parse(raw);
         if (me?.id != null) userId = me.id;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     if (userId == null) {
       const users = await fetchUsersFromBackend();
       if (!users.length) {
@@ -1337,7 +1317,6 @@ function App() {
         mission = await createOnce();
       } catch (e) {
         const msg = String(e?.message ?? e);
-        // Если на бэке осталась активная/запланированная миссия — отменяем и пробуем ещё раз.
         if (msg.includes('уже назначен')) {
           try {
             const active = await fetchActiveMissionsForDrone(drone.id);
@@ -1481,8 +1460,6 @@ function App() {
       totalDistance: missionParams.totalDistance,
       estimatedTime: missionParams.estimatedTime
     });
-    // Не PATCH в in_mission до POST /missions: backend требует idle при создании миссии;
-    // in_mission выставляет start! на сервере.
     void createAndStartBackendMission(drone, drone.path);
     addToDroneLog(droneId, '🛸 Старт с первой точки маршрута');
     setTimeout(() => startFlightMovement(droneId), 0);
@@ -1517,8 +1494,6 @@ function App() {
     telemetryLastSentAtRef.current.set(droneId, 0);
     telemetrySendingRef.current.set(droneId, false);
 
-    // Запуск видеозаписи "полного видео" миссии (синтетический HUD на canvas),
-    // чтобы затем прогнать multipart upload.
     let videoCtx = null;
     try {
       if (typeof document !== 'undefined' && typeof MediaRecorder !== 'undefined' && document.createElement) {
@@ -1559,7 +1534,6 @@ function App() {
         }
       }
     } catch (e) {
-      // recording is optional; don't break flight sim
       console.warn('Video recording init failed:', e?.message ?? e);
     }
 
@@ -1637,9 +1611,7 @@ function App() {
           videoCtx.fillRect(barX, barY, barW, barH);
           videoCtx.fillStyle = 'rgba(34, 197, 94, 0.9)';
           videoCtx.fillRect(barX, barY, barW * pct, barH);
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
 
       const lastSentAt = telemetryLastSentAtRef.current.get(droneId) ?? 0;
@@ -1744,7 +1716,6 @@ function App() {
         })
       );
       addToDroneLog(droneId, '📍 Дрон завис над первой точкой. Нажмите «Запустить миссию».');
-      // Останавливаем видео, но не загружаем (миссия ещё не завершена).
       void stopVideoRecordingForDrone(droneId).catch(() => {});
       return;
     }
@@ -1793,7 +1764,6 @@ function App() {
 
       addToDroneLog(droneId, '✅ Миссия завершена успешно');
 
-      // Видео multipart: сервер примет media только когда миссия in_progress/completed.
       const missionIdForUpload = backendMissionIdsRef.current.get(droneId);
       const blob = await stopVideoRecordingForDrone(droneId);
 
@@ -1848,7 +1818,6 @@ function App() {
     );
     void cancelBackendMissionForDrone(droneId);
 
-    // В случае принудительной остановки видео не загружаем (медиа допускается только для in_progress/completed).
     void stopVideoRecordingForDrone(droneId).catch(() => {});
   };
 
@@ -2094,9 +2063,6 @@ function App() {
   const saveDraftRectZone = useCallback(async () => {
     if (!draftRectBoundary?.length) return;
     let targetEditingZoneId = editingZoneId;
-    // В одном шаблоне допускается только одна зона.
-    // Если зона уже создана для этого шаблона и пользователь рисует новый прямоугольник
-    // в режиме "создания" (а не редактирования выбранной зоны), блокируем сохранение.
     if (templateEditMode === 'create' && targetEditingZoneId == null && templateDraftZoneId != null) {
       window.alert(
         'Для этого шаблона зона уже создана. Можно редактировать текущую зону, но нельзя создать вторую.'
@@ -2441,7 +2407,6 @@ function App() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-transparent text-white px-2 sm:px-3 py-2 sm:py-3">
-      {/* Backdrop for mobile overlays */}
       {(sidebarOpen || parkingOpen) && (
         <button
           type="button"
@@ -2846,7 +2811,6 @@ function App() {
                 )}
               </div>
 
-              {/* Кнопки управления под картой (мобильные), в потоке — карта сжимается */}
               <div
                 className="flex-shrink-0 flex justify-between items-center gap-2 lg:hidden pt-2"
                 style={{ paddingBottom: 'env(safe-area-inset-bottom, 0.5rem)' }}

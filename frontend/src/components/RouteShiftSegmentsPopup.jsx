@@ -1,16 +1,11 @@
 import { createPortal } from 'react-dom';
 
-/**
- * Список отрезков маршрута, помеченных как «смещение» (разворот между рядами).
- * Открывается по кнопке на карте, не занимает sidebar.
- */
 export function RouteShiftSegmentsPopup({
   open,
   onClose,
   segmentIndices,
   pathPointCount,
   onToggleSegment,
-  /** Шаг тура: на карте уже нарисован пример, в списке своих отрезков может быть пусто. */
   onboardingDemoActive = false,
 }) {
   if (!open || typeof document === 'undefined') return null;

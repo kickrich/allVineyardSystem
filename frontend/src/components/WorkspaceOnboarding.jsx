@@ -85,9 +85,6 @@ function useTargetRect(targetAttr, stepIndex, tourOpen, resizeNonce, layoutKey) 
   return rect;
 }
 
-/**
- * Подсказка для новых пользователей: мигающий «!», модалка с порядком работ, пошаговый тур со стрелкой к элементам.
- */
 export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, layoutKey = 0 }) {
   const [storage, setStorage] = useState(() => readWorkspaceOnboarding());
   const [introOpen, setIntroOpen] = useState(false);
@@ -179,7 +176,6 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
     const cardW = Math.min(vw * 0.92, 420);
     const tipLeft = Math.max(12, Math.min(cx - cardW / 2, vw - cardW - 12));
     const halfH = hasTarget ? rect.height / 2 : 0;
-    /** Шаг 6: карта с демо-зоной — без общего затемнения и без «дырки» с тенью на весь экран. */
     const isRouteShiftOnboardingStep = step.id === 'route-shift-segments';
     let tipTop =
       cy > vh * 0.55 ? Math.max(72, cy - 240) : Math.min(vh - 120, cy + halfH + 16);
@@ -190,7 +186,6 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
       tipTop = Math.max(12, tipTop - 72);
     }
     const targetMissing = !queryTarget(step.target);
-    /** Шаги панели: карточка слева от подсветки, по вертикали на уровне кнопок. */
     const usePanelAdjacentCard =
       step.id === 'route-build' || step.id === 'mission-first-waypoint';
 

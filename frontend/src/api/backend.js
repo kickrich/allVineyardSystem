@@ -22,15 +22,10 @@ async function login(email, password) {
   return data;
 }
 
-/** Вход: POST /api/v1/auth/login → токен в localStorage. */
 export async function loginWithCredentials(email, password) {
   return login(email.trim(), password);
 }
 
-/**
- * Регистрация: POST /api/v1/users (без JWT). Перед запросом сбрасываем старую сессию,
- * чтобы не отправлять лишний Bearer.
- */
 export async function registerUser({ name, email, password, passwordConfirmation }) {
   clearApiSession();
   await apiPost('/api/v1/users', {
@@ -54,7 +49,6 @@ async function registerDevUser(email, password, name) {
   });
 }
 
-/** Автовход dev-пользователя из Vite env (для скриптов / старых сценариев). */
 export async function ensureApiSession() {
   const email = DEFAULT_DEV_EMAIL;
   const password = DEFAULT_DEV_PASSWORD;
@@ -63,7 +57,6 @@ export async function ensureApiSession() {
   try {
     return await login(email, password);
   } catch {
-    // Для первого запуска поднимаем dev-пользователя автоматически.
   }
 
   try {
@@ -78,7 +71,6 @@ export async function ensureApiSession() {
   return login(email, password);
 }
 
-/** Сброс JWT в storage (например перед новым логином или из UI «Выйти»). */
 export { clearApiSession };
 
 export async function fetchDronesFromBackend() {
@@ -87,7 +79,6 @@ export async function fetchDronesFromBackend() {
   return Array.isArray(drones) ? drones : [];
 }
 
-/** POST /api/v1/drones — создать дрона в БД. */
 export async function createDroneInBackend({ name, model, battery = 100, status = 'idle' } = {}) {
   if (!name || !String(name).trim()) throw new Error('Укажите имя дрона');
   if (!model || !String(model).trim()) throw new Error('Укажите модель дрона');
@@ -151,7 +142,6 @@ export async function deleteRouteTemplateInBackend(templateId) {
   await apiDelete(`/api/v1/route_templates/${templateId}`);
 }
 
-/** POST /api/v1/zones с KML → в ответе { data: zone }. */
 export async function createZoneWithKml({ name, description = '', file, color = null }) {
   if (!file) {
     throw new Error('Выберите KML-файл');
@@ -169,7 +159,6 @@ export async function createZoneWithKml({ name, description = '', file, color = 
   return extractData(response);
 }
 
-/** POST /api/v1/zones с JSON boundary [[lng, lat], ...] (замкнутый полигон). */
 export async function createZoneWithBoundary({ name, description = '', boundary, color = null }) {
   if (!Array.isArray(boundary) || boundary.length < 4) {
     throw new Error('Некорректный контур зоны');
@@ -188,7 +177,6 @@ export async function createZoneWithBoundary({ name, description = '', boundary,
   return extractData(response);
 }
 
-/** PATCH /api/v1/zones/:id — новый контур из KML. */
 export async function updateZoneWithKml(zoneId, file) {
   if (zoneId == null || !file) {
     throw new Error('Выберите зону и KML-файл');
@@ -199,7 +187,6 @@ export async function updateZoneWithKml(zoneId, file) {
   return extractData(response);
 }
 
-/** PATCH /api/v1/zones/:id — обновить boundary [[lng, lat], ...] и/или имя. */
 export async function updateZoneWithBoundary(zoneId, boundary, name = null, color = null) {
   if (zoneId == null) {
     throw new Error('Выберите зону для редактирования');
@@ -220,7 +207,6 @@ export async function updateZoneWithBoundary(zoneId, boundary, name = null, colo
   return extractData(response);
 }
 
-/** DELETE /api/v1/zones/:id — удалить зону. */
 export async function deleteZoneInBackend(zoneId) {
   if (zoneId == null) {
     throw new Error('Выберите зону для удаления');
@@ -287,7 +273,6 @@ export async function cancelMissionInBackend(missionId) {
   return extractData(response);
 }
 
-/** GET /api/v1/missions?drone_id=...&active=1 — активные миссии дрона (planned/approved/in_progress). */
 export async function fetchActiveMissionsForDrone(droneId) {
   if (droneId == null) return [];
   const response = await apiGet(`/api/v1/missions?drone_id=${encodeURIComponent(droneId)}&active=1`);
@@ -295,10 +280,6 @@ export async function fetchActiveMissionsForDrone(droneId) {
   return Array.isArray(missions) ? missions : [];
 }
 
-/**
- * multipart_init для video.
- * POST /api/v1/media_uploads/multipart_init
- */
 export async function multipartInitForVideo({
   missionId,
   filename,
@@ -323,10 +304,6 @@ export async function multipartInitForVideo({
   return extractData(response);
 }
 
-/**
- * multipart_presign_part.
- * POST /api/v1/media_uploads/multipart_presign_part
- */
 export async function multipartPresignPart({
   uploadSessionId,
   partNumber,
@@ -343,10 +320,6 @@ export async function multipartPresignPart({
   return extractData(response);
 }
 
-/**
- * multipart_complete.
- * POST /api/v1/media_uploads/multipart_complete
- */
 export async function multipartCompleteForVideo({
   uploadSessionId,
   parts,
@@ -363,10 +336,6 @@ export async function multipartCompleteForVideo({
   return extractData(response);
 }
 
-/**
- * multipart_list_parts — получить etag/сведения по загруженным parts.
- * GET /api/v1/media_uploads/multipart_list_parts?upload_session_id=...
- */
 export async function multipartListParts({ uploadSessionId } = {}) {
   if (!uploadSessionId) throw new Error('uploadSessionId is required');
   const response = await apiGet(
@@ -375,7 +344,6 @@ export async function multipartListParts({ uploadSessionId } = {}) {
   return extractData(response);
 }
 
-/** POST /api/v1/telemetries — отправка телеметрии миссии. */
 export async function postTelemetryToBackend({
   missionId,
   recordedAt,

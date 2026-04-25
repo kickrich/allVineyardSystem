@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
 
-// Краткое описание по коду погоды WMO
 const weatherLabel = (code) => {
   if (code === null || code === undefined) return { short: '—', icon: '🌡️' };
   const map = {
@@ -36,9 +35,8 @@ const weatherLabel = (code) => {
 
 const PANEL_DURATION_MS = 220;
 
-// Пороги для полётов дронов (ветер в км/ч, коды погоды WMO)
-const WIND_KMH_DANGER = 40;   // сильный ветер — взлёт запрещён
-const WIND_KMH_WARNING = 25;  // умеренный ветер — не рекомендуется
+const WIND_KMH_DANGER = 40;
+const WIND_KMH_WARNING = 25;
 const PRECIPITATION_CODES = [51, 53, 55, 61, 63, 65, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99];
 const FOG_CODES = [45, 48];
 
@@ -73,7 +71,6 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Плавное появление панели
   useEffect(() => {
     if (!expanded && !closing) {
       setPanelVisible(false);
@@ -135,7 +132,7 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
 
   useEffect(() => {
     fetchWeather();
-    const interval = setInterval(fetchWeather, 10 * 60 * 1000); // обновление раз в 10 мин
+    const interval = setInterval(fetchWeather, 10 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchWeather]);
 

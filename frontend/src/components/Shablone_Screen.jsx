@@ -1,18 +1,5 @@
 import { useState } from 'react';
 
-/**
- * Shablone Screen — управление шаблонами маршрутов патрулирования.
- * Шаблон = заранее построенный маршрут (название + точки на карте).
- * @param {{
- *   onStart: (templateId?: string) => void;
- *   templates: { id: string; name: string; path: [number, number][]; zoneId?: number | null }[];
- *   onStartCreateTemplate: () => void;
- *   onEditTemplateRoute: (id: string) => void;
- *   onDeleteTemplate: (id: string, mode: 'route_only' | 'route_and_zone') => void;
- *   templateCascadeCountById?: Record<string, number>;
- *   templateCascadeMetaById?: Record<string, { zoneName?: string; relatedTemplateNames?: string[] }>;
- * }} props
- */
 export function ShabloneScreen({
   onStart,
   templates,

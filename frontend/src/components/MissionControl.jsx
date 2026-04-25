@@ -25,7 +25,7 @@ export function MissionControl({
       droneId: selectedDroneId,
       droneName: selectedDrone.name,
       timestamp: new Date().toISOString(),
-      path: [...selectedDrone.path] // Копируем текущий маршрут
+      path: [...selectedDrone.path]
     });
     
     setMissionName('');
@@ -36,7 +36,6 @@ export function MissionControl({
     <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
       <h3 className="text-lg font-bold mb-4">🎯 Центр управления миссиями</h3>
       
-      {/* Создание миссии */}
       <div className="mb-6 p-3 bg-gray-900 rounded">
         <h4 className="font-bold mb-3 text-blue-300">Создать новую миссию</h4>
         
@@ -76,7 +75,6 @@ export function MissionControl({
         </div>
       </div>
 
-      {/* Активные миссии */}
       <div>
         <h4 className="font-bold mb-3 text-green-300">Активные миссии ({activeMissions.length})</h4>
         

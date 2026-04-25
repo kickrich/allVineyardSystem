@@ -1,14 +1,7 @@
-/**
- * Авто-маршрут «между рядами»: прямоугольник по двум противоположным углам (начало / конец)
- * в локальной плоскости «восток–север» (малые расстояния).
- * Шаг вдоль ряда 0.5 м, между рядами 1.5 м.
- */
-
 const EARTH_R_M = 6371000;
 export const VINE_ROW_SPACING_M = 1.5;
 export const VINE_ALONG_ROW_STEP_M = 0.5;
 
-/** Дельта (восток м, север м) от origin к точке. */
 export function latLngDeltaEnMeters(originLat, originLng, lat, lng) {
   const φ0 = (originLat * Math.PI) / 180;
   const dy = ((lat - originLat) * Math.PI) / 180 * EARTH_R_M;
@@ -42,12 +35,10 @@ function pushSegMeters(acc, x0, y0, x1, y1, stepM) {
   }
 }
 
-/** Вертикаль между рядами — реже точки (шаг межрядья), без лишней дискретизации 0.5 м. */
 function pushVerticalBetweenRows(acc, x0, y0, y1, stepM) {
   pushSegMeters(acc, x0, y0, x0, y1, stepM);
 }
 
-/** Довести до (x1,y1) по осям: горизонталь шагом вдоль ряда, вертикаль — шагом межрядья. */
 function pushManhattan(acc, x0, y0, x1, y1, stepAlongRow, stepVertical) {
   if (Math.abs(x0 - x1) > 1e-6) {
     pushSegMeters(acc, x0, y0, x1, y0, stepAlongRow);
@@ -59,12 +50,6 @@ function pushManhattan(acc, x0, y0, x1, y1, stepAlongRow, stepVertical) {
   }
 }
 
-/**
- * @param {number[]} startLatLng [lat, lng]
- * @param {number[]} endLatLng [lat, lng]
- * @param {(p: { lat: number; lng: number }) => boolean} isInside
- * @returns {{ ok: true, path: number[][] } | { ok: false, error: string }}
- */
 export function buildVineyardSerpentinePath(startLatLng, endLatLng, isInside) {
   const latS = Number(startLatLng?.[0]);
   const lngS = Number(startLatLng?.[1]);
@@ -98,7 +83,6 @@ export function buildVineyardSerpentinePath(startLatLng, endLatLng, isInside) {
     if (prev == null || Math.abs(y - prev) > 1e-4) rowYs.push(y);
   }
 
-  /** Первый проход вдоль x: в сторону «восточного» конца прямоугольника (можно сменить знаком dy). */
   let goRight = (Math.sign(d.x) || 1) > 0;
   const centerX = (xmin + xmax) / 2;
   const centerY = (ymin + ymax) / 2;
@@ -120,8 +104,6 @@ export function buildVineyardSerpentinePath(startLatLng, endLatLng, isInside) {
     cur = acc[acc.length - 1];
     const xA = goRight ? xmin : xmax;
     const xB = goRight ? xmax : xmin;
-    // Только горизонталь на текущей линии ряда: при cur.y≈y и cur.x≠xA (старт первого ряда и т.п.).
-    // Не использовать hypot(cur,(xA,y)) — при погрешности по y получалась почти полная ширина + sweep.
     if (cur && Math.abs(cur.y - y) <= POS_EPS_M && Math.abs(cur.x - xA) > POS_EPS_M) {
       pushSegMeters(acc, cur.x, cur.y, xA, y, VINE_ALONG_ROW_STEP_M);
     }

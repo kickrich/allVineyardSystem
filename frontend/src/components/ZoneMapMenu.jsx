@@ -1,15 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 
-/**
- * Кнопка-«бургер» в углу карты: раскрывает список зон и переключает активную.
- * Если зон нет — кнопка показывается только пока открыт пошаговый тур (вне тура скрыта).
- */
 export function ZoneMapMenu({
   zones,
   activeZoneId,
   onSelectZone,
   className = '',
-  /** Пошаговый тур открыт: при пустом списке зон показать placeholder и подсветку. */
   showEmptyMenuDuringTour = false,
 }) {
   const [open, setOpen] = useState(false);

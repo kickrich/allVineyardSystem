@@ -15,9 +15,7 @@ export const calculateFlightTime = (distance, speed) => {
   return distance / speed;
 };
 
-// Расчет промежуточной точки на маршруте
 export const getIntermediatePoint = (start, end, progress) => {
-  // progress от 0 до 1
   const lat = start[0] + (end[0] - start[0]) * progress;
   const lng = start[1] + (end[1] - start[1]) * progress;
   return [lat, lng];

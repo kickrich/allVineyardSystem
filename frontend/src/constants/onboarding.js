@@ -23,7 +23,6 @@ export function writeWorkspaceOnboarding(patch) {
   localStorage.setItem(WORKSPACE_ONBOARDING_KEY, JSON.stringify(next));
 }
 
-/** Вызывать после успешной авторизации: снова показать «!» и тур при входе в рабочую область. */
 export function resetWorkspaceOnboardingForLogin() {
   if (typeof window === 'undefined') return;
   localStorage.setItem(
