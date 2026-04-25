@@ -251,10 +251,14 @@ function App() {
   }, []);
 
   const startCreateTemplate = useCallback(() => {
+    if (missionTemplates.length >= 1) {
+      window.alert('Разрешён только один шаблон маршрута. Удалите текущий шаблон или отредактируйте его.');
+      return;
+    }
     setTemplateEditMode('create');
     setTemplateDraftPath([]);
     setTemplateDraftName('');
-  }, []);
+  }, [missionTemplates]);
   const startEditTemplateRoute = useCallback((id) => {
     const t = missionTemplates.find((x) => x.id === id);
     if (!t) return;
@@ -272,6 +276,10 @@ function App() {
     const name = templateDraftName.trim() || 'Маршрут патрулирования';
     const draftZoneId = activeZoneIdRef.current ?? null;
     if (templateEditMode === 'create') {
+      if (missionTemplates.length >= 1) {
+        window.alert('Нельзя сохранить второй шаблон. Допустим только один маршрут-шаблон.');
+        return;
+      }
       addMissionTemplate({ name, path: [...templateDraftPath], zoneId: draftZoneId });
     } else if (templateEditMode && templateEditMode.type === 'edit') {
       const current = missionTemplates.find((t) => t.id === templateEditMode.id);
@@ -1961,19 +1969,25 @@ function App() {
 
   const saveDraftRectZone = useCallback(async () => {
     if (!draftRectBoundary?.length) return;
+    let targetEditingZoneId = editingZoneId;
+    // В создании шаблона держим только одну зону: новые прямоугольники
+    // сохраняем как обновление существующей зоны, а не как создание второй.
+    if (templateEditMode === 'create' && targetEditingZoneId == null && backendZones.length >= 1) {
+      targetEditingZoneId = activeZoneId ?? backendZones[0]?.id ?? null;
+    }
     setRectZoneBusy(true);
     try {
-      if (editingZoneId != null) {
+      if (targetEditingZoneId != null) {
         const nextName = newRectZoneName.trim() || 'Зона (прямоугольник)';
-        await updateZoneWithBoundary(editingZoneId, draftRectBoundary, nextName);
+        await updateZoneWithBoundary(targetEditingZoneId, draftRectBoundary, nextName);
         const zones = await fetchZonesFromBackend();
         setBackendZones(zones);
-        const updatedZone = zones.find((z) => z.id === editingZoneId);
+        const updatedZone = zones.find((z) => z.id === targetEditingZoneId);
         addToZoneLog('🛠️ Граница зоны изменена', {
-          zoneId: editingZoneId,
-          zoneName: updatedZone?.name ?? `ID ${editingZoneId}`,
+          zoneId: targetEditingZoneId,
+          zoneName: updatedZone?.name ?? `ID ${targetEditingZoneId}`,
         });
-        setActiveZoneId(editingZoneId);
+        setActiveZoneId(targetEditingZoneId);
         setEditingZoneId(null);
         setDraftRectBoundary(null);
         setNewRectZoneName(updatedZone?.name ?? nextName);
@@ -2004,7 +2018,7 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog]);
+  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, backendZones, activeZoneId]);
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
@@ -2295,12 +2309,6 @@ function App() {
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                 />
-                <ZoneMapMenu
-                  zones={backendZones}
-                  activeZoneId={activeZoneId}
-                  onSelectZone={applyActiveZoneId}
-                  showEmptyMenuDuringTour={workspaceTourOpen && backendZones.length === 0}
-                />
               </div>
               {(drawRectZoneMode || draftRectBoundary) && (
                 <div className="absolute top-2 left-2 z-[130] w-[min(82vw,340px)] rounded-xl border border-amber-600/40 bg-gray-900/80 p-2 backdrop-blur-sm">
@@ -2355,19 +2363,6 @@ function App() {
                 </div>
               )}
               <div className="pointer-events-none absolute bottom-4 left-0 right-4 z-[100] flex flex-col items-start gap-2">
-                <button
-                  type="button"
-                  onClick={toggleDrawRectZoneMode}
-                  title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                  aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                  className={`pointer-events-auto w-11 h-11 shrink-0 rounded-lg text-white text-xl leading-none flex items-center justify-center border ${
-                    drawRectZoneMode
-                      ? 'bg-amber-900 border-amber-500 ring-2 ring-amber-400/70'
-                      : 'bg-amber-950/90 border-amber-800 hover:bg-amber-900'
-                  }`}
-                >
-                  {drawRectZoneMode ? '×' : '▭'}
-                </button>
                 <div className="pointer-events-auto w-full max-w-md bg-gray-800/95 border border-gray-600 rounded-xl p-4 shadow-xl">
                 <h3 className="font-semibold text-white mb-2">
                   {templateEditMode === 'create' ? 'Создание шаблона маршрута' : 'Редактирование маршрута'}
@@ -2387,6 +2382,18 @@ function App() {
                     className="px-3 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium"
                   >
                     Отменить последнюю
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleDrawRectZoneMode}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      drawRectZoneMode
+                        ? 'bg-amber-900 hover:bg-amber-800 text-amber-100 border border-amber-500/70'
+                        : 'bg-amber-700 hover:bg-amber-600 text-white border border-amber-500/60'
+                    }`}
+                    title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
+                  >
+                    {drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
                   </button>
                 </div>
                 <div className="mb-3">
