@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flightStatus } from '../constants/drones_data';
-import { RouteShiftSegmentsPopup } from './RouteShiftSegmentsPopup';
+import { RouteShiftSegmentsPopup } from './Route_Shift_Segments_Popup';
 
 if (typeof window !== 'undefined') {
   if (!window.yandexMapsLoading) window.yandexMapsLoading = false;

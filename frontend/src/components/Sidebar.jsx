@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { flightStatus } from '../constants/drones_data';
-import { getTourDemoDrone, isTourDemoDrone } from '../constants/tourDemoDrone';
-import { calculateDistance, calculateOptimalSpeed, calculateFlightTime } from '../utils/flightCalculator';
+import { getTourDemoDrone, isTourDemoDrone } from '../constants/tour_Demo_Drone';
+import { calculateDistance, calculateOptimalSpeed, calculateFlightTime } from '../utils/flight_Calculator';
 
 export const Sidebar = ({
   dronesData = [],

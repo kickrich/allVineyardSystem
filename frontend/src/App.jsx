@@ -2,13 +2,13 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { SearchBox } from './components/Search_Box';
 import { Sidebar } from './components/Sidebar';
 import { ShabloneScreen } from './components/Shablone_Screen';
-import { YandexMap } from './components/YandexMap';
-import { ZoneMapMenu } from './components/ZoneMapMenu';
-import { WorkspaceOnboarding } from './components/WorkspaceOnboarding';
+import { YandexMap } from './components/Yandex_Map';
+import { ZoneMapMenu } from './components/Zone_Map_Menu';
+import { WorkspaceOnboarding } from './components/Workspace_Onboarding';
 import { DroneModal } from './components/Drone_OnClick_List_Sidebar';
 import { DroneParking } from './components/Drone_Parking';
-import { WeatherWidget } from './components/WeatherWidget';
-import { AuthScreen } from './components/AuthScreen';
+import { WeatherWidget } from './components/Weather_Widget';
+import { AuthScreen } from './components/Auth_Screen';
 import { dronesData, initialMapCenter, flightStatus } from './constants/drones_data';
 import { resetWorkspaceOnboardingForLogin } from './constants/onboarding';
 import {
@@ -45,7 +45,7 @@ import {
   calculateFlightTime,
   calculateOptimalSpeed,
   calculateBearing
-} from './utils/flightCalculator';
+} from './utils/flight_Calculator';
 
 const VIEW_TRANSITION_MS = 900;
 const EXIT_PANELS_MS = VIEW_TRANSITION_MS;
