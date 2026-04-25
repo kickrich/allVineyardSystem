@@ -8,6 +8,10 @@ class Zone < ApplicationRecord
 
   validates :name, presence: { message: "не может быть пустым" },
                    length: { minimum: 2, maximum: 100, message: "должно быть от 2 до 100 символов" }
+  validates :color, format: {
+    with: /\A#[0-9a-fA-F]{6}\z/,
+    message: "должен быть в HEX-формате #RRGGBB"
+  }
   validates :description, length: { maximum: 1000 }, allow_nil: true
   validate :boundary_valid
 

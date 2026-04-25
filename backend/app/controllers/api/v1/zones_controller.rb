@@ -62,7 +62,7 @@ module Api
       # Параметры зоны (boundary — массив пар [lng, lat]; permit(boundary: []) их режет)
       def zone_params
         z = params.require(:zone)
-        permitted = z.permit(:name, :description, :kml_file)
+        permitted = z.permit(:name, :description, :kml_file, :color)
         raw_boundary = z[:boundary]
         permitted[:boundary] = raw_boundary if raw_boundary.is_a?(Array)
         permitted

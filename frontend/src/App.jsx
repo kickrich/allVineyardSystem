@@ -522,16 +522,23 @@ function App() {
         .map((z) => ({
           id: z.id,
           boundary: z.boundary,
-          color: /^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(z.id)]) ? zoneColorsById[String(z.id)] : '#22c55e',
+          color:
+            (typeof z?.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(z.color))
+              ? z.color
+              : (/^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(z.id)]) ? zoneColorsById[String(z.id)] : '#22c55e'),
           isActive: z.id === activeZoneId,
         })),
     [backendZones, zoneColorsById, activeZoneId]
   );
   const activeZoneColor = useMemo(() => {
     if (activeZoneId == null) return '#22c55e';
+    const backendColor = backendZones.find((z) => String(z.id) === String(activeZoneId))?.color;
+    if (typeof backendColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(backendColor)) {
+      return backendColor;
+    }
     const saved = zoneColorsById[String(activeZoneId)];
     return /^#[0-9a-fA-F]{6}$/.test(saved) ? saved : '#22c55e';
-  }, [activeZoneId, zoneColorsById]);
+  }, [activeZoneId, zoneColorsById, backendZones]);
 
   const workZoneReady = useMemo(
     () => Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4,
@@ -578,12 +585,16 @@ function App() {
     setZoneColorsById((prev) => {
       let changed = false;
       const next = {};
-      Object.entries(prev).forEach(([id, color]) => {
-        if (validIds.has(id)) {
-          next[id] = color;
-        } else {
-          changed = true;
-        }
+      backendZones.forEach((z) => {
+        const id = String(z.id);
+        const backendColor = typeof z?.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(z.color) ? z.color : null;
+        const localColor = prev[id];
+        const resolved = backendColor ?? (typeof localColor === 'string' ? localColor : '#22c55e');
+        next[id] = resolved;
+        if (prev[id] !== resolved) changed = true;
+      });
+      Object.keys(prev).forEach((id) => {
+        if (!validIds.has(id)) changed = true;
       });
       return changed ? next : prev;
     });
@@ -2117,7 +2128,7 @@ function App() {
           window.alert(`Зона с именем «${nextName}» уже существует. Укажите другое название.`);
           return;
         }
-        await updateZoneWithBoundary(targetEditingZoneId, draftRectBoundary, nextName);
+        await updateZoneWithBoundary(targetEditingZoneId, draftRectBoundary, nextName, draftRectZoneColor);
         const zones = await fetchZonesFromBackend();
         setBackendZones(zones);
         const updatedZone = zones.find((z) => z.id === targetEditingZoneId);
@@ -2141,7 +2152,7 @@ function App() {
         return;
       }
       const name = rawName || buildAutoZoneName(backendZones, draftRectZoneColor);
-      const created = await createZoneWithBoundary({ name, boundary: draftRectBoundary });
+      const created = await createZoneWithBoundary({ name, boundary: draftRectBoundary, color: draftRectZoneColor });
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
       const newId = created?.id;
@@ -2352,7 +2363,12 @@ function App() {
           if (duplicate) {
             throw new Error(`Зона с именем «${baseName}» уже существует. Укажите другое название.`);
           }
-          const created = await createZoneWithKml({ name: baseName, description: '', file });
+          const created = await createZoneWithKml({
+            name: baseName,
+            description: '',
+            file,
+            color: draftRectZoneColor,
+          });
           const zones = await fetchZonesFromBackend();
           setBackendZones(zones);
           const newId = created?.id;

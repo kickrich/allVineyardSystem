@@ -152,12 +152,15 @@ export async function deleteRouteTemplateInBackend(templateId) {
 }
 
 /** POST /api/v1/zones с KML → в ответе { data: zone }. */
-export async function createZoneWithKml({ name, description = '', file }) {
+export async function createZoneWithKml({ name, description = '', file, color = null }) {
   if (!file) {
     throw new Error('Выберите KML-файл');
   }
   const fd = new FormData();
   fd.append('zone[name]', name.trim());
+  if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    fd.append('zone[color]', color);
+  }
   if (description) {
     fd.append('zone[description]', description);
   }
@@ -167,7 +170,7 @@ export async function createZoneWithKml({ name, description = '', file }) {
 }
 
 /** POST /api/v1/zones с JSON boundary [[lng, lat], ...] (замкнутый полигон). */
-export async function createZoneWithBoundary({ name, description = '', boundary }) {
+export async function createZoneWithBoundary({ name, description = '', boundary, color = null }) {
   if (!Array.isArray(boundary) || boundary.length < 4) {
     throw new Error('Некорректный контур зоны');
   }
@@ -175,6 +178,9 @@ export async function createZoneWithBoundary({ name, description = '', boundary 
     name: name.trim(),
     boundary,
   };
+  if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    zone.color = color;
+  }
   if (description) {
     zone.description = description;
   }
@@ -194,7 +200,7 @@ export async function updateZoneWithKml(zoneId, file) {
 }
 
 /** PATCH /api/v1/zones/:id — обновить boundary [[lng, lat], ...] и/или имя. */
-export async function updateZoneWithBoundary(zoneId, boundary, name = null) {
+export async function updateZoneWithBoundary(zoneId, boundary, name = null, color = null) {
   if (zoneId == null) {
     throw new Error('Выберите зону для редактирования');
   }
@@ -204,6 +210,9 @@ export async function updateZoneWithBoundary(zoneId, boundary, name = null) {
   const zonePatch = { boundary };
   if (typeof name === 'string' && name.trim()) {
     zonePatch.name = name.trim();
+  }
+  if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    zonePatch.color = color;
   }
   const response = await apiPatch(`/api/v1/zones/${zoneId}`, {
     zone: zonePatch,
