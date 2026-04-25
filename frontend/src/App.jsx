@@ -2072,6 +2072,16 @@ function App() {
     setDraftRectBoundary(nextBoundary ?? null);
   }, []);
 
+  const handleDraftRectZoneColorChange = useCallback((e) => {
+    const nextColor = e.target.value;
+    if (!/^#[0-9a-fA-F]{6}$/.test(nextColor)) return;
+    setDraftRectZoneColor(nextColor);
+    setNewRectZoneName((prev) => {
+      const updated = updateAutoZoneNameColor(prev, nextColor);
+      return updated ?? prev;
+    });
+  }, []);
+
   const handleRectDrawComplete = useCallback(() => {
     setDrawRectZoneMode(false);
   }, []);
@@ -2088,7 +2098,7 @@ function App() {
       backendContextRef.current = { userId: u, zoneId: targetZoneId };
     }
     setEditingZoneId(targetZoneId);
-    setNewRectZoneName(targetZone?.name ?? 'Зона (прямоугольник)');
+    setNewRectZoneName(targetZone?.name ?? '');
     setDraftRectZoneColor(/^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(targetZoneId)]) ? zoneColorsById[String(targetZoneId)] : '#22c55e');
     setDraftRectBoundary(boundary.map(([lng, lat]) => [lng, lat]));
   }, [activeZoneId, backendZones, drawRectZoneMode, templateEditMode, placementMode, isRouteEditMode, zoneColorsById]);
@@ -2344,7 +2354,7 @@ function App() {
       try {
         if (action === 'create') {
           const candidate = newZoneKmlName.trim();
-          const baseName = candidate || buildAutoZoneName(backendZones, activeZoneColor);
+          const baseName = candidate || buildAutoZoneName(backendZones, draftRectZoneColor);
           const duplicate = backendZones.some((z) => normalizeZoneName(z?.name) === normalizeZoneName(baseName));
           if (duplicate) {
             throw new Error(`Зона с именем «${baseName}» уже существует. Укажите другое название.`);
@@ -2392,7 +2402,7 @@ function App() {
         setZoneKmlBusy(false);
       }
     },
-    [activeZoneId, newZoneKmlName, addToZoneLog, backendZones, activeZoneColor]
+    [activeZoneId, newZoneKmlName, addToZoneLog, backendZones, draftRectZoneColor]
   );
 
   const handleWorkspaceTourOpenChange = useCallback((open) => {
@@ -2546,7 +2556,7 @@ function App() {
                           <input
                             type="color"
                             value={draftRectZoneColor}
-                            onChange={(e) => setDraftRectZoneColor(e.target.value)}
+                            onChange={handleDraftRectZoneColorChange}
                             className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
                             title="Выбрать цвет зоны"
                           />
@@ -2706,7 +2716,7 @@ function App() {
                             <input
                               type="color"
                               value={draftRectZoneColor}
-                              onChange={(e) => setDraftRectZoneColor(e.target.value)}
+                              onChange={handleDraftRectZoneColorChange}
                               className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
                               title="Выбрать цвет зоны"
                             />
