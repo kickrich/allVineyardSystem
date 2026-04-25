@@ -520,7 +520,7 @@ export const Sidebar = ({
         )}
       </div>
       <div className="p-3 bg-gray-900 border-t border-gray-700">
-        <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="grid grid-cols-2 gap-2 text-center">
           <div className="p-2 bg-gray-800/50 rounded">
             <div className="text-lg font-bold text-white">{visibleDrones.length}</div>
             <div className="text-xs text-gray-400">На карте</div>
@@ -528,10 +528,6 @@ export const Sidebar = ({
           <div className="p-2 bg-gray-800/50 rounded">
             <div className="text-lg font-bold text-green-400">{flyingDrones.length}</div>
             <div className="text-xs text-gray-400">В полете</div>
-          </div>
-          <div className="p-2 bg-gray-800/50 rounded">
-            <div className="text-lg font-bold text-white">{missionLog.length}</div>
-            <div className="text-xs text-gray-400">Событий</div>
           </div>
         </div>
       </div>
