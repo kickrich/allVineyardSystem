@@ -238,9 +238,11 @@ function zoneColorNameFromHex(colorHex = '#22c55e') {
   const l = (max + min) / 2;
   const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
 
-  if (s < 0.14) {
-    if (l <= 0.15) return 'чёрный';
-    if (l >= 0.88) return 'белый';
+  if (s < 0.1) {
+    if (l <= 0.1) return 'чёрный';
+    if (l >= 0.94) return 'белый';
+    if (l >= 0.82) return 'светло-серый';
+    if (l <= 0.25) return 'тёмно-серый';
     return 'серый';
   }
 
@@ -253,16 +255,24 @@ function zoneColorNameFromHex(colorHex = '#22c55e') {
     if (h < 0) h += 360;
   }
 
-  if (h < 15 || h >= 345) return 'красный';
-  if (h < 40) return 'оранжевый';
-  if (h < 62) return 'жёлтый';
-  if (h < 150) return 'зелёный';
-  if (h < 185) return 'бирюзовый';
-  if (h < 210) return 'голубой';
-  if (h < 255) return 'синий';
-  if (h < 295) return 'фиолетовый';
-  if (h < 345) return 'розовый';
-  return 'цветной';
+  const tonePrefix = l <= 0.28 ? 'тёмно-' : l >= 0.78 ? 'светло-' : '';
+  let base = 'цветной';
+  if (h < 15 || h >= 345) base = 'красный';
+  else if (h < 38) base = 'оранжевый';
+  else if (h < 52) base = 'янтарный';
+  else if (h < 68) base = 'жёлтый';
+  else if (h < 95) base = 'лаймовый';
+  else if (h < 150) base = 'зелёный';
+  else if (h < 170) base = 'мятный';
+  else if (h < 190) base = 'бирюзовый';
+  else if (h < 212) base = 'голубой';
+  else if (h < 228) base = 'лазурный';
+  else if (h < 255) base = 'синий';
+  else if (h < 272) base = 'индиго';
+  else if (h < 295) base = 'фиолетовый';
+  else if (h < 320) base = 'пурпурный';
+  else if (h < 345) base = 'розовый';
+  return `${tonePrefix}${base}`;
 }
 
 function buildAutoZoneName(zones, colorHex = '#22c55e') {
