@@ -281,6 +281,14 @@ function buildAutoZoneName(zones, colorHex = '#22c55e') {
   return `Зона №${ord}("${colorName}")`;
 }
 
+function updateAutoZoneNameColor(name, colorHex = '#22c55e') {
+  const m = String(name ?? '').trim().match(/^Зона\s*№\s*(\d+)\(".*"\)$/i);
+  if (!m) return null;
+  const ord = Number(m[1]);
+  if (!Number.isFinite(ord)) return null;
+  return `Зона №${ord}("${zoneColorNameFromHex(colorHex)}")`;
+}
+
 function nextRouteTemplateOrdinal(templates) {
   const list = Array.isArray(templates) ? templates : [];
   let max = 0;
@@ -504,6 +512,7 @@ function App() {
   const [draftRectBoundary, setDraftRectBoundary] = useState(null);
   const [editingZoneId, setEditingZoneId] = useState(null);
   const [newRectZoneName, setNewRectZoneName] = useState('');
+  const [draftRectZoneColor, setDraftRectZoneColor] = useState('#22c55e');
   const [rectZoneBusy, setRectZoneBusy] = useState(false);
 
   useEffect(() => {
@@ -2047,15 +2056,17 @@ function App() {
     setEditingZoneId(null);
     setDraftRectBoundary(null);
     setNewRectZoneName('');
+    setDraftRectZoneColor(activeZoneColor);
     setDrawRectZoneMode(true);
-  }, [drawRectZoneMode]);
+  }, [drawRectZoneMode, activeZoneColor]);
 
   const cancelDraftRectZone = useCallback(() => {
     setEditingZoneId(null);
     setDraftRectBoundary(null);
     setDrawRectZoneMode(false);
     setNewRectZoneName('');
-  }, []);
+    setDraftRectZoneColor(activeZoneColor);
+  }, [activeZoneColor]);
 
   const handleDraftRectBoundaryChange = useCallback((nextBoundary) => {
     setDraftRectBoundary(nextBoundary ?? null);
@@ -2078,23 +2089,28 @@ function App() {
     }
     setEditingZoneId(targetZoneId);
     setNewRectZoneName(targetZone?.name ?? 'Зона (прямоугольник)');
+    setDraftRectZoneColor(/^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(targetZoneId)]) ? zoneColorsById[String(targetZoneId)] : '#22c55e');
     setDraftRectBoundary(boundary.map(([lng, lat]) => [lng, lat]));
-  }, [activeZoneId, backendZones, drawRectZoneMode, templateEditMode, placementMode, isRouteEditMode]);
+  }, [activeZoneId, backendZones, drawRectZoneMode, templateEditMode, placementMode, isRouteEditMode, zoneColorsById]);
 
   const saveDraftRectZone = useCallback(async () => {
     if (!draftRectBoundary?.length) return;
     let targetEditingZoneId = editingZoneId;
-    // В создании шаблона держим только одну зону: новые прямоугольники
-    // сохраняем как обновление существующей зоны, а не как создание второй.
+    // В одном шаблоне допускается только одна зона.
+    // Если зона уже создана для этого шаблона и пользователь рисует новый прямоугольник
+    // в режиме "создания" (а не редактирования выбранной зоны), блокируем сохранение.
     if (templateEditMode === 'create' && targetEditingZoneId == null && templateDraftZoneId != null) {
-      targetEditingZoneId = templateDraftZoneId;
+      window.alert(
+        'Для этого шаблона зона уже создана. Можно редактировать текущую зону, но нельзя создать вторую.'
+      );
+      return;
     }
     setRectZoneBusy(true);
     try {
       if (targetEditingZoneId != null) {
         const currentZoneName =
           backendZones.find((z) => String(z?.id) === String(targetEditingZoneId))?.name ?? '';
-        const nextName = newRectZoneName.trim() || currentZoneName || `Зона №${targetEditingZoneId}("${activeZoneColor}")`;
+        const nextName = newRectZoneName.trim() || currentZoneName || `Зона №${targetEditingZoneId}("${zoneColorNameFromHex(draftRectZoneColor)}")`;
         const duplicate = backendZones.some(
           (z) =>
             String(z?.id) !== String(targetEditingZoneId) &&
@@ -2112,6 +2128,7 @@ function App() {
           zoneId: targetEditingZoneId,
           zoneName: updatedZone?.name ?? `ID ${targetEditingZoneId}`,
         });
+        setZoneColorsById((prev) => ({ ...prev, [String(targetEditingZoneId)]: draftRectZoneColor }));
         setActiveZoneId(targetEditingZoneId);
         if (templateEditMode === 'create') setTemplateDraftZoneId(targetEditingZoneId);
         setEditingZoneId(null);
@@ -2126,12 +2143,13 @@ function App() {
         window.alert(`Зона с именем «${rawName}» уже существует. Укажите другое название.`);
         return;
       }
-      const name = rawName || buildAutoZoneName(backendZones, activeZoneColor);
+      const name = rawName || buildAutoZoneName(backendZones, draftRectZoneColor);
       const created = await createZoneWithBoundary({ name, boundary: draftRectBoundary });
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
       const newId = created?.id;
       if (newId != null) {
+        setZoneColorsById((prev) => ({ ...prev, [String(newId)]: draftRectZoneColor }));
         setActiveZoneId(newId);
         if (templateEditMode === 'create') setTemplateDraftZoneId(newId);
         const u = backendContextRef.current.userId;
@@ -2151,7 +2169,7 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, templateDraftZoneId, backendZones, activeZoneId, activeZoneColor]);
+  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, templateDraftZoneId, backendZones, activeZoneId, draftRectZoneColor]);
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
@@ -2297,7 +2315,17 @@ function App() {
     const nextColor = e.target.value;
     if (activeZoneId == null || !/^#[0-9a-fA-F]{6}$/.test(nextColor)) return;
     setZoneColorsById((prev) => ({ ...prev, [String(activeZoneId)]: nextColor }));
-  }, [activeZoneId]);
+    if (editingZoneId != null && String(editingZoneId) === String(activeZoneId)) {
+      setNewRectZoneName((prev) => {
+        const fromInput = updateAutoZoneNameColor(prev, nextColor);
+        if (fromInput) return fromInput;
+        const currentZoneName =
+          backendZones.find((z) => String(z?.id) === String(activeZoneId))?.name ?? '';
+        const fromZoneName = updateAutoZoneNameColor(currentZoneName, nextColor);
+        return fromZoneName ?? prev;
+      });
+    }
+  }, [activeZoneId, editingZoneId, backendZones]);
 
   const openKmlPicker = useCallback((action) => {
     pendingKmlActionRef.current = action;
@@ -2511,20 +2539,18 @@ function App() {
                           placeholder="Имя зоны"
                           className="px-3 py-2 bg-gray-800 border border-amber-700/60 rounded-lg text-white text-sm min-h-[42px] w-full"
                         />
-                        {activeZoneId != null && (
-                          <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
-                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
-                              Цвет зоны
-                            </span>
-                            <input
-                              type="color"
-                              value={activeZoneColor}
-                              onChange={handleActiveZoneColorChange}
-                              className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
-                              title="Выбрать цвет активной зоны"
-                            />
-                          </label>
-                        )}
+                        <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
+                          <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
+                            Цвет зоны
+                          </span>
+                          <input
+                            type="color"
+                            value={draftRectZoneColor}
+                            onChange={(e) => setDraftRectZoneColor(e.target.value)}
+                            className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
+                            title="Выбрать цвет зоны"
+                          />
+                        </label>
                         <button
                           type="button"
                           onClick={saveDraftRectZone}
@@ -2673,20 +2699,18 @@ function App() {
                             placeholder="Имя зоны"
                             className="px-3 py-2 bg-gray-800 border border-amber-700/60 rounded-lg text-white text-sm min-h-[42px] w-full"
                           />
-                          {activeZoneId != null && (
-                            <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
-                              <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
-                                Цвет зоны
-                              </span>
-                              <input
-                                type="color"
-                                value={activeZoneColor}
-                                onChange={handleActiveZoneColorChange}
-                                className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
-                                title="Выбрать цвет активной зоны"
-                              />
-                            </label>
-                          )}
+                          <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
+                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
+                              Цвет зоны
+                            </span>
+                            <input
+                              type="color"
+                              value={draftRectZoneColor}
+                              onChange={(e) => setDraftRectZoneColor(e.target.value)}
+                              className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
+                              title="Выбрать цвет зоны"
+                            />
+                          </label>
                           <button
                             type="button"
                             onClick={saveDraftRectZone}
