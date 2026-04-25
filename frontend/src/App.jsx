@@ -323,6 +323,7 @@ function App() {
 
   const [templateEditMode, setTemplateEditMode] = useState(null);
   const [templateDraftPath, setTemplateDraftPath] = useState([]);
+  const [templateDraftShiftSegments, setTemplateDraftShiftSegments] = useState([]);
   const [templateDraftName, setTemplateDraftName] = useState('');
   const [templateDraftZoneId, setTemplateDraftZoneId] = useState(null);
   const [noTransitionTemplateSwitch, setNoTransitionTemplateSwitch] = useState(false);
@@ -343,6 +344,7 @@ function App() {
   const startCreateTemplate = useCallback(() => {
     setTemplateEditMode('create');
     setTemplateDraftPath([]);
+    setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
   }, []);
@@ -351,6 +353,11 @@ function App() {
     if (!t) return;
     setTemplateEditMode({ type: 'edit', id });
     setTemplateDraftPath([...(t.path || [])]);
+    setTemplateDraftShiftSegments(
+      Array.isArray(t.shiftSegments)
+        ? [...new Set(t.shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+        : []
+    );
     setTemplateDraftName(t.name || '');
     setTemplateDraftZoneId(t?.zoneId ?? null);
   }, [missionTemplates]);
@@ -358,6 +365,7 @@ function App() {
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
+    setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
   }, []);
@@ -389,6 +397,7 @@ function App() {
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
+    setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
   }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
@@ -398,6 +407,30 @@ function App() {
   const undoTemplateDraftPoint = useCallback(() => {
     setTemplateDraftPath((prev) => (prev.length ? prev.slice(0, -1) : []));
   }, []);
+
+  useEffect(() => {
+    const maxSeg = templateDraftPath.length >= 2 ? templateDraftPath.length - 2 : -1;
+    setTemplateDraftShiftSegments((prev) => {
+      if (!Array.isArray(prev) || !prev.length) return prev;
+      if (maxSeg < 0) return [];
+      const next = prev.filter((i) => i >= 0 && i <= maxSeg);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [templateDraftPath]);
+
+  const toggleTemplateDraftShiftSegment = useCallback((segmentIndex) => {
+    const n = templateDraftPath.length;
+    if (n < 2 || !Number.isInteger(segmentIndex)) return;
+    if (segmentIndex < 0 || segmentIndex > n - 2) return;
+    setTemplateDraftShiftSegments((prev) => {
+      const cur = Array.isArray(prev) ? [...prev] : [];
+      const j = cur.indexOf(segmentIndex);
+      if (j >= 0) cur.splice(j, 1);
+      else cur.push(segmentIndex);
+      cur.sort((a, b) => a - b);
+      return cur;
+    });
+  }, [templateDraftPath]);
 
   const [templateToApplyId, setTemplateToApplyId] = useState(null);
   const computeMissionParamsFromPath = useCallback((path, maxSpeed = 70, battery = 100) => {
@@ -2488,6 +2521,8 @@ function App() {
                   routeEditMode={!drawRectZoneMode && !draftRectBoundary}
                   routeEditPath={templateDraftPath}
                   onRoutePathChange={handleTemplateRoutePathChange}
+                  routeShiftSegmentIndices={templateDraftShiftSegments}
+                  onRouteShiftSegmentToggle={toggleTemplateDraftShiftSegment}
                   forceResize={false}
                   zones={zonesForMap}
                   zoneBoundary={activeZoneBoundary}
