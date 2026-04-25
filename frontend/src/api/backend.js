@@ -114,6 +114,43 @@ export async function fetchZonesFromBackend() {
   return Array.isArray(zones) ? zones : [];
 }
 
+export async function fetchRouteTemplatesFromBackend() {
+  const response = await apiGet('/api/v1/route_templates');
+  const templates = extractData(response);
+  return Array.isArray(templates) ? templates : [];
+}
+
+export async function createRouteTemplateInBackend({ name, path, zoneId = null }) {
+  if (!name || !String(name).trim()) throw new Error('Укажите название шаблона');
+  if (!Array.isArray(path) || path.length < 2) throw new Error('Шаблон должен содержать минимум 2 точки');
+  const payload = {
+    route_template: {
+      name: String(name).trim(),
+      path,
+      zone_id: zoneId ?? null,
+    },
+  };
+  const response = await apiPost('/api/v1/route_templates', payload);
+  return extractData(response);
+}
+
+export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId }) {
+  if (templateId == null) throw new Error('Не выбран шаблон для обновления');
+  const routeTemplatePatch = {};
+  if (typeof name === 'string' && name.trim()) routeTemplatePatch.name = name.trim();
+  if (Array.isArray(path)) routeTemplatePatch.path = path;
+  if (zoneId !== undefined) routeTemplatePatch.zone_id = zoneId ?? null;
+  const response = await apiPatch(`/api/v1/route_templates/${templateId}`, {
+    route_template: routeTemplatePatch,
+  });
+  return extractData(response);
+}
+
+export async function deleteRouteTemplateInBackend(templateId) {
+  if (templateId == null) throw new Error('Не выбран шаблон для удаления');
+  await apiDelete(`/api/v1/route_templates/${templateId}`);
+}
+
 /** POST /api/v1/zones с KML → в ответе { data: zone }. */
 export async function createZoneWithKml({ name, description = '', file }) {
   if (!file) {

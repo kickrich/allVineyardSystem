@@ -1,6 +1,7 @@
 # app/models/zone.rb
 class Zone < ApplicationRecord
   has_many :missions, dependent: :restrict_with_error
+  has_many :route_templates, dependent: :nullify
   has_one_attached :kml_file
 
   before_validation :strip_name_and_description

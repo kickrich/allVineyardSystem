@@ -10,12 +10,15 @@ import { DroneParking } from './components/Drone_Parking';
 import { WeatherWidget } from './components/WeatherWidget';
 import { AuthScreen } from './components/AuthScreen';
 import { dronesData, initialMapCenter, flightStatus } from './constants/drones_data';
-import { MISSION_TEMPLATES_STORAGE_KEY } from './constants/mission';
 import { resetWorkspaceOnboardingForLogin } from './constants/onboarding';
 import {
   fetchDronesFromBackend,
   fetchUsersFromBackend,
   fetchZonesFromBackend,
+  fetchRouteTemplatesFromBackend,
+  createRouteTemplateInBackend,
+  updateRouteTemplateInBackend,
+  deleteRouteTemplateInBackend,
   createDroneInBackend,
   createZoneWithKml,
   createZoneWithBoundary,
@@ -309,39 +312,29 @@ function buildAutoRouteTemplateName(templates) {
   return `Маршрут №${ord}`;
 }
 
+function mapBackendTemplateToFrontend(template) {
+  const id = template?.id;
+  const rawPath = Array.isArray(template?.path) ? template.path : [];
+  return {
+    id: id != null ? String(id) : `tpl_${Date.now()}`,
+    name: template?.name || 'Без названия',
+    path: rawPath
+      .map((point) => (Array.isArray(point) && point.length >= 2 ? [Number(point[0]), Number(point[1])] : null))
+      .filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1])),
+    zoneId: template?.zone_id ?? template?.zoneId ?? null,
+  };
+}
+
 function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [exitingToTemplates, setExitingToTemplates] = useState(false);
-  const [missionTemplates, setMissionTemplates] = useState(() => {
-    try {
-      const raw = localStorage.getItem(MISSION_TEMPLATES_STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.map((t) => ({
-        id: t.id,
-        name: t.name || 'Без названия',
-        path: Array.isArray(t.path) ? t.path : [],
-        zoneId: t?.zoneId ?? null,
-      }));
-    } catch {
-      return [];
-    }
-  });
+  const [missionTemplates, setMissionTemplates] = useState([]);
 
   const [templateEditMode, setTemplateEditMode] = useState(null);
   const [templateDraftPath, setTemplateDraftPath] = useState([]);
   const [templateDraftName, setTemplateDraftName] = useState('');
   const [templateDraftZoneId, setTemplateDraftZoneId] = useState(null);
   const [noTransitionTemplateSwitch, setNoTransitionTemplateSwitch] = useState(false);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(MISSION_TEMPLATES_STORAGE_KEY, JSON.stringify(missionTemplates));
-    } catch (e) {
-      console.warn('Failed to save mission templates', e);
-    }
-  }, [missionTemplates]);
 
   useEffect(() => {
     if (!noTransitionTemplateSwitch) return;
@@ -351,29 +344,9 @@ function App() {
     return () => cancelAnimationFrame(id);
   }, [noTransitionTemplateSwitch]);
 
-  const addMissionTemplate = useCallback((template) => {
-    const id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    setMissionTemplates((prev) => [
-      ...prev,
-      {
-        id,
-        name: template.name || 'Шаблон',
-        path: template.path || [],
-        zoneId: template?.zoneId ?? null,
-      },
-    ]);
-  }, []);
-  const updateMissionTemplate = useCallback((id, template) => {
-    setMissionTemplates((prev) =>
-      prev.map((t) =>
-        t.id === id
-          ? { ...t, name: template.name ?? t.name, path: template.path ?? t.path, zoneId: template.zoneId ?? t.zoneId ?? null }
-          : t
-      )
-    );
-  }, []);
-  const deleteMissionTemplate = useCallback((id) => {
-    setMissionTemplates((prev) => prev.filter((t) => t.id !== id));
+  const reloadMissionTemplates = useCallback(async () => {
+    const templates = await fetchRouteTemplatesFromBackend();
+    setMissionTemplates(templates.map(mapBackendTemplateToFrontend));
   }, []);
 
   const startCreateTemplate = useCallback(() => {
@@ -397,25 +370,37 @@ function App() {
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
   }, []);
-  const saveTemplateDraft = useCallback(() => {
+  const saveTemplateDraft = useCallback(async () => {
     const name = templateDraftName.trim() || buildAutoRouteTemplateName(missionTemplates);
     const draftZoneId = templateDraftZoneId ?? activeZoneIdRef.current ?? null;
-    if (templateEditMode === 'create') {
-      addMissionTemplate({ name, path: [...templateDraftPath], zoneId: draftZoneId });
-    } else if (templateEditMode && templateEditMode.type === 'edit') {
-      const current = missionTemplates.find((t) => t.id === templateEditMode.id);
-      updateMissionTemplate(templateEditMode.id, {
-        name,
-        path: [...templateDraftPath],
-        zoneId: draftZoneId ?? current?.zoneId ?? null,
-      });
+    try {
+      if (templateEditMode === 'create') {
+        await createRouteTemplateInBackend({
+          name,
+          path: [...templateDraftPath],
+          zoneId: draftZoneId,
+        });
+      } else if (templateEditMode && templateEditMode.type === 'edit') {
+        const current = missionTemplates.find((t) => t.id === templateEditMode.id);
+        await updateRouteTemplateInBackend(templateEditMode.id, {
+          name,
+          path: [...templateDraftPath],
+          zoneId: draftZoneId ?? current?.zoneId ?? null,
+        });
+      } else {
+        return;
+      }
+      await reloadMissionTemplates();
+    } catch (err) {
+      window.alert(String(err?.message ?? err));
+      return;
     }
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
-  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, addMissionTemplate, updateMissionTemplate]);
+  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
@@ -622,7 +607,9 @@ function App() {
         const backendDrones = await fetchDronesFromBackend();
         try {
           const zones = await fetchZonesFromBackend();
+          const templates = await fetchRouteTemplatesFromBackend();
           setBackendZones(zones);
+          setMissionTemplates(templates.map(mapBackendTemplateToFrontend));
           let userId = null;
           try {
             const raw = localStorage.getItem('api_user');
@@ -2275,9 +2262,15 @@ function App() {
       if (!ok) return;
     }
 
-    const idsToDelete = otherCount > 0 ? new Set(sameZoneTemplateIds) : new Set([templateId]);
-    setMissionTemplates((prev) => prev.filter((t) => !idsToDelete.has(t.id)));
-  }, [missionTemplates, backendZones]);
+    const idsToDelete = otherCount > 0 ? sameZoneTemplateIds : [templateId];
+    try {
+      await Promise.all(idsToDelete.map((id) => deleteRouteTemplateInBackend(id)));
+      await reloadMissionTemplates();
+    } catch (err) {
+      setZoneKmlMessage(String(err?.message ?? err));
+      setZoneKmlIsError(true);
+    }
+  }, [missionTemplates, backendZones, reloadMissionTemplates]);
 
   const templateCascadeCountById = useMemo(() => {
     const map = {};
