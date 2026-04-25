@@ -9,6 +9,8 @@ import { useState } from 'react';
  *   onStartCreateTemplate: () => void;
  *   onEditTemplateRoute: (id: string) => void;
  *   onDeleteTemplate: (id: string, mode: 'route_only' | 'route_and_zone') => void;
+ *   templateCascadeCountById?: Record<string, number>;
+ *   templateCascadeMetaById?: Record<string, { zoneName?: string; relatedTemplateNames?: string[] }>;
  * }} props
  */
 export function ShabloneScreen({
@@ -16,7 +18,9 @@ export function ShabloneScreen({
   templates,
   onStartCreateTemplate,
   onEditTemplateRoute,
-  onDeleteTemplate
+  onDeleteTemplate,
+  templateCascadeCountById = {},
+  templateCascadeMetaById = {}
 }) {
   const [deleteDialog, setDeleteDialog] = useState(null);
 
@@ -27,6 +31,17 @@ export function ShabloneScreen({
   const templateForDelete = deleteDialog?.id
     ? templates.find((x) => x.id === deleteDialog.id) ?? null
     : null;
+  const cascadeCount =
+    templateForDelete != null
+      ? Number(templateCascadeCountById?.[templateForDelete.id] || 0)
+      : 0;
+  const cascadeMeta =
+    templateForDelete != null
+      ? templateCascadeMetaById?.[templateForDelete.id] ?? null
+      : null;
+  const relatedNames = Array.isArray(cascadeMeta?.relatedTemplateNames)
+    ? cascadeMeta.relatedTemplateNames
+    : [];
 
   return (
     <div className="w-full max-w-6xl mx-auto">
@@ -121,6 +136,17 @@ export function ShabloneScreen({
 
             {deleteDialog.mode == null ? (
               <div className="space-y-2">
+                {cascadeCount > 0 && (
+                  <div className="rounded-lg border border-amber-500/60 bg-amber-900/35 px-3 py-2 text-xs text-amber-100">
+                    Внимание: этот шаблон связан с зоной <strong>«{cascadeMeta?.zoneName || 'не определена'}»</strong>,
+                    где есть ещё <strong>{cascadeCount}</strong> маршрут(а/ов). При удалении они также будут удалены.
+                    {relatedNames.length > 0 && (
+                      <span className="block mt-1">
+                        Маршруты: <strong>{relatedNames.join(', ')}</strong>.
+                      </span>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setDeleteDialog({ id: templateForDelete.id, mode: 'route_only' })}
@@ -158,6 +184,17 @@ export function ShabloneScreen({
                     {deleteDialog.mode === 'route_only' ? 'только маршрут' : 'маршрут и зона'}.
                   </span>
                 </p>
+                {cascadeCount > 0 && (
+                  <div className="rounded-lg border border-red-500/60 bg-red-900/25 px-3 py-2 text-xs text-red-100">
+                    Будут удалены дополнительно: <strong>{cascadeCount}</strong> маршрут(а/ов) из зоны{' '}
+                    <strong>«{cascadeMeta?.zoneName || 'не определена'}»</strong>.
+                    {relatedNames.length > 0 && (
+                      <span className="block mt-1">
+                        Список: <strong>{relatedNames.join(', ')}</strong>.
+                      </span>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => handleDelete(templateForDelete.id, deleteDialog.mode)}

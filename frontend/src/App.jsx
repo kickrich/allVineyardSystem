@@ -184,6 +184,35 @@ function inferZoneIdForTemplatePath(path, zones) {
   return null;
 }
 
+function templateTouchesZone(templatePath, zoneBoundary) {
+  const points = normalizedTemplatePoints(templatePath);
+  if (!points.length || !Array.isArray(zoneBoundary) || zoneBoundary.length < 4) return false;
+  return points.some(([lat, lng]) => isPointInsideZoneBoundary(zoneBoundary, { lat, lng }));
+}
+
+function collectSameZoneTemplateIds(templateId, templates, zones) {
+  const list = Array.isArray(templates) ? templates : [];
+  const zlist = Array.isArray(zones) ? zones : [];
+  const base = list.find((t) => t.id === templateId);
+  if (!base) return [];
+  const resolveTemplateZoneId = (tpl) =>
+    tpl?.zoneId ?? inferZoneIdForTemplatePath(tpl?.path, zlist);
+  const baseZoneId = resolveTemplateZoneId(base);
+  const baseBoundary =
+    baseZoneId == null
+      ? null
+      : zlist.find((z) => String(z.id) === String(baseZoneId))?.boundary ?? null;
+
+  return list
+    .filter((t) => {
+      if (baseZoneId == null) return t.id === templateId;
+      const zId = resolveTemplateZoneId(t);
+      if (zId != null && String(zId) === String(baseZoneId)) return true;
+      return templateTouchesZone(t?.path, baseBoundary);
+    })
+    .map((t) => t.id);
+}
+
 function normalizeZoneName(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
 }
@@ -250,6 +279,26 @@ function buildAutoZoneName(zones, colorHex = '#22c55e') {
     ord += 1;
   }
   return `Зона №${ord}("${colorName}")`;
+}
+
+function nextRouteTemplateOrdinal(templates) {
+  const list = Array.isArray(templates) ? templates : [];
+  let max = 0;
+  for (const t of list) {
+    const name = String(t?.name ?? '').trim();
+    const m = name.match(/^Маршрут\s*№\s*(\d+)/i);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
+function buildAutoRouteTemplateName(templates) {
+  let ord = nextRouteTemplateOrdinal(templates);
+  const existing = new Set((Array.isArray(templates) ? templates : []).map((t) => String(t?.name ?? '').trim().toLocaleLowerCase()));
+  while (existing.has(`маршрут №${ord}`.toLocaleLowerCase())) ord += 1;
+  return `Маршрут №${ord}`;
 }
 
 function App() {
@@ -341,7 +390,7 @@ function App() {
     setTemplateDraftZoneId(null);
   }, []);
   const saveTemplateDraft = useCallback(() => {
-    const name = templateDraftName.trim() || 'Маршрут патрулирования';
+    const name = templateDraftName.trim() || buildAutoRouteTemplateName(missionTemplates);
     const draftZoneId = templateDraftZoneId ?? activeZoneIdRef.current ?? null;
     if (templateEditMode === 'create') {
       addMissionTemplate({ name, path: [...templateDraftPath], zoneId: draftZoneId });
@@ -2153,13 +2202,27 @@ function App() {
   const handleDeleteTemplateFromMenu = useCallback(async (templateId, mode = 'route_only') => {
     const template = missionTemplates.find((t) => t.id === templateId);
     if (!template) return;
+    const resolveTemplateZoneId = (tpl) =>
+      tpl?.zoneId ?? inferZoneIdForTemplatePath(tpl?.path, backendZones);
+    const templateZoneId = resolveTemplateZoneId(template);
+    const sameZoneTemplateIds = collectSameZoneTemplateIds(templateId, missionTemplates, backendZones);
+    const otherCount = Math.max(0, sameZoneTemplateIds.length - 1);
 
-    if (mode === 'route_and_zone' && template.zoneId != null) {
-      const zoneId = template.zoneId;
+    if (otherCount > 0) {
+      const cascadeOk = window.confirm(
+        `ВНИМАНИЕ: вместе с выбранным шаблоном будут удалены ещё ${otherCount} шаблон(а/ов), так как они находятся в той же зоне.\nПродолжить?`
+      );
+      if (!cascadeOk) return;
+    }
+
+    if (mode === 'route_and_zone' && templateZoneId != null) {
+      const zoneId = templateZoneId;
       const zone = backendZones.find((z) => String(z.id) === String(zoneId));
       const zoneTitle = zone?.name ? `«${zone.name}»` : `ID ${zoneId}`;
       const ok = window.confirm(
-        `Удалить шаблон «${template.name || 'Без названия'}» и связанную зону ${zoneTitle}?\nЭто действие нельзя отменить.`
+        otherCount > 0
+          ? `Удалить шаблон «${template.name || 'Без названия'}», связанную зону ${zoneTitle} и ещё ${otherCount} шаблон(а/ов) этой зоны?\nЭто действие нельзя отменить.`
+          : `Удалить шаблон «${template.name || 'Без названия'}» и связанную зону ${zoneTitle}?\nЭто действие нельзя отменить.`
       );
       if (!ok) return;
       try {
@@ -2177,13 +2240,45 @@ function App() {
       }
     } else {
       const ok = window.confirm(
-        `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
+        otherCount > 0
+          ? `Шаблон «${template.name || 'Без названия'}» находится в той же зоне, что и ещё ${otherCount} шаблон(а/ов).\nПри удалении будут удалены все шаблоны этой зоны. Продолжить?`
+          : `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
       );
       if (!ok) return;
     }
 
-    deleteMissionTemplate(templateId);
-  }, [missionTemplates, backendZones, deleteMissionTemplate]);
+    const idsToDelete = otherCount > 0 ? new Set(sameZoneTemplateIds) : new Set([templateId]);
+    setMissionTemplates((prev) => prev.filter((t) => !idsToDelete.has(t.id)));
+  }, [missionTemplates, backendZones]);
+
+  const templateCascadeCountById = useMemo(() => {
+    const map = {};
+    for (const t of missionTemplates) {
+      const ids = collectSameZoneTemplateIds(t.id, missionTemplates, backendZones);
+      const cnt = Math.max(0, ids.length - 1);
+      if (cnt > 0) map[t.id] = cnt;
+    }
+    return map;
+  }, [missionTemplates, backendZones]);
+
+  const templateCascadeMetaById = useMemo(() => {
+    const out = {};
+    const resolveTemplateZoneId = (tpl) =>
+      tpl?.zoneId ?? inferZoneIdForTemplatePath(tpl?.path, backendZones);
+    for (const t of missionTemplates) {
+      const ids = collectSameZoneTemplateIds(t.id, missionTemplates, backendZones);
+      const related = missionTemplates.filter((x) => ids.includes(x.id) && x.id !== t.id);
+      if (!related.length) continue;
+      const zoneId = resolveTemplateZoneId(t);
+      const zone = zoneId == null ? null : backendZones.find((z) => String(z.id) === String(zoneId));
+      out[t.id] = {
+        zoneId: zoneId ?? null,
+        zoneName: zone?.name ?? (zoneId != null ? `ID ${zoneId}` : 'не определена'),
+        relatedTemplateNames: related.map((x) => x.name || `Шаблон ${x.id}`),
+      };
+    }
+    return out;
+  }, [missionTemplates, backendZones]);
 
   const pendingKmlActionRef = useRef('create');
 
@@ -2534,6 +2629,8 @@ function App() {
                   onStartCreateTemplate={startCreateTemplate}
                   onEditTemplateRoute={startEditTemplateRoute}
                   onDeleteTemplate={handleDeleteTemplateFromMenu}
+                  templateCascadeCountById={templateCascadeCountById}
+                  templateCascadeMetaById={templateCascadeMetaById}
                 />
               </div>
               <div
