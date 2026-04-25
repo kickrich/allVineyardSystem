@@ -249,8 +249,31 @@ function distancePointToSegmentMeters(lat, lng, lat1, lng1, lat2, lng2) {
   return Math.hypot(x - px, y - py);
 }
 
-function findNearestRouteSegmentMeters(path, lat, lng, maxM) {
-  if (!Array.isArray(path) || path.length < 2) return -1;
+function distanceBetweenPointsMeters(lat1, lng1, lat2, lng2) {
+  const latMidRad = (((lat1 + lat2) / 2) * Math.PI) / 180;
+  const cosLat = Math.cos(latMidRad) || 1e-6;
+  const dx = (lng2 - lng1) * 111_320 * cosLat;
+  const dy = (lat2 - lat1) * 111_320;
+  return Math.hypot(dx, dy);
+}
+
+function findNearestRoutePointDistanceMeters(path, lat, lng) {
+  if (!Array.isArray(path) || path.length === 0) return Number.POSITIVE_INFINITY;
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < path.length; i += 1) {
+    const p = path[i];
+    if (!Array.isArray(p) || p.length < 2) continue;
+    const la = Number(p[0]);
+    const ln = Number(p[1]);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) continue;
+    const d = distanceBetweenPointsMeters(lat, lng, la, ln);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function findNearestRouteSegmentMetersDetailed(path, lat, lng, maxM) {
+  if (!Array.isArray(path) || path.length < 2) return { index: -1, distanceM: Number.POSITIVE_INFINITY };
   let best = -1;
   let bestD = maxM;
   for (let i = 0; i < path.length - 1; i += 1) {
@@ -263,11 +286,13 @@ function findNearestRouteSegmentMeters(path, lat, lng, maxM) {
       best = i;
     }
   }
-  return best;
+  return { index: best, distanceM: best >= 0 ? bestD : Number.POSITIVE_INFINITY };
 }
 
 /** Клик по полилинии маршрута: coords почти на линии — узкий порог (м). */
 const ROUTE_SEGMENT_SHIFT_POLYLINE_CLICK_MAX_M = 11;
+const ROUTE_SEGMENT_SHIFT_SKIP_NEAR_POINT_M = 6;
+const ROUTE_SEGMENT_SHIFT_POINT_PRIORITY_MARGIN_M = 1.2;
 
 /** Четыре точки [lat,lng] → три отрезка вокруг центра карты (для шага тура). */
 function buildOnboardingRouteShiftDemoPath(centerLat, centerLng) {
@@ -443,6 +468,7 @@ export function YandexMap({
   const [mapLoaded, setMapLoaded] = useState(false);
   const [error, setError] = useState(null);
   const [routeShiftPanelOpen, setRouteShiftPanelOpen] = useState(false);
+  const [routeShiftSelectionMode, setRouteShiftSelectionMode] = useState(false);
   const [routeShiftDemoAnchorVersion, setRouteShiftDemoAnchorVersion] = useState(0);
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
@@ -1056,6 +1082,7 @@ export function YandexMap({
       polyline.geometry.events.add('change', handleRouteGeometryChange);
 
       const handleRoutePolylineClick = (pe) => {
+        if (!routeShiftSelectionMode) return;
         const fn = onRouteShiftSegmentToggleRef.current;
         if (typeof fn !== 'function') return;
         const coords = typeof pe.get === 'function' ? pe.get('coords') : null;
@@ -1064,19 +1091,26 @@ export function YandexMap({
         const lng = coords[1];
         const curPath = routeEditPathRef.current;
         if (!Array.isArray(curPath) || curPath.length < 2) return;
-        const seg = findNearestRouteSegmentMeters(
+        const nearestPointM = findNearestRoutePointDistanceMeters(curPath, lat, lng);
+        const segInfo = findNearestRouteSegmentMetersDetailed(
           curPath,
           lat,
           lng,
           ROUTE_SEGMENT_SHIFT_POLYLINE_CLICK_MAX_M
         );
-        if (seg < 0) return;
+        if (!segInfo || segInfo.index < 0) return;
+        if (
+          nearestPointM <= ROUTE_SEGMENT_SHIFT_SKIP_NEAR_POINT_M &&
+          segInfo.distanceM > nearestPointM + ROUTE_SEGMENT_SHIFT_POINT_PRIORITY_MARGIN_M
+        ) {
+          return;
+        }
         try {
           if (typeof pe.stopPropagation === 'function') pe.stopPropagation();
         } catch {
           /* ignore */
         }
-        fn(seg);
+        fn(segInfo.index);
       };
       polyline.events.add('click', handleRoutePolylineClick);
       routeShiftPolylineClickHandlerRef.current = handleRoutePolylineClick;
@@ -1098,10 +1132,14 @@ export function YandexMap({
     } catch {
       /* ignore */
     }
-  }, [mapLoaded, routeEditMode, routeEditPath, onRoutePathChange]);
+  }, [mapLoaded, routeEditMode, routeEditPath, onRoutePathChange, routeShiftSelectionMode]);
 
   useEffect(() => {
     if (!routeEditMode) setRouteShiftPanelOpen(false);
+  }, [routeEditMode]);
+
+  useEffect(() => {
+    if (!routeEditMode) setRouteShiftSelectionMode(false);
   }, [routeEditMode]);
 
   useEffect(() => {
@@ -1744,18 +1782,26 @@ export function YandexMap({
       const clickPoint = { lat: coords[0], lng: coords[1] };
       if (routeEditMode) {
         const path = Array.isArray(routeEditPathRef.current) ? routeEditPathRef.current : [];
-        if (path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
-          const clickGp = getClickGlobalPixels(e);
-          if (clickGp) {
-            const zoom = typeof map.getZoom === 'function' ? map.getZoom() : 13;
-            const zoomFactor = Math.pow(2, Math.max(0, 15 - zoom));
-            const maxGp = ROUTE_SEGMENT_SHIFT_MAX_GLOBAL_BASE * zoomFactor;
-            const seg = findNearestRouteSegmentGlobalPixels(map, path, clickGp, maxGp);
-            if (seg >= 0) {
-              onRouteShiftSegmentToggle(seg);
-              return;
-            }
+        if (routeShiftSelectionMode && path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
+          const nearestPointM = findNearestRoutePointDistanceMeters(path, clickPoint.lat, clickPoint.lng);
+          const segInfo = findNearestRouteSegmentMetersDetailed(
+            path,
+            clickPoint.lat,
+            clickPoint.lng,
+            ROUTE_SEGMENT_SHIFT_POLYLINE_CLICK_MAX_M
+          );
+          if (
+            segInfo &&
+            segInfo.index >= 0 &&
+            !(
+              nearestPointM <= ROUTE_SEGMENT_SHIFT_SKIP_NEAR_POINT_M &&
+              segInfo.distanceM > nearestPointM + ROUTE_SEGMENT_SHIFT_POINT_PRIORITY_MARGIN_M
+            )
+          ) {
+            onRouteShiftSegmentToggle(segInfo.index);
+            return;
           }
+          return;
         }
         if (typeof onMapClick === 'function') {
           onMapClick(clickPoint);
@@ -1833,6 +1879,7 @@ export function YandexMap({
     mapLoaded,
     drawRectZoneMode,
     routeEditMode,
+    routeShiftSelectionMode,
     placementMode,
     onRouteShiftSegmentToggle,
   ]);
@@ -2224,15 +2271,33 @@ export function YandexMap({
       />
       {showRouteShiftUi && (
         <>
-          <button
-            type="button"
-            data-onboarding="route-shift-segments"
-            className="pointer-events-auto absolute bottom-24 right-3 z-[165] max-w-[min(56vw,220px)] truncate rounded-xl border border-violet-500/60 bg-violet-950/90 px-3 py-2 text-left text-sm font-medium text-violet-100 shadow-lg backdrop-blur-sm hover:bg-violet-900/95 sm:bottom-20"
-            title="Список отрезков с меткой «смещение» между рядами"
-            onClick={() => setRouteShiftPanelOpen(true)}
-          >
-            Смещения · {shiftCount}
-          </button>
+          <div className="pointer-events-auto absolute bottom-24 right-3 z-[165] flex max-w-[min(92vw,360px)] items-center gap-2 sm:bottom-20">
+            <button
+              type="button"
+              className={`rounded-xl border px-3 py-2 text-sm font-medium shadow-lg backdrop-blur-sm transition-colors ${
+                routeShiftSelectionMode
+                  ? 'border-fuchsia-400/80 bg-fuchsia-900/95 text-fuchsia-100 hover:bg-fuchsia-800/95'
+                  : 'border-gray-500/70 bg-gray-900/90 text-gray-200 hover:bg-gray-800/95'
+              }`}
+              title={
+                routeShiftSelectionMode
+                  ? 'Режим смещений включён: клики выбирают только отрезки'
+                  : 'Включить режим выбора отрезков смещения'
+              }
+              onClick={() => setRouteShiftSelectionMode((v) => !v)}
+            >
+              {routeShiftSelectionMode ? 'Режим смещений: ВКЛ' : 'Режим смещений'}
+            </button>
+            <button
+              type="button"
+              data-onboarding="route-shift-segments"
+              className="max-w-[min(56vw,220px)] truncate rounded-xl border border-violet-500/60 bg-violet-950/90 px-3 py-2 text-left text-sm font-medium text-violet-100 shadow-lg backdrop-blur-sm hover:bg-violet-900/95"
+              title="Список отрезков с меткой «смещение» между рядами"
+              onClick={() => setRouteShiftPanelOpen(true)}
+            >
+              Смещения · {shiftCount}
+            </button>
+          </div>
           <RouteShiftSegmentsPopup
             open={routeShiftPanelOpen}
             onClose={() => setRouteShiftPanelOpen(false)}
