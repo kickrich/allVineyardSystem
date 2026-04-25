@@ -28,8 +28,6 @@ export function ShabloneScreen({
     ? templates.find((x) => x.id === deleteDialog.id) ?? null
     : null;
 
-  const canCreateTemplate = templates.length < 1;
-
   return (
     <div className="w-full max-w-6xl mx-auto">
       <div className="w-full max-w-2xl mx-auto bg-gray-800/85 border border-gray-700/70 rounded-2xl shadow-2xl backdrop-blur-sm overflow-hidden">
@@ -44,9 +42,7 @@ export function ShabloneScreen({
             <button
               type="button"
               onClick={onStartCreateTemplate}
-              disabled={!canCreateTemplate}
-              title={canCreateTemplate ? 'Создать шаблон' : 'Разрешён только один шаблон. Удалите или редактируйте текущий.'}
-              className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-all shadow-sm ring-1 ring-blue-400/40"
+              className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg font-medium transition-all shadow-sm ring-1 ring-blue-400/40"
             >
               + Создать шаблон
             </button>

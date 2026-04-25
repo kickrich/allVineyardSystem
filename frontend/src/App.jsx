@@ -184,6 +184,74 @@ function inferZoneIdForTemplatePath(path, zones) {
   return null;
 }
 
+function normalizeZoneName(value) {
+  return String(value ?? '').trim().toLocaleLowerCase();
+}
+
+function nextZoneOrdinal(zones) {
+  const list = Array.isArray(zones) ? zones : [];
+  let max = 0;
+  for (const z of list) {
+    const name = String(z?.name ?? '').trim();
+    const m = name.match(/^Зона\s*№\s*(\d+)/i);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
+function zoneColorNameFromHex(colorHex = '#22c55e') {
+  const m = String(colorHex).trim().match(/^#([0-9a-fA-F]{6})$/);
+  if (!m) return 'цветной';
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16) / 255;
+  const g = parseInt(v.slice(2, 4), 16) / 255;
+  const b = parseInt(v.slice(4, 6), 16) / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  const l = (max + min) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+
+  if (s < 0.14) {
+    if (l <= 0.15) return 'чёрный';
+    if (l >= 0.88) return 'белый';
+    return 'серый';
+  }
+
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+
+  if (h < 15 || h >= 345) return 'красный';
+  if (h < 40) return 'оранжевый';
+  if (h < 62) return 'жёлтый';
+  if (h < 150) return 'зелёный';
+  if (h < 185) return 'бирюзовый';
+  if (h < 210) return 'голубой';
+  if (h < 255) return 'синий';
+  if (h < 295) return 'фиолетовый';
+  if (h < 345) return 'розовый';
+  return 'цветной';
+}
+
+function buildAutoZoneName(zones, colorHex = '#22c55e') {
+  let ord = nextZoneOrdinal(zones);
+  const colorName = zoneColorNameFromHex(colorHex);
+  const existing = new Set((Array.isArray(zones) ? zones : []).map((z) => normalizeZoneName(z?.name)));
+  while (existing.has(normalizeZoneName(`Зона №${ord}("${colorName}")`))) {
+    ord += 1;
+  }
+  return `Зона №${ord}("${colorName}")`;
+}
+
 function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [exitingToTemplates, setExitingToTemplates] = useState(false);
@@ -207,6 +275,7 @@ function App() {
   const [templateEditMode, setTemplateEditMode] = useState(null);
   const [templateDraftPath, setTemplateDraftPath] = useState([]);
   const [templateDraftName, setTemplateDraftName] = useState('');
+  const [templateDraftZoneId, setTemplateDraftZoneId] = useState(null);
   const [noTransitionTemplateSwitch, setNoTransitionTemplateSwitch] = useState(false);
 
   useEffect(() => {
@@ -251,35 +320,30 @@ function App() {
   }, []);
 
   const startCreateTemplate = useCallback(() => {
-    if (missionTemplates.length >= 1) {
-      window.alert('Разрешён только один шаблон маршрута. Удалите текущий шаблон или отредактируйте его.');
-      return;
-    }
     setTemplateEditMode('create');
     setTemplateDraftPath([]);
     setTemplateDraftName('');
-  }, [missionTemplates]);
+    setTemplateDraftZoneId(null);
+  }, []);
   const startEditTemplateRoute = useCallback((id) => {
     const t = missionTemplates.find((x) => x.id === id);
     if (!t) return;
     setTemplateEditMode({ type: 'edit', id });
     setTemplateDraftPath([...(t.path || [])]);
     setTemplateDraftName(t.name || '');
+    setTemplateDraftZoneId(t?.zoneId ?? null);
   }, [missionTemplates]);
   const cancelTemplateEdit = useCallback(() => {
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
     setTemplateDraftName('');
+    setTemplateDraftZoneId(null);
   }, []);
   const saveTemplateDraft = useCallback(() => {
     const name = templateDraftName.trim() || 'Маршрут патрулирования';
-    const draftZoneId = activeZoneIdRef.current ?? null;
+    const draftZoneId = templateDraftZoneId ?? activeZoneIdRef.current ?? null;
     if (templateEditMode === 'create') {
-      if (missionTemplates.length >= 1) {
-        window.alert('Нельзя сохранить второй шаблон. Допустим только один маршрут-шаблон.');
-        return;
-      }
       addMissionTemplate({ name, path: [...templateDraftPath], zoneId: draftZoneId });
     } else if (templateEditMode && templateEditMode.type === 'edit') {
       const current = missionTemplates.find((t) => t.id === templateEditMode.id);
@@ -293,7 +357,8 @@ function App() {
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
     setTemplateDraftName('');
-  }, [templateEditMode, templateDraftName, templateDraftPath, missionTemplates, addMissionTemplate, updateMissionTemplate]);
+    setTemplateDraftZoneId(null);
+  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, addMissionTemplate, updateMissionTemplate]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
@@ -389,7 +454,7 @@ function App() {
   const [drawRectZoneMode, setDrawRectZoneMode] = useState(false);
   const [draftRectBoundary, setDraftRectBoundary] = useState(null);
   const [editingZoneId, setEditingZoneId] = useState(null);
-  const [newRectZoneName, setNewRectZoneName] = useState('Зона (прямоугольник)');
+  const [newRectZoneName, setNewRectZoneName] = useState('');
   const [rectZoneBusy, setRectZoneBusy] = useState(false);
 
   useEffect(() => {
@@ -1932,7 +1997,7 @@ function App() {
     }
     setEditingZoneId(null);
     setDraftRectBoundary(null);
-    setNewRectZoneName('Зона (прямоугольник)');
+    setNewRectZoneName('');
     setDrawRectZoneMode(true);
   }, [drawRectZoneMode]);
 
@@ -1940,7 +2005,7 @@ function App() {
     setEditingZoneId(null);
     setDraftRectBoundary(null);
     setDrawRectZoneMode(false);
-    setNewRectZoneName('Зона (прямоугольник)');
+    setNewRectZoneName('');
   }, []);
 
   const handleDraftRectBoundaryChange = useCallback((nextBoundary) => {
@@ -1972,13 +2037,24 @@ function App() {
     let targetEditingZoneId = editingZoneId;
     // В создании шаблона держим только одну зону: новые прямоугольники
     // сохраняем как обновление существующей зоны, а не как создание второй.
-    if (templateEditMode === 'create' && targetEditingZoneId == null && backendZones.length >= 1) {
-      targetEditingZoneId = activeZoneId ?? backendZones[0]?.id ?? null;
+    if (templateEditMode === 'create' && targetEditingZoneId == null && templateDraftZoneId != null) {
+      targetEditingZoneId = templateDraftZoneId;
     }
     setRectZoneBusy(true);
     try {
       if (targetEditingZoneId != null) {
-        const nextName = newRectZoneName.trim() || 'Зона (прямоугольник)';
+        const currentZoneName =
+          backendZones.find((z) => String(z?.id) === String(targetEditingZoneId))?.name ?? '';
+        const nextName = newRectZoneName.trim() || currentZoneName || `Зона №${targetEditingZoneId}("${activeZoneColor}")`;
+        const duplicate = backendZones.some(
+          (z) =>
+            String(z?.id) !== String(targetEditingZoneId) &&
+            normalizeZoneName(z?.name) === normalizeZoneName(nextName)
+        );
+        if (duplicate) {
+          window.alert(`Зона с именем «${nextName}» уже существует. Укажите другое название.`);
+          return;
+        }
         await updateZoneWithBoundary(targetEditingZoneId, draftRectBoundary, nextName);
         const zones = await fetchZonesFromBackend();
         setBackendZones(zones);
@@ -1988,19 +2064,27 @@ function App() {
           zoneName: updatedZone?.name ?? `ID ${targetEditingZoneId}`,
         });
         setActiveZoneId(targetEditingZoneId);
+        if (templateEditMode === 'create') setTemplateDraftZoneId(targetEditingZoneId);
         setEditingZoneId(null);
         setDraftRectBoundary(null);
         setNewRectZoneName(updatedZone?.name ?? nextName);
         return;
       }
 
-      const name = newRectZoneName.trim() || 'Зона (прямоугольник)';
+      const rawName = newRectZoneName.trim();
+      const existingNames = new Set(backendZones.map((z) => normalizeZoneName(z?.name)));
+      if (rawName && existingNames.has(normalizeZoneName(rawName))) {
+        window.alert(`Зона с именем «${rawName}» уже существует. Укажите другое название.`);
+        return;
+      }
+      const name = rawName || buildAutoZoneName(backendZones, activeZoneColor);
       const created = await createZoneWithBoundary({ name, boundary: draftRectBoundary });
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
       const newId = created?.id;
       if (newId != null) {
         setActiveZoneId(newId);
+        if (templateEditMode === 'create') setTemplateDraftZoneId(newId);
         const u = backendContextRef.current.userId;
         if (u != null) {
           backendContextRef.current = { userId: u, zoneId: newId };
@@ -2018,7 +2102,7 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, backendZones, activeZoneId]);
+  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, templateDraftZoneId, backendZones, activeZoneId, activeZoneColor]);
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
@@ -2136,7 +2220,12 @@ function App() {
       setZoneKmlIsError(false);
       try {
         if (action === 'create') {
-          const baseName = newZoneKmlName.trim() || file.name.replace(/\.kml$/i, '') || 'Зона из KML';
+          const candidate = newZoneKmlName.trim();
+          const baseName = candidate || buildAutoZoneName(backendZones, activeZoneColor);
+          const duplicate = backendZones.some((z) => normalizeZoneName(z?.name) === normalizeZoneName(baseName));
+          if (duplicate) {
+            throw new Error(`Зона с именем «${baseName}» уже существует. Укажите другое название.`);
+          }
           const created = await createZoneWithKml({ name: baseName, description: '', file });
           const zones = await fetchZonesFromBackend();
           setBackendZones(zones);
@@ -2180,7 +2269,7 @@ function App() {
         setZoneKmlBusy(false);
       }
     },
-    [activeZoneId, newZoneKmlName, addToZoneLog]
+    [activeZoneId, newZoneKmlName, addToZoneLog, backendZones, activeZoneColor]
   );
 
   const handleWorkspaceTourOpenChange = useCallback((open) => {
