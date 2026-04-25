@@ -357,6 +357,7 @@ function mergeYandexGeoBounds(boundsList) {
 /** Какой из трёх отрезков (0..2) подсвечен как «смещение» в демо тура. */
 const ONBOARDING_DEMO_SHIFT_SEGMENT_INDEX = 1;
 const ONBOARDING_ROUTE_SHIFT_FIT_MS = 480;
+const PREVIEW_ROUTE_FIT_MS = 320;
 
 export function YandexMap({
   drones,
@@ -424,6 +425,7 @@ export function YandexMap({
   const routeShiftDemoAnchorRef = useRef(null);
   const routeShiftDemoDidFitRef = useRef(false);
   const workspaceOnboardingStepIdRef = useRef(workspaceOnboardingStepId);
+  const lastPreviewFitKeyRef = useRef('');
   const routeShiftPolylineClickHandlerRef = useRef(null);
   const onRouteShiftSegmentToggleRef = useRef(onRouteShiftSegmentToggle);
   const routeEditGeometryChangeHandlerRef = useRef(null);
@@ -927,6 +929,12 @@ export function YandexMap({
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
     const map = mapInstanceRef.current;
     const path = previewPath && previewPath.length >= 2 ? previewPath : null;
+    let syncViewportTimer = null;
+    const pathKey = Array.isArray(path)
+      ? path
+          .map((p) => `${Number(p?.[0]).toFixed(6)},${Number(p?.[1]).toFixed(6)}`)
+          .join('|')
+      : '';
 
     if (previewPolylineRef.current) {
       map.geoObjects.remove(previewPolylineRef.current);
@@ -940,14 +948,56 @@ export function YandexMap({
       );
       map.geoObjects.add(polyline);
       previewPolylineRef.current = polyline;
+
+      // При выборе шаблона автоматически фокусируем карту на превью-маршруте.
+      if (pathKey && lastPreviewFitKeyRef.current !== pathKey) {
+        let bounds = null;
+        try {
+          bounds = polyline.geometry?.getBounds?.() ?? null;
+        } catch {
+          bounds = null;
+        }
+        if (bounds) {
+          try {
+            map.setBounds(bounds, {
+              checkZoomRange: true,
+              zoomMargin: [64, 64, 64, 64],
+              duration: 220,
+              timingFunction: 'ease-in-out',
+            });
+          } catch {
+            /* ignore */
+          }
+          syncViewportTimer = window.setTimeout(() => {
+            try {
+              if (typeof onMapCenterChange === 'function') {
+                const c = typeof map.getCenter === 'function' ? map.getCenter() : null;
+                if (Array.isArray(c) && c.length >= 2) {
+                  onMapCenterChange([Number(c[0]), Number(c[1])]);
+                }
+              }
+              if (typeof onMapZoomChange === 'function') {
+                const z = typeof map.getZoom === 'function' ? map.getZoom() : null;
+                if (typeof z === 'number' && Number.isFinite(z)) onMapZoomChange(z);
+              }
+            } catch {
+              /* ignore */
+            }
+          }, PREVIEW_ROUTE_FIT_MS);
+        }
+        lastPreviewFitKeyRef.current = pathKey;
+      }
+    } else {
+      lastPreviewFitKeyRef.current = '';
     }
     return () => {
+      if (syncViewportTimer != null) window.clearTimeout(syncViewportTimer);
       if (previewPolylineRef.current) {
         try { map.geoObjects.remove(previewPolylineRef.current); } catch { }
         previewPolylineRef.current = null;
       }
     };
-  }, [mapLoaded, previewPath]);
+  }, [mapLoaded, previewPath, onMapCenterChange, onMapZoomChange]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;

@@ -98,7 +98,7 @@ export function ZoneMapMenu({
                         : 'text-gray-100 hover:bg-gray-800'
                     }`}
                   >
-                    {z.name || `Зона ${z.id}`}
+                    <span className="truncate">{z.name || `Зона ${z.id}`}</span>
                   </button>
                 </li>
               );

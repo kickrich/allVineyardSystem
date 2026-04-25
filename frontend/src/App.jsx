@@ -145,6 +145,45 @@ function isPointInsideZoneBoundary(boundary, point) {
   return inside;
 }
 
+function normalizedTemplatePoints(path) {
+  return Array.isArray(path)
+    ? path.filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+    : [];
+}
+
+/** Подобрать зону по шаблону: берём зону с максимальным числом точек шаблона внутри. */
+function inferZoneIdForTemplatePath(path, zones) {
+  const points = normalizedTemplatePoints(path);
+  if (!Array.isArray(zones) || zones.length === 0) return null;
+  // Если зона одна — связываем шаблон с ней, даже для старых/неполных шаблонов.
+  if (zones.length === 1) {
+    const onlyZoneId = zones[0]?.id;
+    return onlyZoneId == null ? null : onlyZoneId;
+  }
+  if (points.length < 2) return null;
+
+  let bestZoneId = null;
+  let bestHits = 0;
+  for (const z of zones) {
+    const boundary = z?.boundary;
+    const zid = z?.id;
+    if (zid == null || !Array.isArray(boundary) || boundary.length < 4) continue;
+    let hits = 0;
+    for (const [lat, lng] of points) {
+      if (isPointInsideZoneBoundary(boundary, { lat, lng })) hits += 1;
+    }
+    if (hits > bestHits) {
+      bestHits = hits;
+      bestZoneId = zid;
+    }
+  }
+  // Для привязки шаблона к зоне достаточно хотя бы одной точки внутри.
+  // Это специально мягкое правило для старых шаблонов, где часть траектории
+  // могла выходить за контур или быть построена до текущих ограничений.
+  if (bestZoneId != null && bestHits >= 1) return bestZoneId;
+  return null;
+}
+
 function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [exitingToTemplates, setExitingToTemplates] = useState(false);
@@ -157,7 +196,8 @@ function App() {
       return parsed.map((t) => ({
         id: t.id,
         name: t.name || 'Без названия',
-        path: Array.isArray(t.path) ? t.path : []
+        path: Array.isArray(t.path) ? t.path : [],
+        zoneId: t?.zoneId ?? null,
       }));
     } catch {
       return [];
@@ -187,11 +227,23 @@ function App() {
 
   const addMissionTemplate = useCallback((template) => {
     const id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    setMissionTemplates((prev) => [...prev, { id, name: template.name || 'Шаблон', path: template.path || [] }]);
+    setMissionTemplates((prev) => [
+      ...prev,
+      {
+        id,
+        name: template.name || 'Шаблон',
+        path: template.path || [],
+        zoneId: template?.zoneId ?? null,
+      },
+    ]);
   }, []);
   const updateMissionTemplate = useCallback((id, template) => {
     setMissionTemplates((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, name: template.name ?? t.name, path: template.path ?? t.path } : t))
+      prev.map((t) =>
+        t.id === id
+          ? { ...t, name: template.name ?? t.name, path: template.path ?? t.path, zoneId: template.zoneId ?? t.zoneId ?? null }
+          : t
+      )
     );
   }, []);
   const deleteMissionTemplate = useCallback((id) => {
@@ -218,16 +270,22 @@ function App() {
   }, []);
   const saveTemplateDraft = useCallback(() => {
     const name = templateDraftName.trim() || 'Маршрут патрулирования';
+    const draftZoneId = activeZoneIdRef.current ?? null;
     if (templateEditMode === 'create') {
-      addMissionTemplate({ name, path: [...templateDraftPath] });
+      addMissionTemplate({ name, path: [...templateDraftPath], zoneId: draftZoneId });
     } else if (templateEditMode && templateEditMode.type === 'edit') {
-      updateMissionTemplate(templateEditMode.id, { name, path: [...templateDraftPath] });
+      const current = missionTemplates.find((t) => t.id === templateEditMode.id);
+      updateMissionTemplate(templateEditMode.id, {
+        name,
+        path: [...templateDraftPath],
+        zoneId: draftZoneId ?? current?.zoneId ?? null,
+      });
     }
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
     setTemplateDraftName('');
-  }, [templateEditMode, templateDraftName, templateDraftPath, addMissionTemplate, updateMissionTemplate]);
+  }, [templateEditMode, templateDraftName, templateDraftPath, missionTemplates, addMissionTemplate, updateMissionTemplate]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
@@ -363,6 +421,33 @@ function App() {
     () => Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4,
     [activeZoneBoundary]
   );
+  const templateUsageByZoneId = useMemo(() => {
+    const byId = {};
+    const zones = Array.isArray(backendZones) ? backendZones : [];
+    const templates = Array.isArray(missionTemplates) ? missionTemplates : [];
+    for (const t of templates) {
+      const zid = t?.zoneId ?? inferZoneIdForTemplatePath(t?.path, zones);
+      if (zid == null) continue;
+      const key = String(zid);
+      byId[key] = Number(byId[key] || 0) + 1;
+    }
+    return byId;
+  }, [backendZones, missionTemplates]);
+
+  useEffect(() => {
+    if (!Array.isArray(backendZones) || backendZones.length === 0) return;
+    setMissionTemplates((prev) => {
+      let changed = false;
+      const next = prev.map((t) => {
+        if (t?.zoneId != null) return t;
+        const inferred = inferZoneIdForTemplatePath(t?.path, backendZones);
+        if (inferred == null) return t;
+        changed = true;
+        return { ...t, zoneId: inferred };
+      });
+      return changed ? next : prev;
+    });
+  }, [backendZones]);
   useEffect(() => {
     try {
       localStorage.setItem(ZONE_COLORS_STORAGE_KEY, JSON.stringify(zoneColorsById));
@@ -1923,6 +2008,19 @@ function App() {
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
+    const usageCount = Number(templateUsageByZoneId[String(activeZoneId)] || 0);
+    if (usageCount > 0) {
+      const zoneName = backendZones.find((z) => z.id === activeZoneId)?.name ?? `ID ${activeZoneId}`;
+      addToZoneLog('⛔ Нельзя удалить зону: она используется в шаблонах', {
+        zoneId: activeZoneId,
+        zoneName,
+        templates: usageCount,
+      });
+      window.alert(
+        `Нельзя удалить зону «${zoneName}»: она используется в ${usageCount} шаблон(ах).\nУдаляйте/переносите шаблоны только в меню шаблонов.`
+      );
+      return;
+    }
     const targetZone = backendZones.find((z) => z.id === activeZoneId);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${activeZoneId}`;
     const confirmed = window.confirm(`Удалить зону ${title}? Это действие нельзя отменить.`);
@@ -1952,7 +2050,42 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [activeZoneId, backendZones, addToZoneLog]);
+  }, [activeZoneId, backendZones, addToZoneLog, templateUsageByZoneId]);
+
+  const handleDeleteTemplateFromMenu = useCallback(async (templateId, mode = 'route_only') => {
+    const template = missionTemplates.find((t) => t.id === templateId);
+    if (!template) return;
+
+    if (mode === 'route_and_zone' && template.zoneId != null) {
+      const zoneId = template.zoneId;
+      const zone = backendZones.find((z) => String(z.id) === String(zoneId));
+      const zoneTitle = zone?.name ? `«${zone.name}»` : `ID ${zoneId}`;
+      const ok = window.confirm(
+        `Удалить шаблон «${template.name || 'Без названия'}» и связанную зону ${zoneTitle}?\nЭто действие нельзя отменить.`
+      );
+      if (!ok) return;
+      try {
+        await deleteZoneInBackend(zoneId);
+        const zones = await fetchZonesFromBackend();
+        setBackendZones(zones);
+        const nextActiveZoneId = zones.length > 0 ? zones[0].id : null;
+        setActiveZoneId(nextActiveZoneId);
+        const userId = backendContextRef.current.userId ?? null;
+        backendContextRef.current = { userId, zoneId: nextActiveZoneId };
+      } catch (err) {
+        setZoneKmlMessage(String(err?.message ?? err));
+        setZoneKmlIsError(true);
+        return;
+      }
+    } else {
+      const ok = window.confirm(
+        `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
+      );
+      if (!ok) return;
+    }
+
+    deleteMissionTemplate(templateId);
+  }, [missionTemplates, backendZones, deleteMissionTemplate]);
 
   const pendingKmlActionRef = useRef('create');
 
@@ -2304,7 +2437,7 @@ function App() {
                   templates={missionTemplates}
                   onStartCreateTemplate={startCreateTemplate}
                   onEditTemplateRoute={startEditTemplateRoute}
-                  onDeleteTemplate={deleteMissionTemplate}
+                  onDeleteTemplate={handleDeleteTemplateFromMenu}
                 />
               </div>
               <div
@@ -2381,10 +2514,22 @@ function App() {
                             <button
                               type="button"
                               onClick={handleDeleteActiveZone}
-                              disabled={activeZoneId == null || rectZoneBusy || zoneKmlBusy}
+                            disabled={
+                              activeZoneId == null ||
+                              rectZoneBusy ||
+                              zoneKmlBusy ||
+                              Number(templateUsageByZoneId[String(activeZoneId)] || 0) > 0
+                            }
+                            title={
+                              Number(templateUsageByZoneId[String(activeZoneId)] || 0) > 0
+                                ? 'Зона используется в шаблонах'
+                                : 'Удалить активную зону'
+                            }
                               className="w-full px-3 py-2 min-h-[42px] bg-transparent border border-gray-500/70 text-gray-100 hover:bg-red-900/80 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm transition-colors"
                             >
-                              Удалить зону
+                            {Number(templateUsageByZoneId[String(activeZoneId)] || 0) > 0
+                              ? 'Зона в шаблонах'
+                              : 'Удалить зону'}
                             </button>
                           )}
                         </div>
