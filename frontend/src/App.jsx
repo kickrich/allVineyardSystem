@@ -908,16 +908,6 @@ function App() {
       lng: latlng.lng
     };
 
-    if (Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4) {
-      if (!isPointInsideZoneBoundary(activeZoneBoundary, positionToSet)) {
-        addToDroneLog(
-          droneToPlace,
-          '⚠️ Разместите дрон внутри контура активной зоны (выберите зону в меню на карте, если контур не подсвечен).'
-        );
-        return;
-      }
-    }
-
     setDrones(prev =>
       prev.map(d => {
         if (d.id !== droneToPlace) return d;
