@@ -414,39 +414,6 @@ export const Sidebar = ({
                       {selectedDroneStatus === flightStatus.COMPLETED && (
                         <>
                           <div className="col-span-2 text-center text-sm text-green-300">✅ Миссия завершена</div>
-                          {selectedDronePathLength >= 2 && (
-                            <>
-                              {!atMissionStart && (
-                                <div className="col-span-2 rounded-lg border border-amber-600/50 bg-amber-900/25 px-3 py-2 text-left text-xs text-amber-100 leading-snug space-y-1.5">
-                                  <p>
-                                    <strong className="text-amber-50">Перезапуск</strong> снова возможен только у{' '}
-                                    <strong className="text-white">первой точки</strong> маршрута (~10 м), по той же
-                                    причине, что и первый запуск.
-                                  </p>
-                                  <p className="text-amber-200/95">
-                                    Подведите дрон к старту или «К первой точке миссии».
-                                  </p>
-                                </div>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => onStartFlight(selectedDrone.id)}
-                                disabled={!atMissionStart}
-                                title={
-                                  atMissionStart
-                                    ? 'Перезапустить миссию'
-                                    : 'Перезапуск только с первой точки (~10 м) — подведите дрон'
-                                }
-                                className={`col-span-2 py-2 rounded flex items-center justify-center gap-2 ${
-                                  atMissionStart
-                                    ? 'bg-green-600 hover:bg-green-700'
-                                    : 'cursor-not-allowed bg-gray-600 opacity-50'
-                                }`}
-                              >
-                                🔄 Перезапустить миссию
-                              </button>
-                            </>
-                          )}
                         </>
                       )}
                       {selectedDroneStatus === flightStatus.IDLE && selectedDronePathLength < 2 && (
