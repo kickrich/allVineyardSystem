@@ -2,6 +2,7 @@ class User < ApplicationRecord
   ACTIVE_MISSION_STATUS = :in_progress
 
   has_many :missions
+  has_many :route_templates, dependent: :destroy
   has_secure_password
 
   before_validation :normalize_email

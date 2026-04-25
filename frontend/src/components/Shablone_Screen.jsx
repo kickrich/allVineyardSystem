@@ -1,29 +1,34 @@
 import { useState } from 'react';
 
-/**
- * Shablone Screen — управление шаблонами маршрутов патрулирования.
- * Шаблон = заранее построенный маршрут (название + точки на карте).
- * @param {{
- *   onStart: (templateId?: string) => void;
- *   templates: { id: string; name: string; path: [number, number][] }[];
- *   onStartCreateTemplate: () => void;
- *   onEditTemplateRoute: (id: string) => void;
- *   onDeleteTemplate: (id: string) => void;
- * }} props
- */
 export function ShabloneScreen({
   onStart,
   templates,
   onStartCreateTemplate,
   onEditTemplateRoute,
-  onDeleteTemplate
+  onDeleteTemplate,
+  templateCascadeCountById = {},
+  templateCascadeMetaById = {}
 }) {
-  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [deleteDialog, setDeleteDialog] = useState(null);
 
-  const handleDelete = (id) => {
-    onDeleteTemplate(id);
-    setDeleteConfirmId(null);
+  const handleDelete = (id, mode) => {
+    onDeleteTemplate(id, mode);
+    setDeleteDialog(null);
   };
+  const templateForDelete = deleteDialog?.id
+    ? templates.find((x) => x.id === deleteDialog.id) ?? null
+    : null;
+  const cascadeCount =
+    templateForDelete != null
+      ? Number(templateCascadeCountById?.[templateForDelete.id] || 0)
+      : 0;
+  const cascadeMeta =
+    templateForDelete != null
+      ? templateCascadeMetaById?.[templateForDelete.id] ?? null
+      : null;
+  const relatedNames = Array.isArray(cascadeMeta?.relatedTemplateNames)
+    ? cascadeMeta.relatedTemplateNames
+    : [];
 
   return (
     <div className="w-full max-w-6xl mx-auto">
@@ -76,11 +81,11 @@ export function ShabloneScreen({
                       {(t.path && t.path.length) || 0} точек маршрута
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
                       type="button"
                       onClick={() => onEditTemplateRoute(t.id)}
-                      className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded-lg text-sm font-medium"
+                      className="h-8 px-2 sm:px-3 bg-gray-600 hover:bg-gray-500 text-white rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
                       title="Редактировать маршрут на карте"
                     >
                       Редактировать маршрут
@@ -88,38 +93,19 @@ export function ShabloneScreen({
                     <button
                       type="button"
                       onClick={() => onStart(t.id)}
-                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium"
+                      className="h-8 px-2 sm:px-3 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
                       title="Начать работу и применить шаблон к дрону"
                     >
                       Использовать
                     </button>
-                    {deleteConfirmId === t.id ? (
-                      <span className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(t.id)}
-                          className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm"
-                        >
-                          Да
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteConfirmId(null)}
-                          className="px-2 py-1 bg-gray-500 hover:bg-gray-400 text-white rounded text-sm"
-                        >
-                          Нет
-                        </button>
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirmId(t.id)}
-                        className="px-3 py-1.5 bg-red-900/70 hover:bg-red-800 text-red-200 rounded-lg text-sm font-medium"
-                        title="Удалить"
-                      >
-                        Удалить
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setDeleteDialog({ id: t.id, mode: null })}
+                      className="h-8 px-2 sm:px-3 bg-red-900/70 hover:bg-red-800 text-red-200 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
+                      title="Удалить"
+                    >
+                      Удалить
+                    </button>
                   </div>
                 </li>
               ))}
@@ -127,6 +113,83 @@ export function ShabloneScreen({
           )}
         </div>
       </div>
+      {deleteDialog && templateForDelete && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-600 bg-gray-900 text-white shadow-2xl p-4">
+            <h4 className="text-lg font-semibold mb-2">Удаление шаблона</h4>
+            <p className="text-sm text-gray-300 mb-3">
+              Выберите вариант удаления для шаблона <span className="text-white font-medium">«{templateForDelete.name || 'Без названия'}»</span>.
+            </p>
+
+            {deleteDialog.mode == null ? (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteDialog({ id: templateForDelete.id, mode: 'route_only' })}
+                  className="w-full h-10 px-3 bg-red-700 hover:bg-red-800 rounded-lg text-sm font-medium"
+                >
+                  Удалить только маршрут
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteDialog({ id: templateForDelete.id, mode: 'route_and_zone' })}
+                  disabled={templateForDelete?.zoneId == null}
+                  className="w-full h-10 px-3 bg-rose-900 hover:bg-rose-800 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium"
+                  title={
+                    templateForDelete?.zoneId == null
+                      ? 'У шаблона нет привязанной зоны'
+                      : 'Удалить шаблон и связанную зону'
+                  }
+                >
+                  Удалить маршрут и зону
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteDialog(null)}
+                  className="w-full h-10 px-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium"
+                >
+                  Отмена
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-gray-300">
+                  Подтвердите действие:
+                  <span className="text-white font-medium">
+                    {' '}
+                    {deleteDialog.mode === 'route_only' ? 'только маршрут' : 'маршрут и зона'}.
+                  </span>
+                </p>
+                {deleteDialog.mode === 'route_and_zone' && cascadeCount > 0 && (
+                  <div className="rounded-lg border border-red-500/60 bg-red-900/25 px-3 py-2 text-xs text-red-100">
+                    Будут удалены дополнительно: <strong>{cascadeCount}</strong> маршрут(а/ов) из зоны{' '}
+                    <strong>«{cascadeMeta?.zoneName || 'не определена'}»</strong>.
+                    {relatedNames.length > 0 && (
+                      <span className="block mt-1">
+                        Список: <strong>{relatedNames.join(', ')}</strong>.
+                      </span>
+                    )}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleDelete(templateForDelete.id, deleteDialog.mode)}
+                  className="w-full h-10 px-3 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium"
+                >
+                  Подтвердить удаление
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteDialog({ id: templateForDelete.id, mode: null })}
+                  className="w-full h-10 px-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium"
+                >
+                  Назад
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

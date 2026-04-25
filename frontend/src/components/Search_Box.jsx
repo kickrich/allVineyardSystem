@@ -104,7 +104,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
 
         const fetchSuggestions = async () => {
             try {
-                // Используем suggest для получения подсказок
                 if (window.ymaps && window.ymaps.suggest) {
                     window.ymaps.suggest(query)
                         .then((items) => {
@@ -117,16 +116,13 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                                 setSuggestions(formattedSuggestions);
                                 setShowSuggestions(true);
                             } else {
-                                // Fallback: используем геокодер
                                 fallbackGeocodeSuggestions();
                             }
                         })
                         .catch(() => {
-                            // В случае ошибки используем геокодер
                             fallbackGeocodeSuggestions();
                         });
                 } else {
-                    // Если suggest не доступен, используем геокодер
                     fallbackGeocodeSuggestions();
                 }
             } catch (error) {
@@ -163,12 +159,10 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             }
         };
 
-        // Дебаунс запросов
         const timeoutId = setTimeout(fetchSuggestions, 300);
         return () => clearTimeout(timeoutId);
     }, [query, ymapsReady]);
 
-    // Обработчик поиска
     const handleSearch = async (searchText = query) => {
         if (!searchText.trim() || !ymapsReady) return;
 
@@ -176,7 +170,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
         setShowSuggestions(false);
 
         try {
-            // Выполняем геокодирование
             const response = await window.ymaps.geocode(searchText, { results: 1 });
 
             if (response.geoObjects.getLength() === 0) {
@@ -187,13 +180,10 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             const geoObject = response.geoObjects.get(0);
             const coordinates = geoObject.geometry.getCoordinates();
 
-            // Обновляем центр карты
             setMapCenter([coordinates[0], coordinates[1]]);
 
-            // Определяем оптимальный зум
-            let zoom = 15; // Значение по умолчанию
+            let zoom = 15;
 
-            // Определяем зум по типу объекта
             const kind = geoObject.properties.get('metaDataProperty')?.GeocoderMetaData?.kind;
             if (kind) {
                 switch (kind) {
@@ -215,7 +205,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
 
         } catch (error) {
             console.error('Search error:', error);
-            // Пробуем альтернативный метод поиска
             try {
                 await alternativeSearch(searchText);
             } catch (altError) {
@@ -226,9 +215,7 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
         }
     };
 
-    // Альтернативный метод поиска для браузеров с проблемами
     const alternativeSearch = async (searchText) => {
-        // Создаем URL для прямого запроса к API Яндекс
         const encodedQuery = encodeURIComponent(searchText);
         const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${API_KEY}&format=json&geocode=${encodedQuery}`;
 
@@ -241,7 +228,7 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
 
                 const geoObject = data.response.GeoObjectCollection.featureMember[0].GeoObject;
                 const pos = geoObject.Point.pos.split(' ');
-                const coordinates = [parseFloat(pos[1]), parseFloat(pos[0])]; // Широта, долгота
+                const coordinates = [parseFloat(pos[1]), parseFloat(pos[0])];
 
                 setMapCenter(coordinates);
                 setMapZoom(17);
@@ -293,8 +280,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
         } catch {}
     };
 
-
-    // Обработчик клавиши Enter
     const handleKeyDown = (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -304,8 +289,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             setShowHistory(false);
         }
     };
-
-    // Очистка поля поиска
     const handleClear = () => {
         setQuery('');
         setSuggestions([]);
@@ -314,8 +297,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             inputRef.current.focus();
         }
     };
-
-    // Закрытие подсказок и истории при клике вне компонента
     useEffect(() => {
         const handleClickOutside = (event) => {
             if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
@@ -332,7 +313,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
     return (
         <div ref={wrapperRef} className="w-full mb-2 relative">
             <div className="flex">
-                {/* Поле ввода с иконкой */}
                 <div className="relative flex-1">
                     <input
                         ref={inputRef}
@@ -351,7 +331,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                         autoComplete="off"
                     />
 
-                    {/* Иконка поиска слева */}
                     <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
                         <svg
                             className={`w-5 h-5 ${isLoading ? 'text-blue-400' : 'text-gray-400'}`}
@@ -368,7 +347,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                         </svg>
                     </div>
 
-                    {/* Кнопка очистки */}
                     {query && (
                         <button
                             onClick={handleClear}
@@ -382,7 +360,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                     )}
                 </div>
 
-                {/* Кнопка поиска */}
                 <button
                     onClick={() => handleSearch()}
                     disabled={!query.trim() || isLoading}
@@ -401,7 +378,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                 </button>
             </div>
 
-            {/* История запросов */}
             {showHistory && history.length > 0 && (
                 <div className="absolute top-full left-0 right-0 mt-1.5 bg-gray-900/95 border border-gray-700
                   rounded-xl shadow-2xl backdrop-blur-sm z-[1010] max-h-64 overflow-y-auto">
@@ -429,7 +405,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                 </div>
             )}
 
-            {/* Всплывающие подсказки */}
             {showSuggestions && suggestions.length > 0 && !showHistory && (
                 <div className="absolute top-full left-0 right-0 mt-1.5 bg-gray-900/95 border border-gray-700
                   rounded-xl shadow-2xl backdrop-blur-sm z-[1010] max-h-64 overflow-y-auto">
@@ -456,7 +431,6 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                 </div>
             )}
 
-            {/* Статусная информация */}
             <div className="mt-1 text-xs">
                 {!ymapsReady && !isLoading && (
                     <span className="text-yellow-600">Загрузка поискового сервиса Яндекс...</span>

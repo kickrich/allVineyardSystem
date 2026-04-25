@@ -7,12 +7,12 @@ development:
   <<: *default
   database: <%= ENV.fetch("DB_NAME", "vineyard_app") %>
   username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
-  password: <%= ENV.fetch("DB_PASSWORD", "1029") %>
+  password: <%= ENV.fetch("DB_PASSWORD", "A28v07r08a28") %>
   host: <%= ENV.fetch("DB_HOST", "localhost") %>
 
 test:
   <<: *default
   database: <%= ENV.fetch("DB_TEST_NAME", "vineyard_app_test") %>
   username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
-  password: <%= ENV.fetch("DB_PASSWORD", "1029") %>
+  password: <%= ENV.fetch("DB_PASSWORD", "A28v07r08a28") %>
   host: <%= ENV.fetch("DB_HOST", "localhost") %>

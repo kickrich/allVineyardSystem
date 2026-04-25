@@ -64,6 +64,8 @@ class Video < ApplicationRecord
     {
       video_id: id,
       mission_id: mission_id,
+      row_index: row_index,
+      rows_count: rows_count,
       name: name,
       status: status,
       processing_progress: processing_progress,

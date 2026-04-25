@@ -2,18 +2,23 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { SearchBox } from './components/Search_Box';
 import { Sidebar } from './components/Sidebar';
 import { ShabloneScreen } from './components/Shablone_Screen';
-import { YandexMap } from './components/YandexMap';
-import { ZoneMapMenu } from './components/ZoneMapMenu';
+import { YandexMap } from './components/Yandex_Map';
+import { ZoneMapMenu } from './components/Zone_Map_Menu';
+import { WorkspaceOnboarding } from './components/Workspace_Onboarding';
 import { DroneModal } from './components/Drone_OnClick_List_Sidebar';
 import { DroneParking } from './components/Drone_Parking';
-import { WeatherWidget } from './components/WeatherWidget';
-import { AuthScreen } from './components/AuthScreen';
+import { WeatherWidget } from './components/Weather_Widget';
+import { AuthScreen } from './components/Auth_Screen';
 import { dronesData, initialMapCenter, flightStatus } from './constants/drones_data';
-import { MISSION_TEMPLATES_STORAGE_KEY } from './constants/mission';
+import { resetWorkspaceOnboardingForLogin } from './constants/onboarding';
 import {
   fetchDronesFromBackend,
   fetchUsersFromBackend,
   fetchZonesFromBackend,
+  fetchRouteTemplatesFromBackend,
+  createRouteTemplateInBackend,
+  updateRouteTemplateInBackend,
+  deleteRouteTemplateInBackend,
   createDroneInBackend,
   createZoneWithKml,
   createZoneWithBoundary,
@@ -40,23 +45,17 @@ import {
   calculateFlightTime,
   calculateOptimalSpeed,
   calculateBearing
-} from './utils/flightCalculator';
+} from './utils/flight_Calculator';
 
 const VIEW_TRANSITION_MS = 900;
 const EXIT_PANELS_MS = VIEW_TRANSITION_MS;
 const DESKTOP_SWITCH_EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
-/** Минимальная дистанция (м): если дрон ближе к первой точке — перелёт до неё не добавляется */
 const FIRST_WAYPOINT_TRANSIT_THRESHOLD_M = 10;
-/** Радиус (м): клик рядом с первой точкой маршрута замыкает линию (только индекс 0). */
-const ROUTE_LOOP_SNAP_THRESHOLD_M = 15;
-/** Минимальный интервал между одинаковыми предупреждениями о выходе маршрута за зону. */
 const ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS = 1200;
 const TEMPLATE_ROUTE_REJECT_COOLDOWN_MS = 1200;
 const TELEMETRY_SEND_EVERY_MS = 1000;
 const ZONE_COLORS_STORAGE_KEY = 'zone_colors_v1';
 
-// Видео-логирование (для multipart upload после завершения миссии).
-// ВАЖНО: backend допускает только content_type ровно 'video/webm' или 'video/mp4'.
 const VIDEO_CANVAS_WIDTH = 640;
 const VIDEO_CANVAS_HEIGHT = 360;
 const VIDEO_RECORDING_FPS = 15;
@@ -145,37 +144,199 @@ function isPointInsideZoneBoundary(boundary, point) {
   return inside;
 }
 
+function normalizedTemplatePoints(path) {
+  return Array.isArray(path)
+    ? path.filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+    : [];
+}
+
+function inferZoneIdForTemplatePath(path, zones) {
+  const points = normalizedTemplatePoints(path);
+  if (!Array.isArray(zones) || zones.length === 0) return null;
+  if (zones.length === 1) {
+    const onlyZoneId = zones[0]?.id;
+    return onlyZoneId == null ? null : onlyZoneId;
+  }
+  if (points.length < 2) return null;
+
+  let bestZoneId = null;
+  let bestHits = 0;
+  for (const z of zones) {
+    const boundary = z?.boundary;
+    const zid = z?.id;
+    if (zid == null || !Array.isArray(boundary) || boundary.length < 4) continue;
+    let hits = 0;
+    for (const [lat, lng] of points) {
+      if (isPointInsideZoneBoundary(boundary, { lat, lng })) hits += 1;
+    }
+    if (hits > bestHits) {
+      bestHits = hits;
+      bestZoneId = zid;
+    }
+  }
+  if (bestZoneId != null && bestHits >= 1) return bestZoneId;
+  return null;
+}
+
+function templateTouchesZone(templatePath, zoneBoundary) {
+  const points = normalizedTemplatePoints(templatePath);
+  if (!points.length || !Array.isArray(zoneBoundary) || zoneBoundary.length < 4) return false;
+  return points.some(([lat, lng]) => isPointInsideZoneBoundary(zoneBoundary, { lat, lng }));
+}
+
+function collectSameZoneTemplateIds(templateId, templates, zones) {
+  const list = Array.isArray(templates) ? templates : [];
+  const zlist = Array.isArray(zones) ? zones : [];
+  const base = list.find((t) => t.id === templateId);
+  if (!base) return [];
+  const resolveTemplateZoneId = (tpl) =>
+    tpl?.zoneId ?? inferZoneIdForTemplatePath(tpl?.path, zlist);
+  const baseZoneId = resolveTemplateZoneId(base);
+  const baseBoundary =
+    baseZoneId == null
+      ? null
+      : zlist.find((z) => String(z.id) === String(baseZoneId))?.boundary ?? null;
+
+  return list
+    .filter((t) => {
+      if (baseZoneId == null) return t.id === templateId;
+      const zId = resolveTemplateZoneId(t);
+      if (zId != null && String(zId) === String(baseZoneId)) return true;
+      return templateTouchesZone(t?.path, baseBoundary);
+    })
+    .map((t) => t.id);
+}
+
+function normalizeZoneName(value) {
+  return String(value ?? '').trim().toLocaleLowerCase();
+}
+
+function nextZoneOrdinal(zones) {
+  const list = Array.isArray(zones) ? zones : [];
+  let max = 0;
+  for (const z of list) {
+    const name = String(z?.name ?? '').trim();
+    const m = name.match(/^Зона\s*№\s*(\d+)/i);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
+function zoneColorNameFromHex(colorHex = '#22c55e') {
+  const m = String(colorHex).trim().match(/^#([0-9a-fA-F]{6})$/);
+  if (!m) return 'цветной';
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16) / 255;
+  const g = parseInt(v.slice(2, 4), 16) / 255;
+  const b = parseInt(v.slice(4, 6), 16) / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  const l = (max + min) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+
+  if (s < 0.1) {
+    if (l <= 0.1) return 'чёрный';
+    if (l >= 0.94) return 'белый';
+    if (l >= 0.82) return 'светло-серый';
+    if (l <= 0.25) return 'тёмно-серый';
+    return 'серый';
+  }
+
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+
+  const tonePrefix = l <= 0.28 ? 'тёмно-' : l >= 0.78 ? 'светло-' : '';
+  let base = 'цветной';
+  if (h < 15 || h >= 345) base = 'красный';
+  else if (h < 38) base = 'оранжевый';
+  else if (h < 52) base = 'янтарный';
+  else if (h < 68) base = 'жёлтый';
+  else if (h < 95) base = 'лаймовый';
+  else if (h < 150) base = 'зелёный';
+  else if (h < 170) base = 'мятный';
+  else if (h < 190) base = 'бирюзовый';
+  else if (h < 212) base = 'голубой';
+  else if (h < 228) base = 'лазурный';
+  else if (h < 255) base = 'синий';
+  else if (h < 272) base = 'индиго';
+  else if (h < 295) base = 'фиолетовый';
+  else if (h < 320) base = 'пурпурный';
+  else if (h < 345) base = 'розовый';
+  return `${tonePrefix}${base}`;
+}
+
+function buildAutoZoneName(zones, colorHex = '#22c55e') {
+  let ord = nextZoneOrdinal(zones);
+  const colorName = zoneColorNameFromHex(colorHex);
+  const existing = new Set((Array.isArray(zones) ? zones : []).map((z) => normalizeZoneName(z?.name)));
+  while (existing.has(normalizeZoneName(`Зона №${ord}("${colorName}")`))) {
+    ord += 1;
+  }
+  return `Зона №${ord}("${colorName}")`;
+}
+
+function updateAutoZoneNameColor(name, colorHex = '#22c55e') {
+  const m = String(name ?? '').trim().match(/^Зона\s*№\s*(\d+)\(".*"\)$/i);
+  if (!m) return null;
+  const ord = Number(m[1]);
+  if (!Number.isFinite(ord)) return null;
+  return `Зона №${ord}("${zoneColorNameFromHex(colorHex)}")`;
+}
+
+function nextRouteTemplateOrdinal(templates) {
+  const list = Array.isArray(templates) ? templates : [];
+  let max = 0;
+  for (const t of list) {
+    const name = String(t?.name ?? '').trim();
+    const m = name.match(/^Маршрут\s*№\s*(\d+)/i);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
+function buildAutoRouteTemplateName(templates) {
+  let ord = nextRouteTemplateOrdinal(templates);
+  const existing = new Set((Array.isArray(templates) ? templates : []).map((t) => String(t?.name ?? '').trim().toLocaleLowerCase()));
+  while (existing.has(`маршрут №${ord}`.toLocaleLowerCase())) ord += 1;
+  return `Маршрут №${ord}`;
+}
+
+function mapBackendTemplateToFrontend(template) {
+  const id = template?.id;
+  const rawPath = Array.isArray(template?.path) ? template.path : [];
+  return {
+    id: id != null ? String(id) : `tpl_${Date.now()}`,
+    name: template?.name || 'Без названия',
+    path: rawPath
+      .map((point) => (Array.isArray(point) && point.length >= 2 ? [Number(point[0]), Number(point[1])] : null))
+      .filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1])),
+    zoneId: template?.zone_id ?? template?.zoneId ?? null,
+  };
+}
+
 function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [exitingToTemplates, setExitingToTemplates] = useState(false);
-  const [missionTemplates, setMissionTemplates] = useState(() => {
-    try {
-      const raw = localStorage.getItem(MISSION_TEMPLATES_STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.map((t) => ({
-        id: t.id,
-        name: t.name || 'Без названия',
-        path: Array.isArray(t.path) ? t.path : []
-      }));
-    } catch {
-      return [];
-    }
-  });
+  const [missionTemplates, setMissionTemplates] = useState([]);
 
   const [templateEditMode, setTemplateEditMode] = useState(null);
   const [templateDraftPath, setTemplateDraftPath] = useState([]);
+  const [templateDraftShiftSegments, setTemplateDraftShiftSegments] = useState([]);
   const [templateDraftName, setTemplateDraftName] = useState('');
+  const [templateDraftZoneId, setTemplateDraftZoneId] = useState(null);
   const [noTransitionTemplateSwitch, setNoTransitionTemplateSwitch] = useState(false);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(MISSION_TEMPLATES_STORAGE_KEY, JSON.stringify(missionTemplates));
-    } catch (e) {
-      console.warn('Failed to save mission templates', e);
-    }
-  }, [missionTemplates]);
 
   useEffect(() => {
     if (!noTransitionTemplateSwitch) return;
@@ -185,55 +346,101 @@ function App() {
     return () => cancelAnimationFrame(id);
   }, [noTransitionTemplateSwitch]);
 
-  const addMissionTemplate = useCallback((template) => {
-    const id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    setMissionTemplates((prev) => [...prev, { id, name: template.name || 'Шаблон', path: template.path || [] }]);
-  }, []);
-  const updateMissionTemplate = useCallback((id, template) => {
-    setMissionTemplates((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, name: template.name ?? t.name, path: template.path ?? t.path } : t))
-    );
-  }, []);
-  const deleteMissionTemplate = useCallback((id) => {
-    setMissionTemplates((prev) => prev.filter((t) => t.id !== id));
+  const reloadMissionTemplates = useCallback(async () => {
+    const templates = await fetchRouteTemplatesFromBackend();
+    setMissionTemplates(templates.map(mapBackendTemplateToFrontend));
   }, []);
 
   const startCreateTemplate = useCallback(() => {
     setTemplateEditMode('create');
     setTemplateDraftPath([]);
+    setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
+    setTemplateDraftZoneId(null);
   }, []);
   const startEditTemplateRoute = useCallback((id) => {
     const t = missionTemplates.find((x) => x.id === id);
     if (!t) return;
     setTemplateEditMode({ type: 'edit', id });
     setTemplateDraftPath([...(t.path || [])]);
+    setTemplateDraftShiftSegments(
+      Array.isArray(t.shiftSegments)
+        ? [...new Set(t.shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+        : []
+    );
     setTemplateDraftName(t.name || '');
+    setTemplateDraftZoneId(t?.zoneId ?? null);
   }, [missionTemplates]);
   const cancelTemplateEdit = useCallback(() => {
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
+    setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
+    setTemplateDraftZoneId(null);
   }, []);
-  const saveTemplateDraft = useCallback(() => {
-    const name = templateDraftName.trim() || 'Маршрут патрулирования';
-    if (templateEditMode === 'create') {
-      addMissionTemplate({ name, path: [...templateDraftPath] });
-    } else if (templateEditMode && templateEditMode.type === 'edit') {
-      updateMissionTemplate(templateEditMode.id, { name, path: [...templateDraftPath] });
+  const saveTemplateDraft = useCallback(async () => {
+    const name = templateDraftName.trim() || buildAutoRouteTemplateName(missionTemplates);
+    const draftZoneId = templateDraftZoneId ?? activeZoneIdRef.current ?? null;
+    try {
+      if (templateEditMode === 'create') {
+        await createRouteTemplateInBackend({
+          name,
+          path: [...templateDraftPath],
+          zoneId: draftZoneId,
+        });
+      } else if (templateEditMode && templateEditMode.type === 'edit') {
+        const current = missionTemplates.find((t) => t.id === templateEditMode.id);
+        await updateRouteTemplateInBackend(templateEditMode.id, {
+          name,
+          path: [...templateDraftPath],
+          zoneId: draftZoneId ?? current?.zoneId ?? null,
+        });
+      } else {
+        return;
+      }
+      await reloadMissionTemplates();
+    } catch (err) {
+      window.alert(String(err?.message ?? err));
+      return;
     }
     setNoTransitionTemplateSwitch(true);
     setTemplateEditMode(null);
     setTemplateDraftPath([]);
+    setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
-  }, [templateEditMode, templateDraftName, templateDraftPath, addMissionTemplate, updateMissionTemplate]);
+    setTemplateDraftZoneId(null);
+  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
   const undoTemplateDraftPoint = useCallback(() => {
     setTemplateDraftPath((prev) => (prev.length ? prev.slice(0, -1) : []));
   }, []);
+
+  useEffect(() => {
+    const maxSeg = templateDraftPath.length >= 2 ? templateDraftPath.length - 2 : -1;
+    setTemplateDraftShiftSegments((prev) => {
+      if (!Array.isArray(prev) || !prev.length) return prev;
+      if (maxSeg < 0) return [];
+      const next = prev.filter((i) => i >= 0 && i <= maxSeg);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [templateDraftPath]);
+
+  const toggleTemplateDraftShiftSegment = useCallback((segmentIndex) => {
+    const n = templateDraftPath.length;
+    if (n < 2 || !Number.isInteger(segmentIndex)) return;
+    if (segmentIndex < 0 || segmentIndex > n - 2) return;
+    setTemplateDraftShiftSegments((prev) => {
+      const cur = Array.isArray(prev) ? [...prev] : [];
+      const j = cur.indexOf(segmentIndex);
+      if (j >= 0) cur.splice(j, 1);
+      else cur.push(segmentIndex);
+      cur.sort((a, b) => a - b);
+      return cur;
+    });
+  }, [templateDraftPath]);
 
   const [templateToApplyId, setTemplateToApplyId] = useState(null);
   const computeMissionParamsFromPath = useCallback((path, maxSpeed = 70, battery = 100) => {
@@ -323,7 +530,8 @@ function App() {
   const [drawRectZoneMode, setDrawRectZoneMode] = useState(false);
   const [draftRectBoundary, setDraftRectBoundary] = useState(null);
   const [editingZoneId, setEditingZoneId] = useState(null);
-  const [newRectZoneName, setNewRectZoneName] = useState('Зона (прямоугольник)');
+  const [newRectZoneName, setNewRectZoneName] = useState('');
+  const [draftRectZoneColor, setDraftRectZoneColor] = useState('#22c55e');
   const [rectZoneBusy, setRectZoneBusy] = useState(false);
 
   useEffect(() => {
@@ -348,23 +556,59 @@ function App() {
         .map((z) => ({
           id: z.id,
           boundary: z.boundary,
-          color: /^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(z.id)]) ? zoneColorsById[String(z.id)] : '#22c55e',
+          color:
+            (typeof z?.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(z.color))
+              ? z.color
+              : (/^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(z.id)]) ? zoneColorsById[String(z.id)] : '#22c55e'),
           isActive: z.id === activeZoneId,
         })),
     [backendZones, zoneColorsById, activeZoneId]
   );
   const activeZoneColor = useMemo(() => {
     if (activeZoneId == null) return '#22c55e';
+    const backendColor = backendZones.find((z) => String(z.id) === String(activeZoneId))?.color;
+    if (typeof backendColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(backendColor)) {
+      return backendColor;
+    }
     const saved = zoneColorsById[String(activeZoneId)];
     return /^#[0-9a-fA-F]{6}$/.test(saved) ? saved : '#22c55e';
-  }, [activeZoneId, zoneColorsById]);
+  }, [activeZoneId, zoneColorsById, backendZones]);
 
+  const workZoneReady = useMemo(
+    () => Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4,
+    [activeZoneBoundary]
+  );
+  const templateUsageByZoneId = useMemo(() => {
+    const byId = {};
+    const zones = Array.isArray(backendZones) ? backendZones : [];
+    const templates = Array.isArray(missionTemplates) ? missionTemplates : [];
+    for (const t of templates) {
+      const zid = t?.zoneId ?? inferZoneIdForTemplatePath(t?.path, zones);
+      if (zid == null) continue;
+      const key = String(zid);
+      byId[key] = Number(byId[key] || 0) + 1;
+    }
+    return byId;
+  }, [backendZones, missionTemplates]);
+
+  useEffect(() => {
+    if (!Array.isArray(backendZones) || backendZones.length === 0) return;
+    setMissionTemplates((prev) => {
+      let changed = false;
+      const next = prev.map((t) => {
+        if (t?.zoneId != null) return t;
+        const inferred = inferZoneIdForTemplatePath(t?.path, backendZones);
+        if (inferred == null) return t;
+        changed = true;
+        return { ...t, zoneId: inferred };
+      });
+      return changed ? next : prev;
+    });
+  }, [backendZones]);
   useEffect(() => {
     try {
       localStorage.setItem(ZONE_COLORS_STORAGE_KEY, JSON.stringify(zoneColorsById));
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }, [zoneColorsById]);
 
   useEffect(() => {
@@ -373,12 +617,16 @@ function App() {
     setZoneColorsById((prev) => {
       let changed = false;
       const next = {};
-      Object.entries(prev).forEach(([id, color]) => {
-        if (validIds.has(id)) {
-          next[id] = color;
-        } else {
-          changed = true;
-        }
+      backendZones.forEach((z) => {
+        const id = String(z.id);
+        const backendColor = typeof z?.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(z.color) ? z.color : null;
+        const localColor = prev[id];
+        const resolved = backendColor ?? (typeof localColor === 'string' ? localColor : '#22c55e');
+        next[id] = resolved;
+        if (prev[id] !== resolved) changed = true;
+      });
+      Object.keys(prev).forEach((id) => {
+        if (!validIds.has(id)) changed = true;
       });
       return changed ? next : prev;
     });
@@ -402,7 +650,9 @@ function App() {
         const backendDrones = await fetchDronesFromBackend();
         try {
           const zones = await fetchZonesFromBackend();
+          const templates = await fetchRouteTemplatesFromBackend();
           setBackendZones(zones);
+          setMissionTemplates(templates.map(mapBackendTemplateToFrontend));
           let userId = null;
           try {
             const raw = localStorage.getItem('api_user');
@@ -410,9 +660,7 @@ function App() {
               const me = JSON.parse(raw);
               if (me?.id != null) userId = me.id;
             }
-          } catch {
-            /* ignore */
-          }
+          } catch {}
           if (userId == null) {
             const users = await fetchUsersFromBackend();
             if (users.length > 0) userId = users[0].id;
@@ -474,13 +722,20 @@ function App() {
   const [weatherFlightReasons, setWeatherFlightReasons] = useState([]);
   const activeTimersRef = useRef(new Map());
 
-  // throttle: не шлём телеметрию чаще чем раз в TELEMETRY_SEND_EVERY_MS
   const telemetryLastSentAtRef = useRef(new Map());
-  // защита от параллельных запросов
   const telemetrySendingRef = useRef(new Map());
 
   const videoRecordingByDroneRef = useRef(new Map());
+  const videoRecorderConfigByDroneRef = useRef(new Map());
   const videoUploadInProgressRef = useRef(new Map());
+  const videoSplitInProgressRef = useRef(new Map());
+  const videoRowSplitStateRef = useRef(new Map());
+
+  const toNormalizedShiftSegments = (droneId) => {
+    const raw = routeShiftSegmentsByDroneId[String(droneId)];
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(raw.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b);
+  };
 
   const stopVideoRecordingForDrone = async (droneId) => {
     const rec = videoRecordingByDroneRef.current.get(droneId);
@@ -492,9 +747,7 @@ function App() {
       if (rec?.recorder && rec.recorder.state !== 'inactive') {
         rec.recorder.stop();
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
 
     try {
       return await rec.blobPromise;
@@ -504,20 +757,63 @@ function App() {
     }
   };
 
-  const uploadVideoMultipartForMission = async ({ missionId, droneId, blob }) => {
+  const startVideoRecordingChunkForDrone = useCallback((droneId) => {
+    const cfg = videoRecorderConfigByDroneRef.current.get(droneId);
+    if (!cfg?.stream) return false;
+
+    const recorder = cfg.mimeType ? new MediaRecorder(cfg.stream, { mimeType: cfg.mimeType }) : new MediaRecorder(cfg.stream);
+    const chunks = [];
+
+    let resolveBlob;
+    const blobPromise = new Promise((resolve) => {
+      resolveBlob = resolve;
+    });
+
+    recorder.ondataavailable = (e) => {
+      if (e?.data && e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      const blobType = VIDEO_BACKEND_CONTENT_TYPE;
+      const blob = new Blob(chunks, { type: blobType });
+      resolveBlob(blob);
+    };
+
+    recorder.start(1000);
+    videoRecordingByDroneRef.current.set(droneId, { recorder, blobPromise });
+    return true;
+  }, []);
+
+  const uploadVideoMultipartForMission = async ({
+    missionId,
+    droneId,
+    blob,
+    rowIndex = null,
+    rowsCount = null,
+    shiftSegmentIndices = null,
+  }) => {
     if (missionId == null) return;
     if (!blob || blob.size <= 0) return;
     if (videoUploadInProgressRef.current.get(droneId)) return;
 
     videoUploadInProgressRef.current.set(droneId, true);
     try {
-      const filename = `mission_${missionId}_drone_${droneId}_${Date.now()}.webm`;
+      const normalizedShiftSegments = Array.isArray(shiftSegmentIndices)
+        ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+        : toNormalizedShiftSegments(droneId);
+      const derivedRowsCount = Number.isInteger(rowsCount) && rowsCount > 0
+        ? rowsCount
+        : (normalizedShiftSegments.length + 1);
+      const filenameRowSuffix = Number.isInteger(rowIndex) && rowIndex > 0 ? `_row_${rowIndex}` : '';
+      const filename = `mission_${missionId}_drone_${droneId}${filenameRowSuffix}_${Date.now()}.webm`;
       const init = await multipartInitForVideo({
         missionId,
         filename,
         byteSize: blob.size,
         contentType: VIDEO_BACKEND_CONTENT_TYPE,
         chunkSizeBytes: VIDEO_MULTIPART_CHUNK_SIZE_BYTES,
+        rowIndex,
+        rowsCount: derivedRowsCount,
+        shiftSegmentIndices: normalizedShiftSegments,
       });
 
       const uploadSessionId = init?.upload_session_id;
@@ -586,13 +882,72 @@ function App() {
     if (!d?.path?.length) return [];
     return d.path;
   }, [drones, selectedDroneForSidebar]);
+
+  const [routeShiftSegmentsByDroneId, setRouteShiftSegmentsByDroneId] = useState({});
+
+  const selectedRouteShiftSegments = useMemo(() => {
+    if (selectedDroneForSidebar == null) return [];
+    const raw = routeShiftSegmentsByDroneId[String(selectedDroneForSidebar)];
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(raw.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b);
+  }, [routeShiftSegmentsByDroneId, selectedDroneForSidebar]);
+
+  useEffect(() => {
+    if (selectedDroneForSidebar == null) return;
+    const drone = drones.find((d) => d.id === selectedDroneForSidebar);
+    const len = drone?.path?.length ?? 0;
+    const maxSeg = len >= 2 ? len - 2 : -1;
+    const id = String(selectedDroneForSidebar);
+    setRouteShiftSegmentsByDroneId((prev) => {
+      const cur = prev[id];
+      if (!Array.isArray(cur) || !cur.length) return prev;
+      if (maxSeg < 0) {
+        if (!cur.length) return prev;
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      }
+      const next = cur.filter((i) => i >= 0 && i <= maxSeg);
+      if (next.length === cur.length) return prev;
+      const copy = { ...prev };
+      if (!next.length) delete copy[id];
+      else copy[id] = next;
+      return copy;
+    });
+  }, [drones, selectedDroneForSidebar]);
+
+  const toggleRouteShiftSegment = useCallback(
+    (segmentIndex) => {
+      if (selectedDroneForSidebar == null) return;
+      const drone = drones.find((d) => d.id === selectedDroneForSidebar);
+      const n = drone?.path?.length ?? 0;
+      if (n < 2 || !Number.isInteger(segmentIndex)) return;
+      if (segmentIndex < 0 || segmentIndex > n - 2) return;
+      const id = String(selectedDroneForSidebar);
+      setRouteShiftSegmentsByDroneId((prev) => {
+        const cur = [...(prev[id] || [])];
+        const j = cur.indexOf(segmentIndex);
+        if (j >= 0) cur.splice(j, 1);
+        else cur.push(segmentIndex);
+        cur.sort((a, b) => a - b);
+        return { ...prev, [id]: cur };
+      });
+    },
+    [selectedDroneForSidebar, drones]
+  );
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parkingOpen, setParkingOpen] = useState(false);
+  const [workspaceTourOpen, setWorkspaceTourOpen] = useState(false);
+  const [workspaceOnboardingStepId, setWorkspaceOnboardingStepId] = useState(null);
 
-  const createDroneFromParking = useCallback(async () => {
+  const createDroneFromParking = useCallback(async (nameFromModal) => {
+    const suffix = `${Date.now()}`.slice(-6);
+    const trimmed =
+      typeof nameFromModal === 'string' ? nameFromModal.trim().slice(0, 120) : '';
+    const name = trimmed.length > 0 ? trimmed : `Дрон ${suffix}`;
     try {
-      const suffix = `${Date.now()}`.slice(-6);
-      await createDroneInBackend({ name: `Дрон ${suffix}`, model: 'DJI Mavic 3', battery: 100, status: 'idle' });
+      await createDroneInBackend({ name, model: 'DJI Mavic 3', battery: 100, status: 'idle' });
       const backendDrones = await fetchDronesFromBackend();
       if (backendDrones.length > 0) {
         setDrones(backendDrones.map(mapBackendDroneToFrontend));
@@ -603,6 +958,7 @@ function App() {
       }
     } catch (e) {
       console.warn('createDroneFromParking failed:', e?.message ?? e);
+      throw e;
     }
   }, []);
 
@@ -650,7 +1006,6 @@ function App() {
       })
     );
     setSelectedDroneForSidebar(droneToPlace);
-    setMapCenter([positionToSet.lat, positionToSet.lng]);
     setPlacementMode(false);
     setDroneToPlace(null);
     addToGlobalLog(droneToPlace, `🛸 Дрон "${drone.name}" размещен на карте`, {
@@ -712,27 +1067,16 @@ function App() {
     if (drawRectZoneMode) {
       return;
     }
+    if (editingZoneId != null || draftRectBoundary?.length) {
+      setEditingZoneId(null);
+      setDraftRectBoundary(null);
+      return;
+    }
     if (templateEditMode) {
       if (!Array.isArray(activeZoneBoundary) || activeZoneBoundary.length < 4) {
         return;
       }
       if (!isPointInsideZoneBoundary(activeZoneBoundary, latlng)) {
-        return;
-      }
-      const snappedPointIndex = templateDraftPath.findIndex((point) => {
-        if (!Array.isArray(point) || point.length < 2) return false;
-        return calculateDistance(latlng.lat, latlng.lng, point[0], point[1]) <= ROUTE_LOOP_SNAP_THRESHOLD_M;
-      });
-      if (snappedPointIndex === 0 && templateDraftPath.length >= 3) {
-        const loopPoint = templateDraftPath[snappedPointIndex];
-        const lastPoint = templateDraftPath[templateDraftPath.length - 1];
-        const alreadyClosed =
-          Array.isArray(lastPoint) &&
-          lastPoint[0] === loopPoint[0] &&
-          lastPoint[1] === loopPoint[1];
-        if (!alreadyClosed) {
-          setTemplateDraftPath((prev) => [...prev, [loopPoint[0], loopPoint[1]]]);
-        }
         return;
       }
       addTemplateDraftPoint(latlng);
@@ -751,46 +1095,6 @@ function App() {
         }
         if (!isPointInsideZoneBoundary(activeZoneBoundary, latlng)) {
           addToDroneLog(selectedDroneForSidebar, '⚠️ Точку можно поставить только внутри активной зоны');
-          return;
-        }
-        const path = Array.isArray(drone.path) ? drone.path : [];
-        const snappedPointIndex = path.findIndex((point) => {
-          if (!Array.isArray(point) || point.length < 2) return false;
-          return calculateDistance(latlng.lat, latlng.lng, point[0], point[1]) <= ROUTE_LOOP_SNAP_THRESHOLD_M;
-        });
-
-        if (snappedPointIndex === 0 && path.length >= 3) {
-          const loopPoint = path[snappedPointIndex];
-          const lastPoint = path[path.length - 1];
-          const alreadyClosed =
-            Array.isArray(lastPoint) &&
-            lastPoint[0] === loopPoint[0] &&
-            lastPoint[1] === loopPoint[1];
-          if (!alreadyClosed) {
-            setDrones((prev) =>
-              prev.map((d) =>
-                d.id === selectedDroneForSidebar
-                  ? { ...d, path: [...d.path, [loopPoint[0], loopPoint[1]]] }
-                  : d
-              )
-            );
-            setTimeout(() => {
-              const missionParams = calculateMissionParameters(selectedDroneForSidebar);
-              if (missionParams) {
-                setDrones((prev) =>
-                  prev.map((d) =>
-                    d.id === selectedDroneForSidebar
-                      ? { ...d, missionParameters: missionParams }
-                      : d
-                  )
-                );
-              }
-            }, 0);
-          }
-          addToDroneLog(selectedDroneForSidebar, '🔁 Маршрут закольцован', {
-            pointNumber: snappedPointIndex + 1,
-          });
-          setIsRouteEditMode(false);
           return;
         }
         addRoutePoint(selectedDroneForSidebar, latlng);
@@ -900,9 +1204,15 @@ function App() {
       setIsRouteEditMode(false);
       return;
     }
-    if (!selectedDroneForSidebar) return;
+    if (!selectedDroneForSidebar) {
+      addToZoneLog('ℹ️ Сначала выберите дрон в списке панели (шаг 2).');
+      return;
+    }
     if (!Array.isArray(activeZoneBoundary) || activeZoneBoundary.length < 4) {
-      addToDroneLog(selectedDroneForSidebar, '⚠️ Сначала выберите или создайте активную зону');
+      addToDroneLog(
+        selectedDroneForSidebar,
+        '⚠️ Нужна активная зона с контуром на карте (шаг 1: меню зон слева или создание зоны).'
+      );
       return;
     }
     setIsRouteEditMode(true);
@@ -942,34 +1252,6 @@ function App() {
     );
     addToDroneLog(droneId, '🗑️ Маршрут очищен');
   };
-
-  const unloopRoute = useCallback((droneId) => {
-    if (!droneId) droneId = selectedDroneForSidebar;
-    if (!droneId) return;
-    const drone = drones.find((d) => d.id === droneId);
-    const path = drone?.path;
-    if (!Array.isArray(path) || path.length < 2) return;
-    const last = path[path.length - 1];
-    const loopIndex = path.slice(0, -1).findIndex((p) => Array.isArray(p) && p[0] === last?.[0] && p[1] === last?.[1]);
-    if (loopIndex < 0) return;
-
-    const nextPath = path.slice(0, -1);
-    const missionParams = computeMissionParamsFromPath(nextPath, drone.maxSpeed, drone.battery);
-    setDrones((prev) =>
-      prev.map((d) =>
-        d.id === droneId
-          ? {
-              ...d,
-              path: nextPath,
-              missionParameters: missionParams ?? d.missionParameters,
-            }
-          : d
-      )
-    );
-    addToDroneLog(droneId, '↔️ Маршрут разомкнут', {
-      fromPoint: loopIndex + 1,
-    });
-  }, [drones, selectedDroneForSidebar, computeMissionParamsFromPath]);
 
   const calculateMissionParameters = (droneId) => {
     const drone = drones.find(d => d.id === droneId);
@@ -1093,9 +1375,7 @@ function App() {
         const me = JSON.parse(raw);
         if (me?.id != null) userId = me.id;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     if (userId == null) {
       const users = await fetchUsersFromBackend();
       if (!users.length) {
@@ -1132,7 +1412,6 @@ function App() {
         mission = await createOnce();
       } catch (e) {
         const msg = String(e?.message ?? e);
-        // Если на бэке осталась активная/запланированная миссия — отменяем и пробуем ещё раз.
         if (msg.includes('уже назначен')) {
           try {
             const active = await fetchActiveMissionsForDrone(drone.id);
@@ -1197,6 +1476,16 @@ function App() {
     }
   }, []);
 
+  const isDroneAtMissionStart = useCallback((drone) => {
+    if (!drone?.path || drone.path.length < 2 || !drone.position) return false;
+    const first = drone.path[0];
+    if (!Array.isArray(first) || first.length < 2) return false;
+    return (
+      calculateDistance(drone.position.lat, drone.position.lng, first[0], first[1]) <=
+      FIRST_WAYPOINT_TRANSIT_THRESHOLD_M
+    );
+  }, []);
+
   const startDroneFlight = useCallback((droneId) => {
     const drone = drones.find(d => d.id === droneId);
     if (!drone || !drone.path || drone.path.length < 2) {
@@ -1209,20 +1498,12 @@ function App() {
       return;
     }
 
-    const firstWaypoint = drone.path[0];
-    const needTransitToFirst =
-      drone.position &&
-      firstWaypoint &&
-      calculateDistance(
-        drone.position.lat,
-        drone.position.lng,
-        firstWaypoint[0],
-        firstWaypoint[1]
-      ) > FIRST_WAYPOINT_TRANSIT_THRESHOLD_M;
+    if (!isDroneAtMissionStart(drone)) {
+      console.warn('Start flight blocked: drone must be at first waypoint');
+      return;
+    }
 
-    const flightPath = needTransitToFirst
-      ? [[drone.position.lat, drone.position.lng], ...drone.path]
-      : drone.path;
+    const flightPath = drone.path;
 
     const missionParams = computeMissionParamsFromPath(
       flightPath,
@@ -1242,16 +1523,14 @@ function App() {
       setIsRouteEditMode(false);
     }
 
-    const alreadyAtFirstPoint = !needTransitToFirst;
-
     setDrones(prev =>
       prev.map(d => {
         if (d.id !== droneId) return d;
         return {
           ...d,
-          flightStatus: alreadyAtFirstPoint ? flightStatus.FLYING : flightStatus.TAKEOFF,
+          flightStatus: flightStatus.FLYING,
           isFlying: true,
-          altitude: alreadyAtFirstPoint ? 100 : 50,
+          altitude: 100,
           currentMission: {
             startTime: new Date().toISOString(),
             totalWaypoints: d.path.length,
@@ -1276,42 +1555,9 @@ function App() {
       totalDistance: missionParams.totalDistance,
       estimatedTime: missionParams.estimatedTime
     });
-    // Не PATCH в in_mission до POST /missions: backend требует idle при создании миссии;
-    // in_mission выставляет start! на сервере.
     void createAndStartBackendMission(drone, drone.path);
-    if (needTransitToFirst) {
-      const transitDist = Math.round(
-        calculateDistance(
-          drone.position.lat,
-          drone.position.lng,
-          firstWaypoint[0],
-          firstWaypoint[1]
-        )
-      );
-      addToDroneLog(droneId, '📍 Перелёт до первой точки миссии', {
-        distance: `${transitDist} м`
-      });
-    }
-
-    if (alreadyAtFirstPoint) {
-      addToDroneLog(droneId, '🛸 Дрон уже в воздухе — начало маршрута');
-      setTimeout(() => startFlightMovement(droneId), 0);
-    } else {
-      setTimeout(() => {
-        setDrones(prev =>
-          prev.map(d => {
-            if (d.id !== droneId) return d;
-            return {
-              ...d,
-              flightStatus: flightStatus.FLYING,
-              altitude: 100
-            };
-          })
-        );
-        addToDroneLog(droneId, '🛫 Взлет выполнен', { altitude: 100 });
-        startFlightMovement(droneId);
-      }, 2000);
-    }
+    addToDroneLog(droneId, '🛸 Старт с первой точки маршрута');
+    setTimeout(() => startFlightMovement(droneId), 0);
   }, [
     drones,
     selectedDroneForSidebar,
@@ -1319,6 +1565,7 @@ function App() {
     addToDroneLog,
     computeMissionParamsFromPath,
     createAndStartBackendMission,
+    isDroneAtMissionStart,
   ]);
 
   const startFlightMovement = (droneId) => {
@@ -1342,8 +1589,6 @@ function App() {
     telemetryLastSentAtRef.current.set(droneId, 0);
     telemetrySendingRef.current.set(droneId, false);
 
-    // Запуск видеозаписи "полного видео" миссии (синтетический HUD на canvas),
-    // чтобы затем прогнать multipart upload.
     let videoCtx = null;
     try {
       if (typeof document !== 'undefined' && typeof MediaRecorder !== 'undefined' && document.createElement) {
@@ -1355,38 +1600,28 @@ function App() {
         if (ctx && canvas.captureStream) {
           videoCtx = ctx;
           const stream = canvas.captureStream(VIDEO_RECORDING_FPS);
-
           const recorderMimeType = VIDEO_RECORDER_MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported?.(m)) ?? '';
-          const options = recorderMimeType ? { mimeType: recorderMimeType } : undefined;
-
-          const recorder = new MediaRecorder(stream, options);
-          const chunks = [];
-
-          let resolveBlob;
-          const blobPromise = new Promise((resolve) => {
-            resolveBlob = resolve;
+          videoRecorderConfigByDroneRef.current.set(droneId, {
+            stream,
+            mimeType: recorderMimeType || null,
           });
-
-          recorder.ondataavailable = (e) => {
-            if (e?.data && e.data.size > 0) chunks.push(e.data);
-          };
-          recorder.onstop = () => {
-            const blobType = VIDEO_BACKEND_CONTENT_TYPE;
-            const blob = new Blob(chunks, { type: blobType });
-            resolveBlob(blob);
-          };
-
-          recorder.start(1000); // chunks every 1s
-          videoRecordingByDroneRef.current.set(droneId, {
-            recorder,
-            blobPromise,
-          });
+          startVideoRecordingChunkForDrone(droneId);
         }
       }
     } catch (e) {
-      // recording is optional; don't break flight sim
       console.warn('Video recording init failed:', e?.message ?? e);
     }
+
+    const shiftSegments = toNormalizedShiftSegments(droneId);
+    const rowsCount = shiftSegments.length + 1;
+    videoRowSplitStateRef.current.set(droneId, {
+      shiftSegments,
+      rowsCount,
+      currentRowIndex: 1,
+      lastSplitSegmentIndex: null,
+      missionId: backendMissionIdsRef.current.get(droneId) ?? null,
+    });
+    videoSplitInProgressRef.current.set(droneId, false);
 
     const timerId = setInterval(() => {
       const currentDrone = dronesRef.current.find(d => d.id === droneId);
@@ -1433,8 +1668,45 @@ function App() {
       const segmentCount = pathForFlight.length - 1;
 
       const missionId = backendMissionIdsRef.current.get(droneId);
+      const rowSplitState = videoRowSplitStateRef.current.get(droneId);
+      if (rowSplitState) {
+        rowSplitState.missionId = missionId ?? rowSplitState.missionId;
+      }
       const batteryDrain = (missionParams.batteryConsumption * elapsedTime) / missionParams.totalTime;
       const remainingBattery = Math.max(0, 100 - batteryDrain);
+
+      if (
+        rowSplitState &&
+        rowSplitState.shiftSegments.includes(currentSegment) &&
+        rowSplitState.lastSplitSegmentIndex !== currentSegment &&
+        !videoSplitInProgressRef.current.get(droneId)
+      ) {
+        rowSplitState.lastSplitSegmentIndex = currentSegment;
+        videoSplitInProgressRef.current.set(droneId, true);
+        void (async () => {
+          try {
+            const finishedRowIndex = rowSplitState.currentRowIndex;
+            const blob = await stopVideoRecordingForDrone(droneId);
+            if (rowSplitState.missionId && blob) {
+              await uploadVideoMultipartForMission({
+                missionId: rowSplitState.missionId,
+                droneId,
+                blob,
+                rowIndex: finishedRowIndex,
+                rowsCount: rowSplitState.rowsCount,
+                shiftSegmentIndices: rowSplitState.shiftSegments,
+              });
+            }
+            rowSplitState.currentRowIndex = finishedRowIndex + 1;
+            startVideoRecordingChunkForDrone(droneId);
+            addToDroneLog(droneId, `🎞️ Ряд ${finishedRowIndex} сохранён, начат ряд ${rowSplitState.currentRowIndex}`);
+          } catch (e) {
+            console.warn('Row split upload failed:', e?.message ?? e);
+          } finally {
+            videoSplitInProgressRef.current.set(droneId, false);
+          }
+        })();
+      }
 
       const totalProgressForVideo = segmentCount > 0
         ? ((currentSegment + clampedProgress) / segmentCount) * 100
@@ -1462,9 +1734,7 @@ function App() {
           videoCtx.fillRect(barX, barY, barW, barH);
           videoCtx.fillStyle = 'rgba(34, 197, 94, 0.9)';
           videoCtx.fillRect(barX, barY, barW * pct, barH);
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
 
       const lastSentAt = telemetryLastSentAtRef.current.get(droneId) ?? 0;
@@ -1569,8 +1839,14 @@ function App() {
         })
       );
       addToDroneLog(droneId, '📍 Дрон завис над первой точкой. Нажмите «Запустить миссию».');
-      // Останавливаем видео, но не загружаем (миссия ещё не завершена).
       void stopVideoRecordingForDrone(droneId).catch(() => {});
+      videoRowSplitStateRef.current.delete(droneId);
+      videoSplitInProgressRef.current.delete(droneId);
+      videoRecorderConfigByDroneRef.current.delete(droneId);
+      void syncDroneStateToBackend(droneId, { status: 'idle' }).catch((e) =>
+        console.warn('PATCH drone (долёт до старта):', e?.message ?? e)
+      );
+      void completeBackendMissionForDrone(droneId);
       return;
     }
 
@@ -1618,8 +1894,8 @@ function App() {
 
       addToDroneLog(droneId, '✅ Миссия завершена успешно');
 
-      // Видео multipart: сервер примет media только когда миссия in_progress/completed.
       const missionIdForUpload = backendMissionIdsRef.current.get(droneId);
+      const rowSplitState = videoRowSplitStateRef.current.get(droneId);
       const blob = await stopVideoRecordingForDrone(droneId);
 
       void syncDroneStateToBackend(droneId, { status: 'idle' }).catch((e) =>
@@ -1633,11 +1909,17 @@ function App() {
             missionId: missionIdForUpload,
             droneId,
             blob,
+            rowIndex: rowSplitState?.currentRowIndex ?? null,
+            rowsCount: rowSplitState?.rowsCount ?? null,
+            shiftSegmentIndices: rowSplitState?.shiftSegments ?? null,
           });
         } catch (e) {
           console.warn('Video multipart upload failed:', e?.message ?? e);
         }
       }
+      videoRowSplitStateRef.current.delete(droneId);
+      videoSplitInProgressRef.current.delete(droneId);
+      videoRecorderConfigByDroneRef.current.delete(droneId);
     }, 3000);
   };
 
@@ -1673,8 +1955,10 @@ function App() {
     );
     void cancelBackendMissionForDrone(droneId);
 
-    // В случае принудительной остановки видео не загружаем (медиа допускается только для in_progress/completed).
     void stopVideoRecordingForDrone(droneId).catch(() => {});
+    videoRowSplitStateRef.current.delete(droneId);
+    videoSplitInProgressRef.current.delete(droneId);
+    videoRecorderConfigByDroneRef.current.delete(droneId);
   };
 
   const pauseDroneFlight = (droneId) => {
@@ -1804,9 +2088,10 @@ function App() {
         })
       );
       addToDroneLog(droneId, '🛫 Взлёт выполнен');
+      void createAndStartBackendMission(drone, flightPath);
       startFlightMovement(droneId);
     }, 2000);
-  }, [drones]);
+  }, [drones, addToDroneLog, createAndStartBackendMission]);
 
   const stopAllFlights = () => {
     drones.forEach(drone => {
@@ -1857,7 +2142,10 @@ function App() {
     telemetrySendingRef.current = new Map();
 
     videoRecordingByDroneRef.current = new Map();
+    videoRecorderConfigByDroneRef.current = new Map();
     videoUploadInProgressRef.current = new Map();
+    videoSplitInProgressRef.current = new Map();
+    videoRowSplitStateRef.current = new Map();
   }, []);
 
   const toggleDrawRectZoneMode = useCallback(() => {
@@ -1868,19 +2156,31 @@ function App() {
     }
     setEditingZoneId(null);
     setDraftRectBoundary(null);
-    setNewRectZoneName('Зона (прямоугольник)');
+    setNewRectZoneName('');
+    setDraftRectZoneColor(activeZoneColor);
     setDrawRectZoneMode(true);
-  }, [drawRectZoneMode]);
+  }, [drawRectZoneMode, activeZoneColor]);
 
   const cancelDraftRectZone = useCallback(() => {
     setEditingZoneId(null);
     setDraftRectBoundary(null);
     setDrawRectZoneMode(false);
-    setNewRectZoneName('Зона (прямоугольник)');
-  }, []);
+    setNewRectZoneName('');
+    setDraftRectZoneColor(activeZoneColor);
+  }, [activeZoneColor]);
 
   const handleDraftRectBoundaryChange = useCallback((nextBoundary) => {
     setDraftRectBoundary(nextBoundary ?? null);
+  }, []);
+
+  const handleDraftRectZoneColorChange = useCallback((e) => {
+    const nextColor = e.target.value;
+    if (!/^#[0-9a-fA-F]{6}$/.test(nextColor)) return;
+    setDraftRectZoneColor(nextColor);
+    setNewRectZoneName((prev) => {
+      const updated = updateAutoZoneNameColor(prev, nextColor);
+      return updated ?? prev;
+    });
   }, []);
 
   const handleRectDrawComplete = useCallback(() => {
@@ -1899,38 +2199,67 @@ function App() {
       backendContextRef.current = { userId: u, zoneId: targetZoneId };
     }
     setEditingZoneId(targetZoneId);
-    setNewRectZoneName(targetZone?.name ?? 'Зона (прямоугольник)');
+    setNewRectZoneName(targetZone?.name ?? '');
+    setDraftRectZoneColor(/^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(targetZoneId)]) ? zoneColorsById[String(targetZoneId)] : '#22c55e');
     setDraftRectBoundary(boundary.map(([lng, lat]) => [lng, lat]));
-  }, [activeZoneId, backendZones, drawRectZoneMode, templateEditMode, placementMode, isRouteEditMode]);
+  }, [activeZoneId, backendZones, drawRectZoneMode, templateEditMode, placementMode, isRouteEditMode, zoneColorsById]);
 
   const saveDraftRectZone = useCallback(async () => {
     if (!draftRectBoundary?.length) return;
+    let targetEditingZoneId = editingZoneId;
+    if (templateEditMode === 'create' && targetEditingZoneId == null && templateDraftZoneId != null) {
+      window.alert(
+        'Для этого шаблона зона уже создана. Можно редактировать текущую зону, но нельзя создать вторую.'
+      );
+      return;
+    }
     setRectZoneBusy(true);
     try {
-      if (editingZoneId != null) {
-        const nextName = newRectZoneName.trim() || 'Зона (прямоугольник)';
-        await updateZoneWithBoundary(editingZoneId, draftRectBoundary, nextName);
+      if (targetEditingZoneId != null) {
+        const currentZoneName =
+          backendZones.find((z) => String(z?.id) === String(targetEditingZoneId))?.name ?? '';
+        const nextName = newRectZoneName.trim() || currentZoneName || `Зона №${targetEditingZoneId}("${zoneColorNameFromHex(draftRectZoneColor)}")`;
+        const duplicate = backendZones.some(
+          (z) =>
+            String(z?.id) !== String(targetEditingZoneId) &&
+            normalizeZoneName(z?.name) === normalizeZoneName(nextName)
+        );
+        if (duplicate) {
+          window.alert(`Зона с именем «${nextName}» уже существует. Укажите другое название.`);
+          return;
+        }
+        await updateZoneWithBoundary(targetEditingZoneId, draftRectBoundary, nextName, draftRectZoneColor);
         const zones = await fetchZonesFromBackend();
         setBackendZones(zones);
-        const updatedZone = zones.find((z) => z.id === editingZoneId);
+        const updatedZone = zones.find((z) => z.id === targetEditingZoneId);
         addToZoneLog('🛠️ Граница зоны изменена', {
-          zoneId: editingZoneId,
-          zoneName: updatedZone?.name ?? `ID ${editingZoneId}`,
+          zoneId: targetEditingZoneId,
+          zoneName: updatedZone?.name ?? `ID ${targetEditingZoneId}`,
         });
-        setActiveZoneId(editingZoneId);
+        setZoneColorsById((prev) => ({ ...prev, [String(targetEditingZoneId)]: draftRectZoneColor }));
+        setActiveZoneId(targetEditingZoneId);
+        if (templateEditMode === 'create') setTemplateDraftZoneId(targetEditingZoneId);
         setEditingZoneId(null);
         setDraftRectBoundary(null);
         setNewRectZoneName(updatedZone?.name ?? nextName);
         return;
       }
 
-      const name = newRectZoneName.trim() || 'Зона (прямоугольник)';
-      const created = await createZoneWithBoundary({ name, boundary: draftRectBoundary });
+      const rawName = newRectZoneName.trim();
+      const existingNames = new Set(backendZones.map((z) => normalizeZoneName(z?.name)));
+      if (rawName && existingNames.has(normalizeZoneName(rawName))) {
+        window.alert(`Зона с именем «${rawName}» уже существует. Укажите другое название.`);
+        return;
+      }
+      const name = rawName || buildAutoZoneName(backendZones, draftRectZoneColor);
+      const created = await createZoneWithBoundary({ name, boundary: draftRectBoundary, color: draftRectZoneColor });
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
       const newId = created?.id;
       if (newId != null) {
+        setZoneColorsById((prev) => ({ ...prev, [String(newId)]: draftRectZoneColor }));
         setActiveZoneId(newId);
+        if (templateEditMode === 'create') setTemplateDraftZoneId(newId);
         const u = backendContextRef.current.userId;
         if (u != null) {
           backendContextRef.current = { userId: u, zoneId: newId };
@@ -1948,10 +2277,23 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog]);
+  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, templateDraftZoneId, backendZones, activeZoneId, draftRectZoneColor]);
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
+    const usageCount = Number(templateUsageByZoneId[String(activeZoneId)] || 0);
+    if (usageCount > 0) {
+      const zoneName = backendZones.find((z) => z.id === activeZoneId)?.name ?? `ID ${activeZoneId}`;
+      addToZoneLog('⛔ Нельзя удалить зону: она используется в шаблонах', {
+        zoneId: activeZoneId,
+        zoneName,
+        templates: usageCount,
+      });
+      window.alert(
+        `Нельзя удалить зону «${zoneName}»: она используется в ${usageCount} шаблон(ах).\nУдаляйте/переносите шаблоны только в меню шаблонов.`
+      );
+      return;
+    }
     const targetZone = backendZones.find((z) => z.id === activeZoneId);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${activeZoneId}`;
     const confirmed = window.confirm(`Удалить зону ${title}? Это действие нельзя отменить.`);
@@ -1981,7 +2323,95 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [activeZoneId, backendZones, addToZoneLog]);
+  }, [activeZoneId, backendZones, addToZoneLog, templateUsageByZoneId]);
+
+  const handleDeleteTemplateFromMenu = useCallback(async (templateId, mode = 'route_only') => {
+    const template = missionTemplates.find((t) => t.id === templateId);
+    if (!template) return;
+    const resolveTemplateZoneId = (tpl) =>
+      tpl?.zoneId ?? inferZoneIdForTemplatePath(tpl?.path, backendZones);
+    const templateZoneId = resolveTemplateZoneId(template);
+    const sameZoneTemplateIds = collectSameZoneTemplateIds(templateId, missionTemplates, backendZones);
+    const otherCount = Math.max(0, sameZoneTemplateIds.length - 1);
+
+    if (mode === 'route_and_zone' && otherCount > 0) {
+      const cascadeOk = window.confirm(
+        `ВНИМАНИЕ: вместе с выбранным шаблоном будут удалены ещё ${otherCount} шаблон(а/ов), так как они находятся в той же зоне.\nПродолжить?`
+      );
+      if (!cascadeOk) return;
+    }
+
+    if (mode === 'route_and_zone' && templateZoneId != null) {
+      const zoneId = templateZoneId;
+      const zone = backendZones.find((z) => String(z.id) === String(zoneId));
+      const zoneTitle = zone?.name ? `«${zone.name}»` : `ID ${zoneId}`;
+      const ok = window.confirm(
+        otherCount > 0
+          ? `Удалить шаблон «${template.name || 'Без названия'}», связанную зону ${zoneTitle} и ещё ${otherCount} шаблон(а/ов) этой зоны?\nЭто действие нельзя отменить.`
+          : `Удалить шаблон «${template.name || 'Без названия'}» и связанную зону ${zoneTitle}?\nЭто действие нельзя отменить.`
+      );
+      if (!ok) return;
+      try {
+        await deleteZoneInBackend(zoneId);
+        const zones = await fetchZonesFromBackend();
+        setBackendZones(zones);
+        const nextActiveZoneId = zones.length > 0 ? zones[0].id : null;
+        setActiveZoneId(nextActiveZoneId);
+        const userId = backendContextRef.current.userId ?? null;
+        backendContextRef.current = { userId, zoneId: nextActiveZoneId };
+      } catch (err) {
+        setZoneKmlMessage(String(err?.message ?? err));
+        setZoneKmlIsError(true);
+        return;
+      }
+    } else {
+      const ok = window.confirm(
+        `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
+      );
+      if (!ok) return;
+    }
+
+    const idsToDelete =
+      mode === 'route_and_zone' && otherCount > 0
+        ? sameZoneTemplateIds
+        : [templateId];
+    try {
+      await Promise.all(idsToDelete.map((id) => deleteRouteTemplateInBackend(id)));
+      await reloadMissionTemplates();
+    } catch (err) {
+      setZoneKmlMessage(String(err?.message ?? err));
+      setZoneKmlIsError(true);
+    }
+  }, [missionTemplates, backendZones, reloadMissionTemplates]);
+
+  const templateCascadeCountById = useMemo(() => {
+    const map = {};
+    for (const t of missionTemplates) {
+      const ids = collectSameZoneTemplateIds(t.id, missionTemplates, backendZones);
+      const cnt = Math.max(0, ids.length - 1);
+      if (cnt > 0) map[t.id] = cnt;
+    }
+    return map;
+  }, [missionTemplates, backendZones]);
+
+  const templateCascadeMetaById = useMemo(() => {
+    const out = {};
+    const resolveTemplateZoneId = (tpl) =>
+      tpl?.zoneId ?? inferZoneIdForTemplatePath(tpl?.path, backendZones);
+    for (const t of missionTemplates) {
+      const ids = collectSameZoneTemplateIds(t.id, missionTemplates, backendZones);
+      const related = missionTemplates.filter((x) => ids.includes(x.id) && x.id !== t.id);
+      if (!related.length) continue;
+      const zoneId = resolveTemplateZoneId(t);
+      const zone = zoneId == null ? null : backendZones.find((z) => String(z.id) === String(zoneId));
+      out[t.id] = {
+        zoneId: zoneId ?? null,
+        zoneName: zone?.name ?? (zoneId != null ? `ID ${zoneId}` : 'не определена'),
+        relatedTemplateNames: related.map((x) => x.name || `Шаблон ${x.id}`),
+      };
+    }
+    return out;
+  }, [missionTemplates, backendZones]);
 
   const pendingKmlActionRef = useRef('create');
 
@@ -2000,7 +2430,17 @@ function App() {
     const nextColor = e.target.value;
     if (activeZoneId == null || !/^#[0-9a-fA-F]{6}$/.test(nextColor)) return;
     setZoneColorsById((prev) => ({ ...prev, [String(activeZoneId)]: nextColor }));
-  }, [activeZoneId]);
+    if (editingZoneId != null && String(editingZoneId) === String(activeZoneId)) {
+      setNewRectZoneName((prev) => {
+        const fromInput = updateAutoZoneNameColor(prev, nextColor);
+        if (fromInput) return fromInput;
+        const currentZoneName =
+          backendZones.find((z) => String(z?.id) === String(activeZoneId))?.name ?? '';
+        const fromZoneName = updateAutoZoneNameColor(currentZoneName, nextColor);
+        return fromZoneName ?? prev;
+      });
+    }
+  }, [activeZoneId, editingZoneId, backendZones]);
 
   const openKmlPicker = useCallback((action) => {
     pendingKmlActionRef.current = action;
@@ -2018,8 +2458,18 @@ function App() {
       setZoneKmlIsError(false);
       try {
         if (action === 'create') {
-          const baseName = newZoneKmlName.trim() || file.name.replace(/\.kml$/i, '') || 'Зона из KML';
-          const created = await createZoneWithKml({ name: baseName, description: '', file });
+          const candidate = newZoneKmlName.trim();
+          const baseName = candidate || buildAutoZoneName(backendZones, draftRectZoneColor);
+          const duplicate = backendZones.some((z) => normalizeZoneName(z?.name) === normalizeZoneName(baseName));
+          if (duplicate) {
+            throw new Error(`Зона с именем «${baseName}» уже существует. Укажите другое название.`);
+          }
+          const created = await createZoneWithKml({
+            name: baseName,
+            description: '',
+            file,
+            color: draftRectZoneColor,
+          });
           const zones = await fetchZonesFromBackend();
           setBackendZones(zones);
           const newId = created?.id;
@@ -2062,7 +2512,25 @@ function App() {
         setZoneKmlBusy(false);
       }
     },
-    [activeZoneId, newZoneKmlName, addToZoneLog]
+    [activeZoneId, newZoneKmlName, addToZoneLog, backendZones, draftRectZoneColor]
+  );
+
+  const handleWorkspaceTourOpenChange = useCallback((open) => {
+    setWorkspaceTourOpen(open);
+    if (!open) setWorkspaceOnboardingStepId(null);
+  }, []);
+
+  const handleOnboardingBeforeStep = useCallback(
+    (stepId) => {
+      setWorkspaceOnboardingStepId(stepId ?? null);
+      setSidebarOpen(true);
+      if (stepId === 'place-drone') {
+        setParkingOpen(true);
+      } else {
+        setParkingOpen(false);
+      }
+    },
+    []
   );
 
   const handleDroneClick = (drone) => {
@@ -2070,13 +2538,19 @@ function App() {
   };
 
   if (!authReady) {
-    return <AuthScreen onLoggedIn={() => setAuthReady(true)} />;
+    return (
+      <AuthScreen
+        onLoggedIn={() => {
+          resetWorkspaceOnboardingForLogin();
+          setAuthReady(true);
+        }}
+      />
+    );
   }
   const workspaceVisible = hasStarted && !exitingToTemplates;
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-transparent text-white px-2 sm:px-3 py-2 sm:py-3">
-      {/* Backdrop for mobile overlays */}
       {(sidebarOpen || parkingOpen) && (
         <button
           type="button"
@@ -2158,6 +2632,8 @@ function App() {
                   routeEditMode={!drawRectZoneMode && !draftRectBoundary}
                   routeEditPath={templateDraftPath}
                   onRoutePathChange={handleTemplateRoutePathChange}
+                  routeShiftSegmentIndices={templateDraftShiftSegments}
+                  onRouteShiftSegmentToggle={toggleTemplateDraftShiftSegment}
                   forceResize={false}
                   zones={zonesForMap}
                   zoneBoundary={activeZoneBoundary}
@@ -2165,11 +2641,6 @@ function App() {
                   zoneFitNonce={zoneFitNonce}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
-                />
-                <ZoneMapMenu
-                  zones={backendZones}
-                  activeZoneId={activeZoneId}
-                  onSelectZone={applyActiveZoneId}
                 />
               </div>
               {(drawRectZoneMode || draftRectBoundary) && (
@@ -2189,20 +2660,18 @@ function App() {
                           placeholder="Имя зоны"
                           className="px-3 py-2 bg-gray-800 border border-amber-700/60 rounded-lg text-white text-sm min-h-[42px] w-full"
                         />
-                        {activeZoneId != null && (
-                          <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
-                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
-                              Цвет зоны
-                            </span>
-                            <input
-                              type="color"
-                              value={activeZoneColor}
-                              onChange={handleActiveZoneColorChange}
-                              className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
-                              title="Выбрать цвет активной зоны"
-                            />
-                          </label>
-                        )}
+                        <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
+                          <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
+                            Цвет зоны
+                          </span>
+                          <input
+                            type="color"
+                            value={draftRectZoneColor}
+                            onChange={handleDraftRectZoneColorChange}
+                            className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
+                            title="Выбрать цвет зоны"
+                          />
+                        </label>
                         <button
                           type="button"
                           onClick={saveDraftRectZone}
@@ -2224,24 +2693,8 @@ function App() {
                   )}
                 </div>
               )}
-              <div className="absolute top-2 right-2 z-[100] flex justify-end">
-                <div className="relative flex flex-col items-end gap-2">
-                  <button
-                    type="button"
-                    onClick={toggleDrawRectZoneMode}
-                    title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                    aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                    className={`w-11 h-11 rounded-lg text-white text-xl leading-none flex items-center justify-center border ${
-                      drawRectZoneMode
-                        ? 'bg-amber-900 border-amber-500 ring-2 ring-amber-400/70'
-                        : 'bg-amber-950/90 border-amber-800 hover:bg-amber-900'
-                    }`}
-                  >
-                    {drawRectZoneMode ? '×' : '▭'}
-                  </button>
-                </div>
-              </div>
-              <div className="absolute bottom-4 left-4 right-4 z-10 bg-gray-800/95 border border-gray-600 rounded-xl p-4 shadow-xl max-w-md">
+              <div className="pointer-events-none absolute bottom-4 left-0 right-4 z-[100] flex flex-col items-start gap-2">
+                <div className="pointer-events-auto w-full max-w-md bg-gray-800/95 border border-gray-600 rounded-xl p-4 shadow-xl">
                 <h3 className="font-semibold text-white mb-2">
                   {templateEditMode === 'create' ? 'Создание шаблона маршрута' : 'Редактирование маршрута'}
                 </h3>
@@ -2260,6 +2713,18 @@ function App() {
                     className="px-3 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium"
                   >
                     Отменить последнюю
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleDrawRectZoneMode}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      drawRectZoneMode
+                        ? 'bg-amber-900 hover:bg-amber-800 text-amber-100 border border-amber-500/70'
+                        : 'bg-amber-700 hover:bg-amber-600 text-white border border-amber-500/60'
+                    }`}
+                    title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
+                  >
+                    {drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
                   </button>
                 </div>
                 <div className="mb-3">
@@ -2289,6 +2754,7 @@ function App() {
                     Отмена
                   </button>
                 </div>
+                </div>
               </div>
             </div>
           ) : (
@@ -2309,7 +2775,9 @@ function App() {
                   templates={missionTemplates}
                   onStartCreateTemplate={startCreateTemplate}
                   onEditTemplateRoute={startEditTemplateRoute}
-                  onDeleteTemplate={deleteMissionTemplate}
+                  onDeleteTemplate={handleDeleteTemplateFromMenu}
+                  templateCascadeCountById={templateCascadeCountById}
+                  templateCascadeMetaById={templateCascadeMetaById}
                 />
               </div>
               <div
@@ -2324,29 +2792,6 @@ function App() {
                 }}
               >
             <div className="w-full flex flex-col gap-2 flex-1 min-h-0">
-              {placementMode && droneToPlace && (
-                <div className="bg-yellow-900/70 border border-yellow-500 rounded-lg p-3 mb-2 animate-pulse">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div>
-                        <p className="text-sm text-yellow-200">
-                          Кликните на карте, чтобы разместить дрон
-                          {(() => {
-                            const d = drones.find(d => d.id === droneToPlace);
-                            return d ? ` "${d.name}"` : '';
-                          })()}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={cancelDronePlacement}
-                      className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm transition-colors"
-                    >
-                      Отмена
-                    </button>
-                  </div>
-                </div>
-              )}
               <div className="flex flex-col gap-2 mb-2 relative z-[1100]">
                 <div className="flex flex-col lg:flex-row gap-2 lg:items-start">
                   <div className="flex-1 min-w-0">
@@ -2375,20 +2820,18 @@ function App() {
                             placeholder="Имя зоны"
                             className="px-3 py-2 bg-gray-800 border border-amber-700/60 rounded-lg text-white text-sm min-h-[42px] w-full"
                           />
-                          {activeZoneId != null && (
-                            <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
-                              <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
-                                Цвет зоны
-                              </span>
-                              <input
-                                type="color"
-                                value={activeZoneColor}
-                                onChange={handleActiveZoneColorChange}
-                                className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
-                                title="Выбрать цвет активной зоны"
-                              />
-                            </label>
-                          )}
+                          <label className="relative w-full px-3 py-2 min-h-[42px] bg-gray-800 border border-gray-500/70 rounded-lg text-white text-sm flex items-center justify-end">
+                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap">
+                              Цвет зоны
+                            </span>
+                            <input
+                              type="color"
+                              value={draftRectZoneColor}
+                              onChange={handleDraftRectZoneColorChange}
+                              className="h-7 w-10 p-0 border-0 rounded cursor-pointer bg-transparent"
+                              title="Выбрать цвет зоны"
+                            />
+                          </label>
                           <button
                             type="button"
                             onClick={saveDraftRectZone}
@@ -2409,10 +2852,22 @@ function App() {
                             <button
                               type="button"
                               onClick={handleDeleteActiveZone}
-                              disabled={activeZoneId == null || rectZoneBusy || zoneKmlBusy}
+                            disabled={
+                              activeZoneId == null ||
+                              rectZoneBusy ||
+                              zoneKmlBusy ||
+                              Number(templateUsageByZoneId[String(activeZoneId)] || 0) > 0
+                            }
+                            title={
+                              Number(templateUsageByZoneId[String(activeZoneId)] || 0) > 0
+                                ? 'Зона используется в шаблонах'
+                                : 'Удалить активную зону'
+                            }
                               className="w-full px-3 py-2 min-h-[42px] bg-transparent border border-gray-500/70 text-gray-100 hover:bg-red-900/80 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm transition-colors"
                             >
-                              Удалить зону
+                            {Number(templateUsageByZoneId[String(activeZoneId)] || 0) > 0
+                              ? 'Зона в шаблонах'
+                              : 'Удалить зону'}
                             </button>
                           )}
                         </div>
@@ -2429,6 +2884,7 @@ function App() {
                     />
                     <button
                       type="button"
+                      data-onboarding="zone-draw"
                       onClick={toggleDrawRectZoneMode}
                       title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
                       aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
@@ -2451,12 +2907,16 @@ function App() {
                   onDraftRectBoundaryChange={handleDraftRectBoundaryChange}
                   onRectDrawComplete={handleRectDrawComplete}
                   onMapCenterChange={setMapCenter}
+                  onMapZoomChange={setMapZoom}
                   onDronePositionChange={handleDronePositionChange}
                   selectedDroneId={selectedDroneForSidebar}
                   forceResize={true}
                   routeEditMode={isRouteEditMode}
                   routeEditPath={selectedRouteEditPath}
                   onRoutePathChange={handleRoutePathChange}
+                  routeShiftSegmentIndices={selectedRouteShiftSegments}
+                  onRouteShiftSegmentToggle={toggleRouteShiftSegment}
+                  workspaceOnboardingStepId={workspaceOnboardingStepId}
                   previewPath={templateToApplyId ? (missionTemplates.find(t => t.id === templateToApplyId)?.path) ?? null : null}
                   zones={zonesForMap}
                   zoneBoundary={activeZoneBoundary}
@@ -2464,15 +2924,39 @@ function App() {
                   zoneFitNonce={zoneFitNonce}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
+                  placementMode={placementMode && droneToPlace != null}
                 />
                 <ZoneMapMenu
                   zones={backendZones}
                   activeZoneId={activeZoneId}
                   onSelectZone={applyActiveZoneId}
+                  showEmptyMenuDuringTour={workspaceTourOpen && backendZones.length === 0}
                 />
+                {placementMode && droneToPlace && (
+                  <div
+                    className="pointer-events-auto absolute bottom-3 left-1/2 z-[200] w-[min(92vw,420px)] -translate-x-1/2 rounded-xl border border-yellow-500/70 bg-yellow-950/90 px-3 py-2.5 shadow-xl backdrop-blur-sm sm:bottom-4"
+                    style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))' }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-yellow-100 leading-snug">
+                        Кликните внутри контура активной зоны на карте, чтобы поставить дрон
+                        {(() => {
+                          const d = drones.find((x) => x.id === droneToPlace);
+                          return d ? ` «${d.name}»` : '';
+                        })()}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={cancelDronePlacement}
+                        className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 min-h-[40px]"
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Кнопки управления под картой (мобильные), в потоке — карта сжимается */}
               <div
                 className="flex-shrink-0 flex justify-between items-center gap-2 lg:hidden pt-2"
                 style={{ paddingBottom: 'env(safe-area-inset-bottom, 0.5rem)' }}
@@ -2517,7 +3001,11 @@ function App() {
         </main>
 
         <div
-          className={`fixed right-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-80 lg:max-w-none lg:flex-shrink-0 ${
+          className={`fixed right-0 top-0 bottom-0 z-50 transform transition-transform duration-300 ease-out lg:relative lg:flex-shrink-0 ${
+            workspaceTourOpen && sidebarOpen
+              ? 'w-[min(calc(100vw-12px),28rem)] max-w-none lg:w-80 lg:max-w-none'
+              : 'w-[85%] max-w-sm lg:w-80 lg:max-w-none'
+          } ${
             workspaceVisible
               ? `${sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} opacity-100`
               : 'pointer-events-none translate-x-[100vw] opacity-0'
@@ -2544,7 +3032,6 @@ function App() {
                 onAddRoutePoint={addRoutePoint}
                 onUndoLastPoint={undoLastPoint}
                 onClearRoute={clearRoute}
-                onUnloopRoute={unloopRoute}
                 onClearLogs={() => setGlobalMissionLog([])}
                 onDroneClick={handleDroneClick}
                 isRouteEditMode={isRouteEditMode}
@@ -2553,6 +3040,9 @@ function App() {
                 onFlyToFirstWaypoint={flyDroneToFirstWaypoint}
                 flightAllowedByWeather={weatherFlightSafe}
                 weatherFlightReasons={weatherFlightReasons}
+                isDroneAtMissionStart={isDroneAtMissionStart}
+                workZoneReady={workZoneReady}
+                instructionTourActive={workspaceTourOpen}
                 onClose={() => setSidebarOpen(false)}
               />
             </div>
@@ -2564,6 +3054,15 @@ function App() {
         <DroneModal
           drone={selectedDroneForModal}
           onClose={() => setSelectedDroneForModal(null)}
+        />
+      )}
+
+      {workspaceVisible && hasStarted && !templateEditMode && (
+        <WorkspaceOnboarding
+          enabled
+          onBeforeStep={handleOnboardingBeforeStep}
+          onTourOpenChange={handleWorkspaceTourOpenChange}
+          layoutKey={`${sidebarOpen}-${parkingOpen}-${workspaceTourOpen}`}
         />
       )}
 

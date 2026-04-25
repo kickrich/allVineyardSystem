@@ -3,20 +3,22 @@ default: &default
   encoding: unicode
   # Настройки пула соединений
   pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
-  username: vineyard_user
-  password: 1029
-  host: localhost
+  username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
+  password: <%= ENV.fetch("DB_PASSWORD", "A28v07r08a28") %>
+  # Явный IPv4, чтобы не упираться в ::1 на Windows.
+  host: <%= ENV.fetch("DB_HOST", "127.0.0.1") %>
+  port: <%= ENV.fetch("DB_PORT", "5432") %>
 
 development:
   <<: *default
-  database: vineyard_monitoring_development
+  database: <%= ENV.fetch("DB_NAME", "vineyard_monitoring_development") %>
 
 test:
   <<: *default
-  database: vineyard_monitoring_test
+  database: <%= ENV.fetch("DB_TEST_NAME", "vineyard_monitoring_test") %>
 
 production:
   <<: *default
-  database: vineyard_monitoring_production
-  username: vineyard_user
-  password: <%= ENV["VINEYARD_DATABASE_PASSWORD"] %>
+  database: <%= ENV.fetch("DB_PROD_NAME", "vineyard_monitoring_production") %>
+  username: <%= ENV.fetch("DB_PROD_USERNAME", ENV.fetch("DB_USERNAME", "vineyard_user")) %>
+  password: <%= ENV.fetch("DB_PROD_PASSWORD", ENV.fetch("VINEYARD_DATABASE_PASSWORD", ENV.fetch("DB_PASSWORD", "A28v07r08a28"))) %>

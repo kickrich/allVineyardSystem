@@ -5,9 +5,7 @@ export function DroneModal({ drone, onClose }) {
 
   const calculateRouteLength = () => {
     if (!drone.path || drone.path.length < 2) return 0;
-    let total = 0;
-    // Простая симуляция расчета длины (можно заменить на точный алгоритм)
-    return (drone.path.length * 0.5).toFixed(2); // ~0.5 км на точку
+    return (drone.path.length * 0.5).toFixed(2);
   };
 
   const getMissionReadiness = () => {
@@ -24,7 +22,6 @@ export function DroneModal({ drone, onClose }) {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
       <div className="bg-gray-800 rounded-lg w-full max-w-2xl border border-gray-700">
-        {/* Заголовок */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700">
           <h2 className="text-xl font-bold text-white">Детальная информация о дроне</h2>
           <button
@@ -36,7 +33,6 @@ export function DroneModal({ drone, onClose }) {
         </div>
 
         <div className="p-4">
-          {/* Основная информация */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <div>
               <h3 className="text-lg font-bold text-white mb-2">{drone.name}</h3>
@@ -70,7 +66,6 @@ export function DroneModal({ drone, onClose }) {
             </div>
           </div>
 
-          {/* Информация о миссии */}
           <div className="mb-6 p-3 bg-gray-900 rounded">
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-bold text-white">Готовность к миссии</h4>
@@ -110,7 +105,6 @@ export function DroneModal({ drone, onClose }) {
             </div>
           </div>
 
-          {/* Статистика маршрута */}
           <div className="mb-6">
             <h4 className="font-bold text-white mb-3">Статистика маршрута</h4>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -133,7 +127,6 @@ export function DroneModal({ drone, onClose }) {
             </div>
           </div>
 
-          {/* Кнопки действий */}
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-700">
             <button
               onClick={() => setShowMissionDetails(!showMissionDetails)}
@@ -149,7 +142,6 @@ export function DroneModal({ drone, onClose }) {
             </button>
           </div>
 
-          {/* Дополнительные детали миссии */}
           {showMissionDetails && (
             <div className="mt-4 p-3 bg-gray-900 rounded">
               <h5 className="font-bold text-white mb-2">Подробности миссии</h5>

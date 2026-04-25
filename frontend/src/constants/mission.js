@@ -14,6 +14,3 @@ export const MISSION_STATUSES = {
 };
 
 export const MISSION_TEMPLATES_STORAGE_KEY = 'missionTemplates';
-
-/** Шаблон миссии — заранее построенный маршрут патрулирования (название + точки) */
-/** @typedef {{ id: string, name: string, path: [number, number][] }} MissionTemplate */

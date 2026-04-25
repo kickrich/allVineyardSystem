@@ -139,7 +139,6 @@ export function DroneCard({ drone, onClick, isSelectedForRoute = false }) {
         </div>
         
         <div className="flex flex-col items-end gap-1">
-          {/* Индикатор видимости на карте */}
           <div className={`text-xs px-2 py-1 rounded ${
             drone.isVisible 
               ? 'bg-green-900/50 text-green-300' 
@@ -150,7 +149,6 @@ export function DroneCard({ drone, onClick, isSelectedForRoute = false }) {
         </div>
       </div>
       
-      {/* Прогресс маршрута (если есть точки) */}
       {drone.path && drone.path.length > 0 && (
         <div className="px-3 pb-2">
           <div className="flex justify-between text-xs text-gray-400 mb-1">
@@ -174,7 +172,6 @@ export function DroneCard({ drone, onClick, isSelectedForRoute = false }) {
         </div>
       )}
       
-      {/* Индикатор выбора для миссии */}
       {isSelectedForRoute && (
         <div className="px-3 pb-2">
           <div className="text-xs text-blue-300 flex items-center justify-center gap-2 p-2 bg-blue-900/30 rounded">

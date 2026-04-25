@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_26_012446) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_25_135000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -53,6 +53,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_26_012446) do
     t.string "status"
     t.datetime "updated_at", null: false
     t.index ["mission_id"], name: "index_ai_results_on_mission_id"
+  end
+
+  create_table "bush_detections", force: :cascade do |t|
+    t.jsonb "bbox", default: {}, null: false
+    t.float "confidence", default: 0.0, null: false
+    t.datetime "created_at", null: false
+    t.float "latitude", null: false
+    t.float "longitude", null: false
+    t.bigint "mission_id", null: false
+    t.jsonb "payload", default: {}
+    t.string "source", default: "cv_service", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "zone_id", null: false
+    t.index ["mission_id"], name: "index_bush_detections_on_mission_id"
+    t.index ["zone_id"], name: "index_bush_detections_on_zone_id"
   end
 
   create_table "drones", force: :cascade do |t|
@@ -99,6 +114,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_26_012446) do
     t.index ["zone_id"], name: "index_missions_on_zone_id"
   end
 
+  create_table "route_templates", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "name", null: false
+    t.jsonb "path", default: [], null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.bigint "zone_id"
+    t.index ["user_id", "name"], name: "index_route_templates_on_user_id_and_name"
+    t.index ["user_id"], name: "index_route_templates_on_user_id"
+    t.index ["zone_id"], name: "index_route_templates_on_zone_id"
+  end
+
   create_table "routes", force: :cascade do |t|
     t.float "altitude"
     t.datetime "created_at", null: false
@@ -135,6 +162,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_26_012446) do
 
   create_table "zones", force: :cascade do |t|
     t.jsonb "boundary", default: []
+    t.string "color"
     t.datetime "created_at", null: false
     t.text "description"
     t.string "name", null: false
@@ -144,10 +172,14 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_26_012446) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "ai_results", "missions"
+  add_foreign_key "bush_detections", "missions"
+  add_foreign_key "bush_detections", "zones"
   add_foreign_key "media_uploads", "missions"
   add_foreign_key "missions", "drones"
   add_foreign_key "missions", "users"
   add_foreign_key "missions", "zones"
+  add_foreign_key "route_templates", "users"
+  add_foreign_key "route_templates", "zones", on_delete: :nullify
   add_foreign_key "routes", "missions"
   add_foreign_key "telemetries", "missions"
 end

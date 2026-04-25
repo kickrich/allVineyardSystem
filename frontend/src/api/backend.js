@@ -22,15 +22,10 @@ async function login(email, password) {
   return data;
 }
 
-/** Вход: POST /api/v1/auth/login → токен в localStorage. */
 export async function loginWithCredentials(email, password) {
   return login(email.trim(), password);
 }
 
-/**
- * Регистрация: POST /api/v1/users (без JWT). Перед запросом сбрасываем старую сессию,
- * чтобы не отправлять лишний Bearer.
- */
 export async function registerUser({ name, email, password, passwordConfirmation }) {
   clearApiSession();
   await apiPost('/api/v1/users', {
@@ -54,7 +49,6 @@ async function registerDevUser(email, password, name) {
   });
 }
 
-/** Автовход dev-пользователя из Vite env (для скриптов / старых сценариев). */
 export async function ensureApiSession() {
   const email = DEFAULT_DEV_EMAIL;
   const password = DEFAULT_DEV_PASSWORD;
@@ -63,7 +57,6 @@ export async function ensureApiSession() {
   try {
     return await login(email, password);
   } catch {
-    // Для первого запуска поднимаем dev-пользователя автоматически.
   }
 
   try {
@@ -78,7 +71,6 @@ export async function ensureApiSession() {
   return login(email, password);
 }
 
-/** Сброс JWT в storage (например перед новым логином или из UI «Выйти»). */
 export { clearApiSession };
 
 export async function fetchDronesFromBackend() {
@@ -87,7 +79,6 @@ export async function fetchDronesFromBackend() {
   return Array.isArray(drones) ? drones : [];
 }
 
-/** POST /api/v1/drones — создать дрона в БД. */
 export async function createDroneInBackend({ name, model, battery = 100, status = 'idle' } = {}) {
   if (!name || !String(name).trim()) throw new Error('Укажите имя дрона');
   if (!model || !String(model).trim()) throw new Error('Укажите модель дрона');
@@ -114,13 +105,52 @@ export async function fetchZonesFromBackend() {
   return Array.isArray(zones) ? zones : [];
 }
 
-/** POST /api/v1/zones с KML → в ответе { data: zone }. */
-export async function createZoneWithKml({ name, description = '', file }) {
+export async function fetchRouteTemplatesFromBackend() {
+  const response = await apiGet('/api/v1/route_templates');
+  const templates = extractData(response);
+  return Array.isArray(templates) ? templates : [];
+}
+
+export async function createRouteTemplateInBackend({ name, path, zoneId = null }) {
+  if (!name || !String(name).trim()) throw new Error('Укажите название шаблона');
+  if (!Array.isArray(path) || path.length < 2) throw new Error('Шаблон должен содержать минимум 2 точки');
+  const payload = {
+    route_template: {
+      name: String(name).trim(),
+      path,
+      zone_id: zoneId ?? null,
+    },
+  };
+  const response = await apiPost('/api/v1/route_templates', payload);
+  return extractData(response);
+}
+
+export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId }) {
+  if (templateId == null) throw new Error('Не выбран шаблон для обновления');
+  const routeTemplatePatch = {};
+  if (typeof name === 'string' && name.trim()) routeTemplatePatch.name = name.trim();
+  if (Array.isArray(path)) routeTemplatePatch.path = path;
+  if (zoneId !== undefined) routeTemplatePatch.zone_id = zoneId ?? null;
+  const response = await apiPatch(`/api/v1/route_templates/${templateId}`, {
+    route_template: routeTemplatePatch,
+  });
+  return extractData(response);
+}
+
+export async function deleteRouteTemplateInBackend(templateId) {
+  if (templateId == null) throw new Error('Не выбран шаблон для удаления');
+  await apiDelete(`/api/v1/route_templates/${templateId}`);
+}
+
+export async function createZoneWithKml({ name, description = '', file, color = null }) {
   if (!file) {
     throw new Error('Выберите KML-файл');
   }
   const fd = new FormData();
   fd.append('zone[name]', name.trim());
+  if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    fd.append('zone[color]', color);
+  }
   if (description) {
     fd.append('zone[description]', description);
   }
@@ -129,8 +159,7 @@ export async function createZoneWithKml({ name, description = '', file }) {
   return extractData(response);
 }
 
-/** POST /api/v1/zones с JSON boundary [[lng, lat], ...] (замкнутый полигон). */
-export async function createZoneWithBoundary({ name, description = '', boundary }) {
+export async function createZoneWithBoundary({ name, description = '', boundary, color = null }) {
   if (!Array.isArray(boundary) || boundary.length < 4) {
     throw new Error('Некорректный контур зоны');
   }
@@ -138,6 +167,9 @@ export async function createZoneWithBoundary({ name, description = '', boundary 
     name: name.trim(),
     boundary,
   };
+  if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    zone.color = color;
+  }
   if (description) {
     zone.description = description;
   }
@@ -145,7 +177,6 @@ export async function createZoneWithBoundary({ name, description = '', boundary 
   return extractData(response);
 }
 
-/** PATCH /api/v1/zones/:id — новый контур из KML. */
 export async function updateZoneWithKml(zoneId, file) {
   if (zoneId == null || !file) {
     throw new Error('Выберите зону и KML-файл');
@@ -156,8 +187,7 @@ export async function updateZoneWithKml(zoneId, file) {
   return extractData(response);
 }
 
-/** PATCH /api/v1/zones/:id — обновить boundary [[lng, lat], ...] и/или имя. */
-export async function updateZoneWithBoundary(zoneId, boundary, name = null) {
+export async function updateZoneWithBoundary(zoneId, boundary, name = null, color = null) {
   if (zoneId == null) {
     throw new Error('Выберите зону для редактирования');
   }
@@ -168,13 +198,15 @@ export async function updateZoneWithBoundary(zoneId, boundary, name = null) {
   if (typeof name === 'string' && name.trim()) {
     zonePatch.name = name.trim();
   }
+  if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    zonePatch.color = color;
+  }
   const response = await apiPatch(`/api/v1/zones/${zoneId}`, {
     zone: zonePatch,
   });
   return extractData(response);
 }
 
-/** DELETE /api/v1/zones/:id — удалить зону. */
 export async function deleteZoneInBackend(zoneId) {
   if (zoneId == null) {
     throw new Error('Выберите зону для удаления');
@@ -241,7 +273,6 @@ export async function cancelMissionInBackend(missionId) {
   return extractData(response);
 }
 
-/** GET /api/v1/missions?drone_id=...&active=1 — активные миссии дрона (planned/approved/in_progress). */
 export async function fetchActiveMissionsForDrone(droneId) {
   if (droneId == null) return [];
   const response = await apiGet(`/api/v1/missions?drone_id=${encodeURIComponent(droneId)}&active=1`);
@@ -249,16 +280,15 @@ export async function fetchActiveMissionsForDrone(droneId) {
   return Array.isArray(missions) ? missions : [];
 }
 
-/**
- * multipart_init для video.
- * POST /api/v1/media_uploads/multipart_init
- */
 export async function multipartInitForVideo({
   missionId,
   filename,
   byteSize,
   contentType = 'video/webm',
   chunkSizeBytes = 5 * 1024 * 1024,
+  rowIndex = null,
+  rowsCount = null,
+  shiftSegmentIndices = [],
 } = {}) {
   if (missionId == null) throw new Error('missionId is required');
   if (!filename) throw new Error('filename is required');
@@ -266,21 +296,29 @@ export async function multipartInitForVideo({
     throw new Error('byteSize must be a positive number');
   }
 
-  const response = await apiPost('/api/v1/media_uploads/multipart_init', {
+  const payload = {
     mission_id: missionId,
     media_type: 'video',
     filename,
     byte_size: byteSize,
     content_type: contentType,
     chunk_size_bytes: chunkSizeBytes,
-  });
+  };
+
+  if (Number.isInteger(rowIndex) && rowIndex > 0) {
+    payload.row_index = rowIndex;
+  }
+  if (Number.isInteger(rowsCount) && rowsCount > 0) {
+    payload.rows_count = rowsCount;
+  }
+  if (Array.isArray(shiftSegmentIndices)) {
+    payload.shift_segment_indices = shiftSegmentIndices;
+  }
+
+  const response = await apiPost('/api/v1/media_uploads/multipart_init', payload);
   return extractData(response);
 }
 
-/**
- * multipart_presign_part.
- * POST /api/v1/media_uploads/multipart_presign_part
- */
 export async function multipartPresignPart({
   uploadSessionId,
   partNumber,
@@ -297,10 +335,6 @@ export async function multipartPresignPart({
   return extractData(response);
 }
 
-/**
- * multipart_complete.
- * POST /api/v1/media_uploads/multipart_complete
- */
 export async function multipartCompleteForVideo({
   uploadSessionId,
   parts,
@@ -317,10 +351,6 @@ export async function multipartCompleteForVideo({
   return extractData(response);
 }
 
-/**
- * multipart_list_parts — получить etag/сведения по загруженным parts.
- * GET /api/v1/media_uploads/multipart_list_parts?upload_session_id=...
- */
 export async function multipartListParts({ uploadSessionId } = {}) {
   if (!uploadSessionId) throw new Error('uploadSessionId is required');
   const response = await apiGet(
@@ -329,7 +359,6 @@ export async function multipartListParts({ uploadSessionId } = {}) {
   return extractData(response);
 }
 
-/** POST /api/v1/telemetries — отправка телеметрии миссии. */
 export async function postTelemetryToBackend({
   missionId,
   recordedAt,

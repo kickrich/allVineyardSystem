@@ -1,12 +1,17 @@
 # app/models/zone.rb
 class Zone < ApplicationRecord
   has_many :missions, dependent: :restrict_with_error
+  has_many :route_templates, dependent: :nullify
   has_one_attached :kml_file
 
   before_validation :strip_name_and_description
 
   validates :name, presence: { message: "не может быть пустым" },
                    length: { minimum: 2, maximum: 100, message: "должно быть от 2 до 100 символов" }
+  validates :color, format: {
+    with: /\A#[0-9a-fA-F]{6}\z/,
+    message: "должен быть в HEX-формате #RRGGBB"
+  }
   validates :description, length: { maximum: 1000 }, allow_nil: true
   validate :boundary_valid
 

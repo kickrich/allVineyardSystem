@@ -38,8 +38,18 @@ module Api
 
       # Удаление зоны DELETE /api/v1/zones/:id
       def destroy
-        @zone.destroy
+        Zone.transaction do
+          # В проекте у Zone стоит restrict_with_error на missions.
+          # Для удаления зоны из UI очищаем связанные миссии (и их dependent-сущности) в транзакции.
+          @zone.missions.find_each(&:destroy!)
+          @zone.destroy!
+        end
         head :no_content
+      rescue ActiveRecord::RecordInvalid, ActiveRecord::RecordNotDestroyed => e
+        render_errors(
+          I18n.t("api.zones.errors.delete_failed", details: e.message, default: "Не удалось удалить зону: %{details}"),
+          status: :unprocessable_entity
+        )
       end
 
       private
@@ -52,7 +62,7 @@ module Api
       # Параметры зоны (boundary — массив пар [lng, lat]; permit(boundary: []) их режет)
       def zone_params
         z = params.require(:zone)
-        permitted = z.permit(:name, :description, :kml_file)
+        permitted = z.permit(:name, :description, :kml_file, :color)
         raw_boundary = z[:boundary]
         permitted[:boundary] = raw_boundary if raw_boundary.is_a?(Array)
         permitted

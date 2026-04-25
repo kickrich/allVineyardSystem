@@ -44,6 +44,7 @@ Rails.application.routes.draw do
       resources :users
       
       resources :zones
+      resources :route_templates, only: [:index, :show, :create, :update, :destroy]
     end
   end
 end

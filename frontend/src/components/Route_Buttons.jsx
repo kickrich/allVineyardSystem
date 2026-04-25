@@ -11,9 +11,7 @@ export const RouteControls = ({
   flightStatus,
   routePoints 
 }) => {
-  // Расчет примерной длины маршрута (в метрах)
   const calculateRouteLength = () => {
-    // Простая заглушка - примерно 100м на точку
     return routePoints * 100;
   };
 
@@ -50,7 +48,6 @@ export const RouteControls = ({
         </div>
         
         <div className="flex flex-wrap gap-2">
-          {/* Кнопки управления маршрутом */}
           <button
             onClick={undoLastPoint}
             disabled={disabled || routePoints === 0 || isDroneFlying}
@@ -75,7 +72,6 @@ export const RouteControls = ({
             <span className="hidden md:inline">Очистить</span>
           </button>
           
-          {/* Кнопки управления полетом */}
           {!isDroneFlying ? (
             <button
               onClick={startFlight}
@@ -132,7 +128,6 @@ export const RouteControls = ({
         </div>
       </div>
       
-      {/* Подсказки */}
       <div className="text-xs text-gray-400 mt-2">
         {disabled ? (
           <p>• Выберите дрон для управления маршрутом</p>

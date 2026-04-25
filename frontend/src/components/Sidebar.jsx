@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { flightStatus } from '../constants/drones_data';
-import { calculateDistance, calculateOptimalSpeed, calculateFlightTime } from '../utils/flightCalculator';
+import { getTourDemoDrone, isTourDemoDrone } from '../constants/tour_Demo_Drone';
+import { calculateDistance, calculateOptimalSpeed, calculateFlightTime } from '../utils/flight_Calculator';
 
 export const Sidebar = ({
   dronesData = [],
@@ -16,7 +17,6 @@ export const Sidebar = ({
   onAddRoutePoint,
   onUndoLastPoint,
   onClearRoute,
-  onUnloopRoute,
   onClearLogs,
   onDroneClick,
   isRouteEditMode = false,
@@ -25,13 +25,23 @@ export const Sidebar = ({
   onFlyToFirstWaypoint,
   flightAllowedByWeather = true,
   weatherFlightReasons = [],
+  isDroneAtMissionStart,
+  workZoneReady = false,
+  instructionTourActive = false,
   onClose
 }) => {
   const [activeTab, setActiveTab] = useState('control');
 
-  const visibleDrones = dronesData.filter(d => d.isVisible);
+  const tourDemoDrone = useMemo(() => getTourDemoDrone(), []);
+  const visibleDrones = dronesData.filter((d) => d.isVisible);
+  const listForPicker =
+    visibleDrones.length > 0 ? visibleDrones : instructionTourActive ? [tourDemoDrone] : [];
   const selectedDrone =
-    visibleDrones.find(d => d.id === selectedDroneId) || visibleDrones[0] || null;
+    listForPicker.find((d) => d.id === selectedDroneId) ??
+    (instructionTourActive && visibleDrones.length === 0 ? tourDemoDrone : null) ??
+    (visibleDrones.length > 0 ? visibleDrones[0] : null);
+
+  const tourUiPreview = isTourDemoDrone(selectedDrone);
 
   const flyingDrones = visibleDrones.filter(d => d.isFlying);
 
@@ -85,19 +95,32 @@ export const Sidebar = ({
   };
   const selectedDronePathLength = selectedDrone?.path?.length || 0;
   const selectedDroneStatus = selectedDrone?.flightStatus || flightStatus.IDLE;
-  const isRouteLooped = useMemo(() => {
-    if (!Array.isArray(selectedDrone?.path) || selectedDrone.path.length < 2) return false;
-    const last = selectedDrone.path[selectedDrone.path.length - 1];
-    return selectedDrone.path
-      .slice(0, -1)
-      .some((p) => Array.isArray(p) && p[0] === last?.[0] && p[1] === last?.[1]);
-  }, [selectedDrone?.path]);
+  const atMissionStart =
+    typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
+
+  const canEnableRouteMode = Boolean(
+    (workZoneReady || tourUiPreview) && selectedDrone && !selectedDrone.isFlying
+  );
+
+  const routeBuildTitle = isRouteEditMode
+    ? 'Завершить редактирование маршрута'
+    : !workZoneReady
+      ? 'Сначала выберите или создайте зону с контуром на карте (меню зон слева или кнопка зоны справа)'
+      : !selectedDrone
+        ? 'Сначала выберите дрон в списке ниже'
+        : selectedDrone.isFlying
+          ? 'Во время полёта маршрут недоступен'
+          : 'Включить режим: клики по карте внутри зоны добавляют точки маршрута';
 
   useEffect(() => {
     if (!selectedDroneId && visibleDrones.length > 0 && onSelectDrone) {
       onSelectDrone(visibleDrones[0].id);
     }
   }, [selectedDroneId, visibleDrones, onSelectDrone]);
+
+  useEffect(() => {
+    if (instructionTourActive) setActiveTab('control');
+  }, [instructionTourActive]);
 
   return (
     <div className="w-full lg:w-80 bg-gray-800/95 lg:bg-gray-800/85 border border-gray-700/70 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full">
@@ -163,7 +186,7 @@ export const Sidebar = ({
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'control' && (
           <div className="space-y-4">
-            {visibleDrones.length === 0 && (
+            {listForPicker.length === 0 && (
               <div className="text-center py-10 text-gray-400">
                 <div className="text-4xl mb-3">🛸</div>
                 <p className="text-base">Нет дронов на карте</p>
@@ -172,22 +195,24 @@ export const Sidebar = ({
                 </p>
               </div>
             )}
-            {visibleDrones.length > 0 && (
+            {listForPicker.length > 0 && (
               <div className="space-y-2">
-                {visibleDrones.map(drone => (
+                {listForPicker.map((drone) => (
                 <div
                   key={drone.id}
-                  className={`p-3 rounded-lg cursor-pointer transition-all duration-200
-                    ${selectedDroneId === drone.id 
+                  className={`p-3 rounded-lg transition-all duration-200
+                    ${selectedDrone?.id === drone.id
                       ? 'ring-2 ring-blue-300 border border-blue-500/40 bg-blue-900/35 shadow-sm'
                       : 'bg-gray-900/45 border border-gray-700/60 hover:bg-gray-800/60 hover:border-gray-600'
-                    }`}
-                  onClick={() => onSelectDrone(drone.id)}
+                    } ${isTourDemoDrone(drone) ? 'cursor-default' : 'cursor-pointer'}`}
+                  onClick={() => {
+                    if (!isTourDemoDrone(drone)) onSelectDrone(drone.id);
+                  }}
                 >
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-3">
                       <div className={`w-3 h-3 rounded-full ${
-                        selectedDroneId === drone.id 
+                        selectedDrone?.id === drone.id
                           ? 'bg-blue-400' 
                           : drone.isFlying 
                             ? 'bg-green-400 animate-pulse' 
@@ -224,7 +249,14 @@ export const Sidebar = ({
               </div>
             )}
             {selectedDrone && (
-              <div className="border-t border-gray-700 pt-4">
+              <div
+                className={`border-t border-gray-700 pt-4 ${tourUiPreview ? 'pointer-events-none select-none' : ''}`}
+              >
+                {tourUiPreview && (
+                  <p className="mb-2 rounded-lg border border-blue-500/40 bg-blue-950/50 px-2 py-1.5 text-center text-[11px] text-blue-200/95">
+                    Пример интерфейса тура — кнопки не выполняют действия
+                  </p>
+                )}
                 <h3 className="text-lg font-semibold text-white mb-3">
                   Управление: {selectedDrone.name}
                 </h3>
@@ -255,13 +287,21 @@ export const Sidebar = ({
                     <>
                       <div className="flex gap-2 mb-3">
                         <button
+                          type="button"
+                          data-onboarding="route-build"
                           onClick={onToggleRouteMode}
-                          className={`flex-1 py-2 min-h-[44px] rounded transition-colors ${isRouteEditMode
-                            ? 'bg-blue-600 hover:bg-blue-700'
-                            : 'bg-gray-700 hover:bg-gray-600'
-                            }`}
+                          disabled={!isRouteEditMode && !canEnableRouteMode}
+                          title={routeBuildTitle}
+                          aria-disabled={!isRouteEditMode && !canEnableRouteMode}
+                          className={`flex-1 py-2 min-h-[44px] rounded transition-colors ${
+                            isRouteEditMode
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                              : canEnableRouteMode
+                                ? 'bg-blue-700 hover:bg-blue-600 text-white'
+                                : 'bg-gray-700 text-gray-400 cursor-not-allowed opacity-80'
+                          }`}
                         >
-                          {isRouteEditMode ? 'Закончить' : 'Построить маршрут'}
+                          {isRouteEditMode ? 'Закончить маршрут' : 'Построить маршрут'}
                         </button>
                         <button
                           onClick={() => onDroneClick(selectedDrone)}
@@ -294,32 +334,8 @@ export const Sidebar = ({
                           Очистить маршрут
                         </button>
                       </div>
-                      <button
-                        onClick={() => onUnloopRoute?.(selectedDrone.id)}
-                        disabled={!isRouteLooped}
-                        className={`w-full mt-2 py-2 rounded transition-colors ${
-                          isRouteLooped
-                            ? 'bg-gray-700 hover:bg-gray-600'
-                            : 'bg-gray-700 cursor-not-allowed opacity-50'
-                        }`}
-                      >
-                        Разомкнуть маршрут
-                      </button>
 
-                      {isRouteEditMode && (
-                        <div className="bg-blue-900/30 p-3 rounded text-sm mt-2">
-                          <p className="text-blue-300">Режим добавления точек маршрута</p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Кликните по карте, чтобы добавить точку маршрута для {selectedDrone.name}
-                          </p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Для точной настройки тяните за узлы и сегменты маршрута прямо на карте.
-                          </p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Клик по уже существующей точке замыкает маршрут в этом месте.
-                          </p>
-                        </div>
-                      )}
+                  
                     </>
                   )}
                   <button
@@ -333,21 +349,35 @@ export const Sidebar = ({
                   >
                     📍 К первой точке миссии
                   </button>
-                  {!flightAllowedByWeather && weatherFlightReasons.length > 0 && (
+                  {!flightAllowedByWeather && weatherFlightReasons.length > 0 && !tourUiPreview && (
                     <div className="mt-2 px-3 py-2 rounded-lg bg-amber-900/40 border border-amber-600 text-amber-200 text-xs">
                       ⚠️ Неблагоприятные условия для полёта: {weatherFlightReasons.join(', ')}
                     </div>
                   )}
-                  <div className="mt-4">
+                  <div className="mt-4" data-onboarding="mission-first-waypoint">
                     <h4 className="font-semibold text-white mb-2">Управление полетом</h4>
                     <div className="grid grid-cols-2 gap-2">
                       {selectedDroneStatus === flightStatus.IDLE && selectedDronePathLength >= 2 && (
-                        <button
-                          onClick={() => onStartFlight(selectedDrone.id)}
-                          className="col-span-2 bg-green-600 hover:bg-green-700 py-2 min-h-[44px] rounded flex items-center justify-center gap-2"
-                        >
-                          🚀 Начать миссию
-                        </button>
+                        <>
+                          
+                          <button
+                            type="button"
+                            onClick={() => onStartFlight(selectedDrone.id)}
+                            disabled={!atMissionStart}
+                            title={
+                              atMissionStart
+                                ? 'Запустить миссию'
+                                : 'Миссия стартует только с первой точки маршрута — подведите дрон в радиус ~10 м от неё'
+                            }
+                            className={`col-span-2 py-2 min-h-[44px] rounded flex items-center justify-center gap-2 ${
+                              atMissionStart
+                                ? 'bg-green-600 hover:bg-green-700'
+                                : 'cursor-not-allowed bg-gray-600 opacity-50'
+                            }`}
+                          >
+                            🚀 Начать миссию
+                          </button>
+                        </>
                       )}
                       {selectedDroneStatus === flightStatus.FLYING && (
                         <>
@@ -384,14 +414,6 @@ export const Sidebar = ({
                       {selectedDroneStatus === flightStatus.COMPLETED && (
                         <>
                           <div className="col-span-2 text-center text-sm text-green-300">✅ Миссия завершена</div>
-                          {selectedDronePathLength >= 2 && (
-                            <button
-                              onClick={() => onStartFlight(selectedDrone.id)}
-                              className="col-span-2 bg-green-600 hover:bg-green-700 py-2 rounded flex items-center justify-center gap-2"
-                            >
-                              🔄 Перезапустить миссию
-                            </button>
-                          )}
                         </>
                       )}
                       {selectedDroneStatus === flightStatus.IDLE && selectedDronePathLength < 2 && (
@@ -462,7 +484,7 @@ export const Sidebar = ({
         )}
       </div>
       <div className="p-3 bg-gray-900 border-t border-gray-700">
-        <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="grid grid-cols-2 gap-2 text-center">
           <div className="p-2 bg-gray-800/50 rounded">
             <div className="text-lg font-bold text-white">{visibleDrones.length}</div>
             <div className="text-xs text-gray-400">На карте</div>
@@ -470,10 +492,6 @@ export const Sidebar = ({
           <div className="p-2 bg-gray-800/50 rounded">
             <div className="text-lg font-bold text-green-400">{flyingDrones.length}</div>
             <div className="text-xs text-gray-400">В полете</div>
-          </div>
-          <div className="p-2 bg-gray-800/50 rounded">
-            <div className="text-lg font-bold text-white">{missionLog.length}</div>
-            <div className="text-xs text-gray-400">Событий</div>
           </div>
         </div>
       </div>
