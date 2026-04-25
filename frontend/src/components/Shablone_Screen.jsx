@@ -136,17 +136,6 @@ export function ShabloneScreen({
 
             {deleteDialog.mode == null ? (
               <div className="space-y-2">
-                {cascadeCount > 0 && (
-                  <div className="rounded-lg border border-amber-500/60 bg-amber-900/35 px-3 py-2 text-xs text-amber-100">
-                    Внимание: этот шаблон связан с зоной <strong>«{cascadeMeta?.zoneName || 'не определена'}»</strong>,
-                    где есть ещё <strong>{cascadeCount}</strong> маршрут(а/ов). При удалении они также будут удалены.
-                    {relatedNames.length > 0 && (
-                      <span className="block mt-1">
-                        Маршруты: <strong>{relatedNames.join(', ')}</strong>.
-                      </span>
-                    )}
-                  </div>
-                )}
                 <button
                   type="button"
                   onClick={() => setDeleteDialog({ id: templateForDelete.id, mode: 'route_only' })}
@@ -184,7 +173,7 @@ export function ShabloneScreen({
                     {deleteDialog.mode === 'route_only' ? 'только маршрут' : 'маршрут и зона'}.
                   </span>
                 </p>
-                {cascadeCount > 0 && (
+                {deleteDialog.mode === 'route_and_zone' && cascadeCount > 0 && (
                   <div className="rounded-lg border border-red-500/60 bg-red-900/25 px-3 py-2 text-xs text-red-100">
                     Будут удалены дополнительно: <strong>{cascadeCount}</strong> маршрут(а/ов) из зоны{' '}
                     <strong>«{cascadeMeta?.zoneName || 'не определена'}»</strong>.

@@ -2234,7 +2234,7 @@ function App() {
     const sameZoneTemplateIds = collectSameZoneTemplateIds(templateId, missionTemplates, backendZones);
     const otherCount = Math.max(0, sameZoneTemplateIds.length - 1);
 
-    if (otherCount > 0) {
+    if (mode === 'route_and_zone' && otherCount > 0) {
       const cascadeOk = window.confirm(
         `ВНИМАНИЕ: вместе с выбранным шаблоном будут удалены ещё ${otherCount} шаблон(а/ов), так как они находятся в той же зоне.\nПродолжить?`
       );
@@ -2266,14 +2266,15 @@ function App() {
       }
     } else {
       const ok = window.confirm(
-        otherCount > 0
-          ? `Шаблон «${template.name || 'Без названия'}» находится в той же зоне, что и ещё ${otherCount} шаблон(а/ов).\nПри удалении будут удалены все шаблоны этой зоны. Продолжить?`
-          : `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
+        `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
       );
       if (!ok) return;
     }
 
-    const idsToDelete = otherCount > 0 ? sameZoneTemplateIds : [templateId];
+    const idsToDelete =
+      mode === 'route_and_zone' && otherCount > 0
+        ? sameZoneTemplateIds
+        : [templateId];
     try {
       await Promise.all(idsToDelete.map((id) => deleteRouteTemplateInBackend(id)));
       await reloadMissionTemplates();
