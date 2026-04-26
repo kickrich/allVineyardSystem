@@ -103,8 +103,9 @@ module Api
         bushes_positions = attrs.dig("result_json", "bushes_positions")
         gaps_positions = attrs.dig("result_json", "gaps_positions")
         bushes_count = attrs["bushes_count"] || Array(bushes_positions).size
-        gaps_count = attrs["gaps_count"] || Array(gaps_positions).size
+        gaps_count = attrs["gaps_count"] || attrs.dig("result_json", "gaps_count") || Array(gaps_positions).size
         avg_spacing = attrs["avg_bush_spacing"] || attrs["avg_distance_between_bushes"]
+        rows_count = attrs["rows_count"] || attrs.dig("result_json", "shards_count")
 
         {
           id: result.id,
@@ -112,6 +113,7 @@ module Api
           bushes_count: bushes_count.to_i,
           gaps_count: gaps_count.to_i,
           avg_bush_spacing: avg_spacing.present? ? avg_spacing.to_f : nil,
+          rows_count: rows_count.to_i,
           bushes_positions: Array(bushes_positions),
           gaps_positions: Array(gaps_positions),
           processing_progress: attrs.dig("result_json", "processing_progress"),

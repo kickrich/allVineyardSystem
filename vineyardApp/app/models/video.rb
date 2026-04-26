@@ -48,7 +48,16 @@ class Video < ApplicationRecord
       new_status = :uploading
     end
 
-    update!(status: new_status) if status != new_status.to_s
+    previous_status = status
+    if status != new_status.to_s
+      update!(status: new_status)
+    end
+
+    # update_columns in shard processor bypasses shard callbacks,
+    # so we trigger external callback on completed transition here.
+    if previous_status != "completed" && new_status.to_s == "completed" && external_service?
+      SendResultsToExternalServiceJob.perform_later(id)
+    end
   end
 
   def next_available_shard_index

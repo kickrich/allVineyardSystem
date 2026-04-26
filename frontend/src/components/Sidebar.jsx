@@ -34,14 +34,13 @@ export const Sidebar = ({
   onTabChange,
   onClose
 }) => {
-  const [activeTab, setActiveTab] = useState('control');
+  const isAllowedTab = (tab) => tab === 'control' || tab === 'logs' || tab === 'bushes';
+  const [activeTab, setActiveTab] = useState(isAllowedTab(initialTab) ? initialTab : 'control');
 
   useEffect(() => {
-    if (!initialTab || activeTab === initialTab) return;
-    if (initialTab === 'control' || initialTab === 'logs' || initialTab === 'bushes') {
-      setActiveTab(initialTab);
-    }
-  }, [initialTab, activeTab]);
+    if (!isAllowedTab(initialTab)) return;
+    setActiveTab((prev) => (prev === initialTab ? prev : initialTab));
+  }, [initialTab]);
 
   useEffect(() => {
     if (typeof onTabChange === 'function') {

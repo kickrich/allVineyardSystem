@@ -497,6 +497,7 @@ function App() {
   const [backendSync, setBackendSync] = useState({ status: 'idle', message: '' });
   const [authReady, setAuthReady] = useState(hasStoredApiToken);
   const [aiResultsByMissionId, setAiResultsByMissionId] = useState({});
+  const [aiPendingByMissionId, setAiPendingByMissionId] = useState({});
   const [aiCloudNotice, setAiCloudNotice] = useState(null);
   const [sidebarTab, setSidebarTab] = useState('control');
   const authUser = useMemo(() => getStoredApiUser(), [authReady]);
@@ -816,6 +817,13 @@ function App() {
         Number.isInteger(rowsCount) && rowsCount > 0
           ? rowsCount
           : normalizedShiftSegments.length + 1;
+      setAiPendingByMissionId((prev) => ({
+        ...prev,
+        [String(missionId)]: {
+          rowsCount: derivedRowsCount,
+          updatedAt: Date.now(),
+        },
+      }));
       const filenameRowSuffix = Number.isInteger(rowIndex) && rowIndex > 0 ? `_row_${rowIndex}` : '';
       const filename = `mission_${missionId}_drone_${droneId}${filenameRowSuffix}_${Date.now()}.webm`;
       const init = await multipartInitForVideo({
@@ -875,6 +883,9 @@ function App() {
         uploadSessionId,
         parts,
       });
+
+      missionDroneByMissionIdRef.current.set(missionId, droneId);
+      trackedMissionIdsRef.current.add(missionId);
     } finally {
       videoUploadInProgressRef.current.delete(droneId);
     }
@@ -1394,6 +1405,8 @@ function App() {
           bushesCount: Number(result?.bushes_count ?? 0),
           gapsCount: Number(result?.gaps_count ?? 0),
           avgBushSpacing: Number(result?.avg_bush_spacing),
+          rowsCount: Number(result?.rows_count ?? result?.shards_count ?? 0),
+          processedRows: Number(result?.processed_shards ?? 0),
           updatedAt: result?.updated_at ?? null,
           createdAt: result?.created_at ?? null,
         };
@@ -1404,6 +1417,69 @@ function App() {
         return bTs - aTs;
       });
   }, [aiResultsByMissionId, drones]);
+
+  const pendingRowsForSidebar = useMemo(() => {
+    const entries = Object.entries(aiPendingByMissionId);
+    return entries
+      .map(([missionId, pending]) => ({
+        missionId: Number(missionId),
+        rowsCount: Number(pending?.rowsCount ?? 0),
+        processedRows: 0,
+      }))
+      .sort((a, b) => b.missionId - a.missionId);
+  }, [aiPendingByMissionId]);
+
+  const rowsPanelData = useMemo(() => {
+    const latest = aiResultsForSidebar[0] || pendingRowsForSidebar[0];
+    if (!latest) return null;
+    const rowsCount = Number.isFinite(latest.rowsCount) && latest.rowsCount > 0 ? latest.rowsCount : 0;
+    const processedRowsRaw =
+      Number.isFinite(latest.processedRows) && latest.processedRows >= 0
+        ? latest.processedRows
+        : rowsCount;
+    const processedRows = rowsCount > 0 ? Math.min(processedRowsRaw, rowsCount) : processedRowsRaw;
+    const rowCountForPanel = Math.max(1, rowsCount || processedRows || 1);
+
+    const totalBushesCount = Number.isFinite(latest.bushesCount) ? Math.max(0, latest.bushesCount) : 0;
+    const totalGapsCount = Number.isFinite(latest.gapsCount) ? Math.max(0, latest.gapsCount) : 0;
+    const processedRowsForStats = Math.max(0, Math.min(processedRows, rowCountForPanel));
+    const bushesBase = processedRowsForStats > 0 ? Math.floor(totalBushesCount / processedRowsForStats) : 0;
+    const bushesRem = processedRowsForStats > 0 ? totalBushesCount % processedRowsForStats : 0;
+    const gapsBase = processedRowsForStats > 0 ? Math.floor(totalGapsCount / processedRowsForStats) : 0;
+    const gapsRem = processedRowsForStats > 0 ? totalGapsCount % processedRowsForStats : 0;
+
+    const rowStats = Array.from({ length: rowCountForPanel }, (_, idx) => {
+      const rowNum = idx + 1;
+      const isReady = rowNum <= processedRows;
+      if (!isReady) {
+        return {
+          rowNum,
+          bushesCount: null,
+          gapsCount: null,
+        };
+      }
+      return {
+        rowNum,
+        bushesCount: bushesBase + (idx < bushesRem ? 1 : 0),
+        gapsCount: gapsBase + (idx < gapsRem ? 1 : 0),
+      };
+    });
+
+    return {
+      missionId: latest.missionId,
+      rowsCount,
+      processedRows,
+      rowStats,
+    };
+  }, [aiResultsForSidebar, pendingRowsForSidebar]);
+
+  const totalMissionRowsPanelCount = useMemo(() => {
+    const ids = new Set([
+      ...Object.keys(aiPendingByMissionId).map((x) => String(x)),
+      ...Object.keys(aiResultsByMissionId).map((x) => String(x)),
+    ]);
+    return ids.size;
+  }, [aiPendingByMissionId, aiResultsByMissionId]);
 
   const hydrateBackendContext = useCallback(async () => {
     const zones = await fetchZonesFromBackend();
@@ -1486,8 +1562,6 @@ function App() {
       await approveMissionInBackend(missionId);
       await startMissionInBackend(missionId);
       backendMissionIdsRef.current.set(drone.id, missionId);
-      missionDroneByMissionIdRef.current.set(missionId, drone.id);
-      trackedMissionIdsRef.current.add(missionId);
       void syncDroneStateToBackend(drone.id, { battery: drone.battery }).catch((e) =>
         console.warn('PATCH drone (battery после start):', e?.message ?? e)
       );
@@ -1518,6 +1592,12 @@ function App() {
       backendMissionIdsRef.current.delete(droneId);
       trackedMissionIdsRef.current.delete(missionId);
       missionDroneByMissionIdRef.current.delete(missionId);
+      setAiPendingByMissionId((prev) => {
+        if (!(String(missionId) in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[String(missionId)];
+        return copy;
+      });
     } catch (e) {
       console.warn('cancel mission:', e?.message ?? e);
     }
@@ -1552,6 +1632,12 @@ function App() {
             const prevResult = prev[String(missionId)];
             if (prevResult?.updated_at === result.updated_at) return prev;
             return { ...prev, [String(missionId)]: result };
+          });
+          setAiPendingByMissionId((prev) => {
+            if (!(String(missionId) in prev)) return prev;
+            const copy = { ...prev };
+            delete copy[String(missionId)];
+            return copy;
           });
 
           const versionKey = [
@@ -2248,6 +2334,7 @@ function App() {
     setDrones(createLocalDrones());
     setBackendSync({ status: 'idle', message: '' });
     setAiResultsByMissionId({});
+    setAiPendingByMissionId({});
     setAiCloudNotice(null);
     setSidebarTab('control');
     setHasStarted(false);
@@ -3060,6 +3147,60 @@ function App() {
                     >
                       {drawRectZoneMode ? '×' : '▭'}
                     </button>
+                  </div>
+                </div>
+                <div className="pointer-events-none absolute bottom-3 right-3 z-[120] w-[min(88vw,380px)]">
+                  <div className="pointer-events-auto rounded-xl border border-emerald-500/30 bg-gray-900/80 p-3 shadow-xl backdrop-blur-sm">
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-emerald-200">Миссии и ряды</h3>
+                      <span className="rounded-md bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-100">
+                        Миссий: {totalMissionRowsPanelCount}
+                      </span>
+                    </div>
+
+                    {rowsPanelData ? (
+                      <>
+                        <div className="mb-2 text-xs text-gray-300">
+                          Миссия #{rowsPanelData.missionId}
+                          {rowsPanelData.rowsCount > 0
+                            ? ` · Обработано ${rowsPanelData.processedRows}/${rowsPanelData.rowsCount}`
+                            : ''}
+                        </div>
+                        <div className="rounded-lg border border-gray-700/80 bg-slate-900/50 px-2 py-2">
+                          <div className="grid gap-2">
+                            {rowsPanelData.rowStats.map((rowData) => {
+                              const isReady = rowData.rowNum <= rowsPanelData.processedRows;
+                              return (
+                                <div key={rowData.rowNum} className="flex items-center gap-2 text-[11px]">
+                                  <span className="w-10 shrink-0 text-gray-300">Ряд {rowData.rowNum}</span>
+                                  <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                                    {Array.from({ length: 12 }, (_, pointIdx) => (
+                                      <span
+                                        key={`${rowData.rowNum}-${pointIdx}`}
+                                        className={`h-2.5 w-2.5 rounded-full border ${
+                                          isReady
+                                            ? 'border-emerald-400 bg-emerald-400/70'
+                                            : 'border-gray-500 bg-gray-700/40'
+                                        }`}
+                                      />
+                                    ))}
+                                  </div>
+                                  <span className="shrink-0 text-[10px] text-gray-400">
+                                    {isReady
+                                      ? `Кустов: ${rowData.bushesCount ?? 0} · Пропусков: ${rowData.gapsCount ?? 0}`
+                                      : 'В обработке'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="rounded-lg border border-gray-700/80 bg-slate-900/50 px-3 py-3 text-xs text-gray-400">
+                        Пока нет данных по рядам. После завершения анализа панель заполнится автоматически.
+                      </div>
+                    )}
                   </div>
                 </div>
                 <YandexMap

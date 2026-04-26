@@ -2,7 +2,6 @@ module Api
   module V1
     class VineyardAppController < BaseController
       skip_before_action :authenticate_request!, only: [:results]
-      skip_before_action :verify_authenticity_token, only: [:results]
 
       # POST /api/v1/vineyard_app/results
       # Получение результатов анализа от VineyardApp
@@ -18,17 +17,28 @@ module Api
 
         # Сохраняем результаты AI анализа
         ai_result = mission.ai_result || mission.build_ai_result
+        stats_param = params[:statistics]
+        stats =
+          if stats_param.respond_to?(:to_unsafe_h)
+            stats_param.to_unsafe_h.with_indifferent_access
+          else
+            (stats_param || {}).to_h.with_indifferent_access
+          end
+        rows_count = params[:rows_count].presence || params[:shards_count].presence || stats[:rows_count]
+        processed_shards = params[:processed_shards].presence || stats[:processed_shards]
+        shards_count = params[:shards_count].presence || stats[:shards_count]
 
         ai_result.assign_attributes(
-          bushes_count: params[:statistics][:total_bushes].to_i,
-          gaps_count: params[:statistics][:total_gaps].to_i,
-          avg_bush_spacing: params[:statistics][:avg_bush_spacing].to_f,
+          bushes_count: stats[:total_bushes].to_i,
+          avg_distance_between_bushes: stats[:avg_bush_spacing].to_f,
+          rows_count: rows_count.to_i,
           result_json: {
-            bushes_positions: params[:statistics][:bushes_positions] || [],
-            gaps_positions: params[:statistics][:gaps_positions] || [],
+            gaps_count: stats[:total_gaps].to_i,
+            bushes_positions: stats[:bushes_positions] || [],
+            gaps_positions: stats[:gaps_positions] || [],
             processing_progress: params[:processing_progress],
-            shards_count: params[:shards_count],
-            processed_shards: params[:processed_shards]
+            shards_count: shards_count,
+            processed_shards: processed_shards
           }
         )
 
@@ -70,8 +80,8 @@ module Api
           ai_result_id: ai_result.id,
           mission_id: ai_result.mission_id,
           bushes_count: ai_result.bushes_count,
-          gaps_count: ai_result.gaps_count,
-          avg_bush_spacing: ai_result.avg_bush_spacing,
+          gaps_count: ai_result.result_json&.dig("gaps_count").to_i,
+          avg_bush_spacing: ai_result.avg_distance_between_bushes,
           created_at: ai_result.created_at,
           updated_at: ai_result.updated_at
         }
