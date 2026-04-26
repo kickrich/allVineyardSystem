@@ -12,7 +12,6 @@ services:
       MINIO_BUCKET: vineyard-videos
       MINIO_REGION: us-east-1
       MINIO_SECURE: "false"
-    gpus: all
     container_name: vineyard_cv_service
     depends_on:
       - minio

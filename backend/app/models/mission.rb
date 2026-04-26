@@ -46,6 +46,7 @@ class Mission < ApplicationRecord
   before_validation :set_default_status, on: :create
   before_validation :strip_mission_type
   after_destroy :free_drone_if_needed
+  after_commit :enqueue_ready_video_uploads_for_vineyard, on: :update, if: :completed_status_committed?
 
   validates :drone, presence: { message: "должен быть указан" }
   validates :user, presence: { message: "должен быть указан" }
@@ -166,6 +167,18 @@ class Mission < ApplicationRecord
   end
 
   private
+
+  def completed_status_committed?
+    previous_changes.key?("status") && completed?
+  end
+
+  def enqueue_ready_video_uploads_for_vineyard
+    media_uploads
+      .where(media_type: "video", status: "ready")
+      .find_each do |media_upload|
+        SendVideoToVineyardAppJob.perform_later(media_upload.id)
+      end
+  end
 
   def mission_type_present?
     mission_type.present?
