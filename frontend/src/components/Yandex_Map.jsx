@@ -171,7 +171,7 @@ function areSamePolylineCoords(currentCoords, nextCoords) {
 
 function formatSchemaRows(rowsSchema) {
   if (!Array.isArray(rowsSchema) || rowsSchema.length === 0) return [];
-  return rowsSchema.slice(0, 6).map((row) => {
+  return rowsSchema.map((row) => {
     const index = Number(row?.shard_index || 0);
     const sequence = Array.isArray(row?.row_sequence) ? row.row_sequence.join(' ') : '—';
     return `#${index}: ${sequence}`;
