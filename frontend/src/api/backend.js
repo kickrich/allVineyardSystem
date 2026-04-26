@@ -311,7 +311,7 @@ export async function multipartInitForVideo({
   if (Number.isInteger(rowsCount) && rowsCount > 0) {
     payload.rows_count = rowsCount;
   }
-  if (Array.isArray(shiftSegmentIndices) && shiftSegmentIndices.length > 0) {
+  if (Array.isArray(shiftSegmentIndices) && shiftSegmentIndices.length) {
     payload.shift_segment_indices = shiftSegmentIndices;
   }
 
