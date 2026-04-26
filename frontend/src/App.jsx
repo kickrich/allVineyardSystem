@@ -731,12 +731,6 @@ function App() {
   const videoSplitInProgressRef = useRef(new Map());
   const videoRowSplitStateRef = useRef(new Map());
 
-  const toNormalizedShiftSegments = (droneId) => {
-    const raw = routeShiftSegmentsByDroneId[String(droneId)];
-    if (!Array.isArray(raw)) return [];
-    return [...new Set(raw.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b);
-  };
-
   const stopVideoRecordingForDrone = async (droneId) => {
     const rec = videoRecordingByDroneRef.current.get(droneId);
     if (!rec) return null;
@@ -761,7 +755,9 @@ function App() {
     const cfg = videoRecorderConfigByDroneRef.current.get(droneId);
     if (!cfg?.stream) return false;
 
-    const recorder = cfg.mimeType ? new MediaRecorder(cfg.stream, { mimeType: cfg.mimeType }) : new MediaRecorder(cfg.stream);
+    const recorder = cfg.mimeType
+      ? new MediaRecorder(cfg.stream, { mimeType: cfg.mimeType })
+      : new MediaRecorder(cfg.stream);
     const chunks = [];
 
     let resolveBlob;
@@ -799,10 +795,9 @@ function App() {
     try {
       const normalizedShiftSegments = Array.isArray(shiftSegmentIndices)
         ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
-        : toNormalizedShiftSegments(droneId);
-      const derivedRowsCount = Number.isInteger(rowsCount) && rowsCount > 0
-        ? rowsCount
-        : (normalizedShiftSegments.length + 1);
+        : [];
+      const derivedRowsCount =
+        Number.isInteger(rowsCount) && rowsCount > 0 ? rowsCount : normalizedShiftSegments.length + 1;
       const filenameRowSuffix = Number.isInteger(rowIndex) && rowIndex > 0 ? `_row_${rowIndex}` : '';
       const filename = `mission_${missionId}_drone_${droneId}${filenameRowSuffix}_${Date.now()}.webm`;
       const init = await multipartInitForVideo({
@@ -1600,6 +1595,7 @@ function App() {
         if (ctx && canvas.captureStream) {
           videoCtx = ctx;
           const stream = canvas.captureStream(VIDEO_RECORDING_FPS);
+
           const recorderMimeType = VIDEO_RECORDER_MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported?.(m)) ?? '';
           videoRecorderConfigByDroneRef.current.set(droneId, {
             stream,
@@ -1612,7 +1608,10 @@ function App() {
       console.warn('Video recording init failed:', e?.message ?? e);
     }
 
-    const shiftSegments = toNormalizedShiftSegments(droneId);
+    const rawShift = routeShiftSegmentsByDroneId[String(droneId)];
+    const shiftSegments = Array.isArray(rawShift)
+      ? [...new Set(rawShift.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+      : [];
     const rowsCount = shiftSegments.length + 1;
     videoRowSplitStateRef.current.set(droneId, {
       shiftSegments,
@@ -1672,11 +1671,10 @@ function App() {
       if (rowSplitState) {
         rowSplitState.missionId = missionId ?? rowSplitState.missionId;
       }
-      const batteryDrain = (missionParams.batteryConsumption * elapsedTime) / missionParams.totalTime;
-      const remainingBattery = Math.max(0, 100 - batteryDrain);
 
       if (
         rowSplitState &&
+        rowSplitState.shiftSegments.length > 0 &&
         rowSplitState.shiftSegments.includes(currentSegment) &&
         rowSplitState.lastSplitSegmentIndex !== currentSegment &&
         !videoSplitInProgressRef.current.get(droneId)
@@ -1707,6 +1705,9 @@ function App() {
           }
         })();
       }
+
+      const batteryDrain = (missionParams.batteryConsumption * elapsedTime) / missionParams.totalTime;
+      const remainingBattery = Math.max(0, 100 - batteryDrain);
 
       const totalProgressForVideo = segmentCount > 0
         ? ((currentSegment + clampedProgress) / segmentCount) * 100
