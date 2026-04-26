@@ -280,6 +280,12 @@ export async function fetchActiveMissionsForDrone(droneId) {
   return Array.isArray(missions) ? missions : [];
 }
 
+export async function fetchMissionAiResultFromBackend(missionId) {
+  if (missionId == null) return null;
+  const response = await apiGet(`/api/v1/missions/${encodeURIComponent(missionId)}/ai_result`);
+  return extractData(response);
+}
+
 export async function multipartInitForVideo({
   missionId,
   filename,

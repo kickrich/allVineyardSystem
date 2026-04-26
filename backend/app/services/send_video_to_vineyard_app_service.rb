@@ -44,14 +44,6 @@ class SendVideoToVineyardAppService
       @mission.drone&.name,
       (@media_upload.created_at&.strftime('%Y-%m-%d %H:%M'))
     ].compact
-
-    row_idx = row_index_from_meta
-    rows_total = rows_count_from_meta
-    if row_idx
-      suffix = rows_total ? "ряд #{row_idx}/#{rows_total}" : "ряд #{row_idx}"
-      parts << suffix
-    end
-
     parts.join(" - ")
   end
 
@@ -212,12 +204,9 @@ class SendVideoToVineyardAppService
     val.positive? ? val : nil
   end
 
-  # Режим «новый ряд = новое видео»:
-  # - автоматически включается, если у upload есть row_index
-  # - либо глобально через VINEYARD_NEW_VIDEO_PER_ROW=true
+  # Режим «новый ряд = новое видео» включается только флагом.
+  # По умолчанию: одна миссия/одно видео в Vineyard, ряды идут как shard'ы.
   def use_new_video_per_upload?
-    return true if row_index_from_meta.present?
-
     flag = ENV["VINEYARD_NEW_VIDEO_PER_ROW"].to_s.strip.downcase
     %w[1 true yes on].include?(flag)
   end

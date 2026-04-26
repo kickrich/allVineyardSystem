@@ -33,6 +33,7 @@ import {
   completeMissionInBackend,
   cancelMissionInBackend,
   fetchActiveMissionsForDrone,
+  fetchMissionAiResultFromBackend,
   postTelemetryToBackend,
   multipartInitForVideo,
   multipartPresignPart,
@@ -62,6 +63,7 @@ const VIDEO_RECORDING_FPS = 15;
 const VIDEO_BACKEND_CONTENT_TYPE = 'video/webm';
 const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
 const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024; // >= 1MB (минимум в backend)
+const AI_RESULTS_POLL_INTERVAL_MS = 5000;
 
 function hasStoredApiToken() {
   if (typeof window === 'undefined') return false;
@@ -494,6 +496,9 @@ function App() {
   const [drones, setDrones] = useState(() => createLocalDrones());
   const [backendSync, setBackendSync] = useState({ status: 'idle', message: '' });
   const [authReady, setAuthReady] = useState(hasStoredApiToken);
+  const [aiResultsByMissionId, setAiResultsByMissionId] = useState({});
+  const [aiCloudNotice, setAiCloudNotice] = useState(null);
+  const [sidebarTab, setSidebarTab] = useState('control');
   const authUser = useMemo(() => getStoredApiUser(), [authReady]);
   const authUserLabel = useMemo(() => {
     if (authUser?.name && String(authUser.name).trim()) return String(authUser.name).trim();
@@ -503,6 +508,9 @@ function App() {
   }, [authUser]);
   const backendContextRef = useRef({ userId: null, zoneId: null });
   const backendMissionIdsRef = useRef(new Map());
+  const missionDroneByMissionIdRef = useRef(new Map());
+  const trackedMissionIdsRef = useRef(new Set());
+  const seenAiResultKeysRef = useRef(new Set());
 
   const [backendZones, setBackendZones] = useState([]);
   const [activeZoneId, setActiveZoneId] = useState(null);
@@ -1371,6 +1379,32 @@ function App() {
     setGlobalMissionLog((prev) => [zoneLogEntry, ...prev].slice(0, 100));
   }, []);
 
+  const aiResultsForSidebar = useMemo(() => {
+    const entries = Object.entries(aiResultsByMissionId);
+    if (!entries.length) return [];
+    return entries
+      .map(([missionId, result]) => {
+        const numericMissionId = Number(missionId);
+        const droneId = missionDroneByMissionIdRef.current.get(numericMissionId);
+        const droneName = drones.find((d) => d.id === droneId)?.name ?? null;
+        return {
+          missionId: numericMissionId,
+          droneId: droneId ?? null,
+          droneName,
+          bushesCount: Number(result?.bushes_count ?? 0),
+          gapsCount: Number(result?.gaps_count ?? 0),
+          avgBushSpacing: Number(result?.avg_bush_spacing),
+          updatedAt: result?.updated_at ?? null,
+          createdAt: result?.created_at ?? null,
+        };
+      })
+      .sort((a, b) => {
+        const aTs = Date.parse(a.updatedAt ?? a.createdAt ?? 0);
+        const bTs = Date.parse(b.updatedAt ?? b.createdAt ?? 0);
+        return bTs - aTs;
+      });
+  }, [aiResultsByMissionId, drones]);
+
   const hydrateBackendContext = useCallback(async () => {
     const zones = await fetchZonesFromBackend();
     setBackendZones(zones);
@@ -1452,6 +1486,8 @@ function App() {
       await approveMissionInBackend(missionId);
       await startMissionInBackend(missionId);
       backendMissionIdsRef.current.set(drone.id, missionId);
+      missionDroneByMissionIdRef.current.set(missionId, drone.id);
+      trackedMissionIdsRef.current.add(missionId);
       void syncDroneStateToBackend(drone.id, { battery: drone.battery }).catch((e) =>
         console.warn('PATCH drone (battery после start):', e?.message ?? e)
       );
@@ -1480,10 +1516,77 @@ function App() {
     try {
       await cancelMissionInBackend(missionId);
       backendMissionIdsRef.current.delete(droneId);
+      trackedMissionIdsRef.current.delete(missionId);
+      missionDroneByMissionIdRef.current.delete(missionId);
     } catch (e) {
       console.warn('cancel mission:', e?.message ?? e);
     }
   }, []);
+
+  const openBushesPanelForMission = useCallback((missionId) => {
+    const droneId = missionDroneByMissionIdRef.current.get(Number(missionId));
+    if (droneId != null) {
+      setSelectedDroneForSidebar(droneId);
+    }
+    setSidebarTab('bushes');
+    setSidebarOpen(true);
+    setParkingOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      const missionIds = Array.from(trackedMissionIdsRef.current.values());
+      if (!missionIds.length) return;
+
+      for (const missionId of missionIds) {
+        if (cancelled) return;
+        try {
+          const payload = await fetchMissionAiResultFromBackend(missionId);
+          const result = payload?.ai_result;
+          if (!result) continue;
+
+          setAiResultsByMissionId((prev) => {
+            const prevResult = prev[String(missionId)];
+            if (prevResult?.updated_at === result.updated_at) return prev;
+            return { ...prev, [String(missionId)]: result };
+          });
+
+          const versionKey = [
+            missionId,
+            result?.updated_at ?? '',
+            result?.bushes_count ?? '',
+            result?.gaps_count ?? '',
+          ].join(':');
+          if (!seenAiResultKeysRef.current.has(versionKey)) {
+            seenAiResultKeysRef.current.add(versionKey);
+            const droneId = missionDroneByMissionIdRef.current.get(Number(missionId));
+            const droneName = dronesRef.current.find((d) => d.id === droneId)?.name;
+            setAiCloudNotice({
+              missionId: Number(missionId),
+              droneName: droneName ?? null,
+              bushesCount: Number(result?.bushes_count ?? 0),
+              gapsCount: Number(result?.gaps_count ?? 0),
+            });
+          }
+        } catch (e) {
+          console.warn('poll ai_result failed:', e?.message ?? e);
+        }
+      }
+    };
+
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, AI_RESULTS_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [authReady]);
 
   const isDroneAtMissionStart = useCallback((drone) => {
     if (!drone?.path || drone.path.length < 2 || !drone.position) return false;
@@ -2136,11 +2239,17 @@ function App() {
   const handleLogout = useCallback(() => {
     clearApiSession();
     backendMissionIdsRef.current = new Map();
+    missionDroneByMissionIdRef.current = new Map();
+    trackedMissionIdsRef.current = new Set();
+    seenAiResultKeysRef.current = new Set();
     backendContextRef.current = { userId: null, zoneId: null };
     activeTimersRef.current.forEach((id) => clearInterval(id));
     activeTimersRef.current.clear();
     setDrones(createLocalDrones());
     setBackendSync({ status: 'idle', message: '' });
+    setAiResultsByMissionId({});
+    setAiCloudNotice(null);
+    setSidebarTab('control');
     setHasStarted(false);
     setAuthReady(false);
     setSidebarOpen(false);
@@ -2606,6 +2715,42 @@ function App() {
         </div>
       )}
 
+      {workspaceVisible && aiCloudNotice && (
+        <div className="fixed top-20 right-2 sm:top-24 sm:right-3 z-[1200] w-[min(92vw,360px)]">
+          <div className="rounded-2xl border border-sky-300/50 bg-sky-950/70 px-4 py-3 shadow-xl backdrop-blur-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-wide text-sky-200/90">Облако AI</p>
+                <p className="mt-0.5 text-sm text-sky-50">
+                  Результат для миссии <strong>#{aiCloudNotice.missionId}</strong> готов
+                </p>
+                <p className="mt-1 text-xs text-sky-100/90">
+                  Кустов: {aiCloudNotice.bushesCount}, пропусков: {aiCloudNotice.gapsCount}
+                  {aiCloudNotice.droneName ? `, дрон: ${aiCloudNotice.droneName}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiCloudNotice(null)}
+                className="rounded-lg border border-sky-300/40 px-2 py-1 text-xs text-sky-100 hover:bg-sky-900/70"
+              >
+                ✕
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                openBushesPanelForMission(aiCloudNotice.missionId);
+                setAiCloudNotice(null);
+              }}
+              className="mt-3 inline-flex items-center justify-center rounded-xl bg-sky-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-500"
+            >
+              Перейти в панель кустов
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-1 gap-2 lg:gap-3 min-h-0 overflow-hidden flex-col lg:flex-row">
         <div
           className={`fixed left-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-72 lg:max-w-none lg:flex-shrink-0 ${
@@ -3042,6 +3187,10 @@ function App() {
                 selectedDroneId={selectedDroneForSidebar}
                 onSelectDrone={setSelectedDroneForSidebar}
                 missionLog={globalMissionLog}
+                aiResults={aiResultsForSidebar}
+                initialTab={sidebarTab}
+                onTabChange={setSidebarTab}
+                onOpenAiMission={openBushesPanelForMission}
                 activeFlights={getActiveFlights()}
                 onStartFlight={startDroneFlight}
                 onPauseFlight={pauseDroneFlight}

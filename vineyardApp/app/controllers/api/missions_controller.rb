@@ -16,7 +16,9 @@ class Api::MissionsController < ApplicationController
     end
 
     existing_scope = Video.where(mission_id: mission_id)
-    existing_scope = existing_scope.where(row_index: row_index) if row_index.present?
+    if new_video_per_row_mode? && row_index.present?
+      existing_scope = existing_scope.where(row_index: row_index)
+    end
     if existing_scope.exists?
       video = existing_scope.order(created_at: :desc).first
       return render json: {
@@ -33,8 +35,8 @@ class Api::MissionsController < ApplicationController
 
     video = Video.new(
       mission_id: mission_id,
-      row_index: row_index,
-      rows_count: rows_count,
+      row_index: (new_video_per_row_mode? ? row_index : nil),
+      rows_count: (new_video_per_row_mode? ? rows_count : nil),
       external_service_url: external_service_url,
       external_callback_token: external_callback_token,
       name: name,
@@ -196,7 +198,8 @@ class Api::MissionsController < ApplicationController
 
   private
 
-  # Находит Video по video_id + mission_id, иначе — по mission_id (+ row_index), иначе создаёт новое.
+  # Находит Video по video_id + mission_id, иначе — по mission_id.
+  # Режим "новое видео на каждый ряд" включается только через флаг окружения.
   def resolve_video_for_shard_upload(mission_id:, video_id_param:, callback_token:, row_index:, rows_count:, name:, external_service_url:)
     mid = mission_id.to_s
 
@@ -217,7 +220,9 @@ class Api::MissionsController < ApplicationController
     end
 
     existing_scope = Video.where(mission_id: mid)
-    existing_scope = existing_scope.where(row_index: row_index) if row_index.present?
+    if new_video_per_row_mode? && row_index.present?
+      existing_scope = existing_scope.where(row_index: row_index)
+    end
     existing = existing_scope.order(created_at: :desc).first
     if existing
       err = shard_callback_token_error(existing, callback_token)
@@ -227,8 +232,8 @@ class Api::MissionsController < ApplicationController
 
     video = Video.create!(
       mission_id: mid,
-      row_index: row_index,
-      rows_count: rows_count,
+      row_index: (new_video_per_row_mode? ? row_index : nil),
+      rows_count: (new_video_per_row_mode? ? rows_count : nil),
       external_service_url: external_service_url,
       external_callback_token: callback_token,
       name: name,
@@ -251,5 +256,10 @@ class Api::MissionsController < ApplicationController
   def positive_int_or_nil(value)
     v = value.to_i
     v.positive? ? v : nil
+  end
+
+  def new_video_per_row_mode?
+    flag = ENV["VINEYARD_NEW_VIDEO_PER_ROW"].to_s.strip.downcase
+    %w[1 true yes on].include?(flag)
   end
 end

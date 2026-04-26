@@ -14,6 +14,7 @@ Rails.application.routes.draw do
         member do
           post :start
           post :complete
+          get :ai_result
         end
       end
 

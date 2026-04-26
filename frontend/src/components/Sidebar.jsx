@@ -28,9 +28,26 @@ export const Sidebar = ({
   isDroneAtMissionStart,
   workZoneReady = false,
   instructionTourActive = false,
+  aiResults = [],
+  initialTab = 'control',
+  onOpenAiMission,
+  onTabChange,
   onClose
 }) => {
   const [activeTab, setActiveTab] = useState('control');
+
+  useEffect(() => {
+    if (!initialTab || activeTab === initialTab) return;
+    if (initialTab === 'control' || initialTab === 'logs' || initialTab === 'bushes') {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, activeTab]);
+
+  useEffect(() => {
+    if (typeof onTabChange === 'function') {
+      onTabChange(activeTab);
+    }
+  }, [activeTab, onTabChange]);
 
   const tourDemoDrone = useMemo(() => getTourDemoDrone(), []);
   const visibleDrones = dronesData.filter((d) => d.isVisible);
@@ -179,6 +196,20 @@ export const Sidebar = ({
           {missionLog.length > 0 && (
             <span className="ml-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full">
               {missionLog.length}
+            </span>
+          )}
+        </button>
+        <button
+          className={`flex-1 py-3 min-h-[44px] text-center font-medium transition-colors ${activeTab === 'bushes'
+            ? 'bg-gray-700/90 text-emerald-300 border-b-2 border-emerald-400'
+            : 'bg-gray-800/70 text-gray-400 hover:bg-gray-700/80 hover:text-gray-200'
+            }`}
+          onClick={() => setActiveTab('bushes')}
+        >
+          Кусты
+          {aiResults.length > 0 && (
+            <span className="ml-2 bg-emerald-600 text-white text-xs px-2 py-1 rounded-full">
+              {aiResults.length}
             </span>
           )}
         </button>
@@ -476,6 +507,69 @@ export const Sidebar = ({
                         ))}
                       </div>
                     )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'bushes' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center mb-1">
+              <h3 className="text-lg font-semibold text-white">Результаты по кустам</h3>
+              <span className="text-xs text-gray-400">миссий: {aiResults.length}</span>
+            </div>
+
+            {aiResults.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <div className="text-4xl mb-2">☁️</div>
+                <p>Пока нет результатов анализа</p>
+                <p className="text-sm mt-1">Когда CV вернёт данные, они появятся тут</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
+                {aiResults.map((result) => (
+                  <div
+                    key={`${result.missionId}-${result.updatedAt ?? result.createdAt ?? 'unknown'}`}
+                    className="rounded-lg border border-emerald-800/70 bg-emerald-950/25 p-3"
+                  >
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-emerald-200">
+                          Миссия #{result.missionId}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {result.droneName ? `Дрон: ${result.droneName}` : 'Дрон не определён'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenAiMission?.(result.missionId)}
+                        className="rounded-lg border border-emerald-400/50 bg-emerald-700/30 px-2.5 py-1.5 text-xs text-emerald-50 hover:bg-emerald-600/50"
+                      >
+                        Перейти
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded bg-gray-900/50 px-2 py-1.5">
+                        <p className="text-[11px] text-gray-400">Кустов</p>
+                        <p className="font-semibold text-white">{result.bushesCount}</p>
+                      </div>
+                      <div className="rounded bg-gray-900/50 px-2 py-1.5">
+                        <p className="text-[11px] text-gray-400">Пропусков</p>
+                        <p className="font-semibold text-white">{result.gapsCount}</p>
+                      </div>
+                      <div className="rounded bg-gray-900/50 px-2 py-1.5">
+                        <p className="text-[11px] text-gray-400">Ср. шаг</p>
+                        <p className="font-semibold text-white">
+                          {Number.isFinite(result.avgBushSpacing)
+                            ? `${result.avgBushSpacing.toFixed(2)} м`
+                            : '—'}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
