@@ -726,7 +726,40 @@ function App() {
   const telemetrySendingRef = useRef(new Map());
 
   const videoRecordingByDroneRef = useRef(new Map());
+  const videoRecorderConfigByDroneRef = useRef(new Map());
   const videoUploadInProgressRef = useRef(new Map());
+  const videoSplitInProgressRef = useRef(new Map());
+  const videoRowSplitStateRef = useRef(new Map());
+  /** Синхронизируется с `routeShiftSegmentsByDroneId` (ниже) через useEffect. */
+  const routeShiftSegmentsByDroneIdRef = useRef({});
+
+  const startVideoRecordingChunkForDrone = (droneId) => {
+    const cfg = videoRecorderConfigByDroneRef.current.get(droneId);
+    if (!cfg?.stream) return false;
+
+    const recorder = cfg.mimeType
+      ? new MediaRecorder(cfg.stream, { mimeType: cfg.mimeType })
+      : new MediaRecorder(cfg.stream);
+    const chunks = [];
+
+    let resolveBlob;
+    const blobPromise = new Promise((resolve) => {
+      resolveBlob = resolve;
+    });
+
+    recorder.ondataavailable = (e) => {
+      if (e?.data && e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      const blobType = VIDEO_BACKEND_CONTENT_TYPE;
+      const blob = new Blob(chunks, { type: blobType });
+      resolveBlob(blob);
+    };
+
+    recorder.start(1000);
+    videoRecordingByDroneRef.current.set(droneId, { recorder, blobPromise });
+    return true;
+  };
 
   const stopVideoRecordingForDrone = async (droneId) => {
     const rec = videoRecordingByDroneRef.current.get(droneId);
@@ -748,20 +781,44 @@ function App() {
     }
   };
 
-  const uploadVideoMultipartForMission = async ({ missionId, droneId, blob }) => {
+  const toNormalizedShiftSegmentsForDrone = (droneId) => {
+    const raw = routeShiftSegmentsByDroneIdRef.current[String(droneId)];
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(raw.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b);
+  };
+
+  const uploadVideoMultipartForMission = async ({
+    missionId,
+    droneId,
+    blob,
+    rowIndex = null,
+    rowsCount = null,
+    shiftSegmentIndices = null,
+  }) => {
     if (missionId == null) return;
     if (!blob || blob.size <= 0) return;
     if (videoUploadInProgressRef.current.get(droneId)) return;
 
     videoUploadInProgressRef.current.set(droneId, true);
     try {
-      const filename = `mission_${missionId}_drone_${droneId}_${Date.now()}.webm`;
+      const normalizedShiftSegments = Array.isArray(shiftSegmentIndices)
+        ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+        : toNormalizedShiftSegmentsForDrone(droneId);
+      const derivedRowsCount =
+        Number.isInteger(rowsCount) && rowsCount > 0
+          ? rowsCount
+          : normalizedShiftSegments.length + 1;
+      const filenameRowSuffix = Number.isInteger(rowIndex) && rowIndex > 0 ? `_row_${rowIndex}` : '';
+      const filename = `mission_${missionId}_drone_${droneId}${filenameRowSuffix}_${Date.now()}.webm`;
       const init = await multipartInitForVideo({
         missionId,
         filename,
         byteSize: blob.size,
         contentType: VIDEO_BACKEND_CONTENT_TYPE,
         chunkSizeBytes: VIDEO_MULTIPART_CHUNK_SIZE_BYTES,
+        rowIndex,
+        rowsCount: derivedRowsCount,
+        shiftSegmentIndices: normalizedShiftSegments,
       });
 
       const uploadSessionId = init?.upload_session_id;
@@ -883,6 +940,10 @@ function App() {
     },
     [selectedDroneForSidebar, drones]
   );
+
+  useEffect(() => {
+    routeShiftSegmentsByDroneIdRef.current = routeShiftSegmentsByDroneId;
+  }, [routeShiftSegmentsByDroneId]);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [parkingOpen, setParkingOpen] = useState(false);
@@ -1550,35 +1611,31 @@ function App() {
           const stream = canvas.captureStream(VIDEO_RECORDING_FPS);
 
           const recorderMimeType = VIDEO_RECORDER_MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported?.(m)) ?? '';
-          const options = recorderMimeType ? { mimeType: recorderMimeType } : undefined;
-
-          const recorder = new MediaRecorder(stream, options);
-          const chunks = [];
-
-          let resolveBlob;
-          const blobPromise = new Promise((resolve) => {
-            resolveBlob = resolve;
+          videoRecorderConfigByDroneRef.current.set(droneId, {
+            stream,
+            mimeType: recorderMimeType || null
           });
-
-          recorder.ondataavailable = (e) => {
-            if (e?.data && e.data.size > 0) chunks.push(e.data);
-          };
-          recorder.onstop = () => {
-            const blobType = VIDEO_BACKEND_CONTENT_TYPE;
-            const blob = new Blob(chunks, { type: blobType });
-            resolveBlob(blob);
-          };
-
-          recorder.start(1000); // chunks every 1s
-          videoRecordingByDroneRef.current.set(droneId, {
-            recorder,
-            blobPromise,
-          });
+          startVideoRecordingChunkForDrone(droneId);
         }
       }
     } catch (e) {
       console.warn('Video recording init failed:', e?.message ?? e);
     }
+
+    if (!drone?.currentMission?.flyToFirstOnly) {
+      const shiftSegs = toNormalizedShiftSegmentsForDrone(droneId);
+      const rowsCount = shiftSegs.length + 1;
+      videoRowSplitStateRef.current.set(droneId, {
+        shiftSegments: shiftSegs,
+        rowsCount,
+        currentRowIndex: 1,
+        lastSplitSegmentIndex: null,
+        missionId: backendMissionIdsRef.current.get(droneId) ?? null
+      });
+    } else {
+      videoRowSplitStateRef.current.delete(droneId);
+    }
+    videoSplitInProgressRef.current.set(droneId, false);
 
     const timerId = setInterval(() => {
       const currentDrone = dronesRef.current.find(d => d.id === droneId);
@@ -1625,6 +1682,47 @@ function App() {
       const segmentCount = pathForFlight.length - 1;
 
       const missionId = backendMissionIdsRef.current.get(droneId);
+
+      const rowSplitState = videoRowSplitStateRef.current.get(droneId);
+      if (rowSplitState) {
+        rowSplitState.missionId = missionId ?? rowSplitState.missionId;
+      }
+
+      if (
+        rowSplitState &&
+        !currentDrone.currentMission?.flyToFirstOnly &&
+        rowSplitState.shiftSegments.length > 0 &&
+        rowSplitState.shiftSegments.includes(currentSegment) &&
+        rowSplitState.lastSplitSegmentIndex !== currentSegment &&
+        !videoSplitInProgressRef.current.get(droneId)
+      ) {
+        rowSplitState.lastSplitSegmentIndex = currentSegment;
+        videoSplitInProgressRef.current.set(droneId, true);
+        void (async () => {
+          try {
+            const finishedRow = rowSplitState.currentRowIndex;
+            const blob = await stopVideoRecordingForDrone(droneId);
+            if (rowSplitState.missionId && blob) {
+              await uploadVideoMultipartForMission({
+                missionId: rowSplitState.missionId,
+                droneId,
+                blob,
+                rowIndex: finishedRow,
+                rowsCount: rowSplitState.rowsCount,
+                shiftSegmentIndices: rowSplitState.shiftSegments
+              });
+            }
+            rowSplitState.currentRowIndex = finishedRow + 1;
+            startVideoRecordingChunkForDrone(droneId);
+            addToDroneLog(droneId, `🎞️ Ряд ${finishedRow} записан, начат ряд ${rowSplitState.currentRowIndex}`);
+          } catch (e) {
+            console.warn('Row split video upload failed:', e?.message ?? e);
+          } finally {
+            videoSplitInProgressRef.current.set(droneId, false);
+          }
+        })();
+      }
+
       const batteryDrain = (missionParams.batteryConsumption * elapsedTime) / missionParams.totalTime;
       const remainingBattery = Math.max(0, 100 - batteryDrain);
 
@@ -1760,6 +1858,13 @@ function App() {
       );
       addToDroneLog(droneId, '📍 Дрон завис над первой точкой. Нажмите «Запустить миссию».');
       void stopVideoRecordingForDrone(droneId).catch(() => {});
+      videoRowSplitStateRef.current.delete(droneId);
+      videoSplitInProgressRef.current.delete(droneId);
+      videoRecorderConfigByDroneRef.current.delete(droneId);
+      void syncDroneStateToBackend(droneId, { status: 'idle' }).catch((e) =>
+        console.warn('PATCH drone (долёт до старта):', e?.message ?? e)
+      );
+      void completeBackendMissionForDrone(droneId);
       return;
     }
 
@@ -1808,6 +1913,7 @@ function App() {
       addToDroneLog(droneId, '✅ Миссия завершена успешно');
 
       const missionIdForUpload = backendMissionIdsRef.current.get(droneId);
+      const rowSplitState = videoRowSplitStateRef.current.get(droneId);
       const blob = await stopVideoRecordingForDrone(droneId);
 
       void syncDroneStateToBackend(droneId, { status: 'idle' }).catch((e) =>
@@ -1821,11 +1927,17 @@ function App() {
             missionId: missionIdForUpload,
             droneId,
             blob,
+            rowIndex: rowSplitState?.currentRowIndex ?? null,
+            rowsCount: rowSplitState?.rowsCount ?? null,
+            shiftSegmentIndices: rowSplitState?.shiftSegments ?? null
           });
         } catch (e) {
           console.warn('Video multipart upload failed:', e?.message ?? e);
         }
       }
+      videoRowSplitStateRef.current.delete(droneId);
+      videoSplitInProgressRef.current.delete(droneId);
+      videoRecorderConfigByDroneRef.current.delete(droneId);
     }, 3000);
   };
 
@@ -1862,6 +1974,9 @@ function App() {
     void cancelBackendMissionForDrone(droneId);
 
     void stopVideoRecordingForDrone(droneId).catch(() => {});
+    videoRowSplitStateRef.current.delete(droneId);
+    videoSplitInProgressRef.current.delete(droneId);
+    videoRecorderConfigByDroneRef.current.delete(droneId);
   };
 
   const pauseDroneFlight = (droneId) => {
@@ -1991,9 +2106,10 @@ function App() {
         })
       );
       addToDroneLog(droneId, '🛫 Взлёт выполнен');
+      void createAndStartBackendMission(drone, flightPath);
       startFlightMovement(droneId);
     }, 2000);
-  }, [drones]);
+  }, [drones, addToDroneLog, createAndStartBackendMission]);
 
   const stopAllFlights = () => {
     drones.forEach(drone => {
@@ -2044,7 +2160,11 @@ function App() {
     telemetrySendingRef.current = new Map();
 
     videoRecordingByDroneRef.current = new Map();
+    videoRecorderConfigByDroneRef.current = new Map();
     videoUploadInProgressRef.current = new Map();
+    videoSplitInProgressRef.current = new Map();
+    videoRowSplitStateRef.current = new Map();
+    routeShiftSegmentsByDroneIdRef.current = {};
   }, []);
 
   const toggleDrawRectZoneMode = useCallback(() => {

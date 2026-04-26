@@ -286,6 +286,9 @@ export async function multipartInitForVideo({
   byteSize,
   contentType = 'video/webm',
   chunkSizeBytes = 5 * 1024 * 1024,
+  rowIndex = null,
+  rowsCount = null,
+  shiftSegmentIndices = [],
 } = {}) {
   if (missionId == null) throw new Error('missionId is required');
   if (!filename) throw new Error('filename is required');
@@ -293,14 +296,26 @@ export async function multipartInitForVideo({
     throw new Error('byteSize must be a positive number');
   }
 
-  const response = await apiPost('/api/v1/media_uploads/multipart_init', {
+  const payload = {
     mission_id: missionId,
     media_type: 'video',
     filename,
     byte_size: byteSize,
     content_type: contentType,
     chunk_size_bytes: chunkSizeBytes,
-  });
+  };
+
+  if (Number.isInteger(rowIndex) && rowIndex > 0) {
+    payload.row_index = rowIndex;
+  }
+  if (Number.isInteger(rowsCount) && rowsCount > 0) {
+    payload.rows_count = rowsCount;
+  }
+  if (Array.isArray(shiftSegmentIndices) && shiftSegmentIndices.length) {
+    payload.shift_segment_indices = shiftSegmentIndices;
+  }
+
+  const response = await apiPost('/api/v1/media_uploads/multipart_init', payload);
   return extractData(response);
 }
 
