@@ -120,6 +120,21 @@
       </div>
     </div>
 
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-700 mb-2">Тестовая загрузка видеофайла</h2>
+      <p class="text-sm text-gray-500 mb-4">
+        Для теста: создаёт новое видео и загружает выбранный файл как первый ряд (shard #1).
+      </p>
+
+      <div class="flex flex-col md:flex-row gap-4">
+        <input type="file" id="testVideoFile" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska"
+               class="flex-1 px-4 py-2 border border-gray-300 rounded-lg bg-white">
+        <button id="uploadTestVideoBtn" class="btn-primary">
+          Загрузить файл (тест)
+        </button>
+      </div>
+    </div>
+
     <div class="bg-white rounded-lg shadow-md p-6">
       <h2 class="text-xl font-semibold text-gray-700 mb-4">Список видео</h2>
       
@@ -189,6 +204,8 @@
     document.addEventListener('DOMContentLoaded', function() {
       const createBtn = document.getElementById('createVideoBtn');
       const videoNameInput = document.getElementById('videoName');
+      const uploadTestVideoBtn = document.getElementById('uploadTestVideoBtn');
+      const testVideoFileInput = document.getElementById('testVideoFile');
       
       function showToast(message, type) {
         const toast = document.createElement('div');
@@ -223,6 +240,60 @@
         } catch (error) {
           console.error('Error:', error);
           showToast('Ошибка создания видео', 'error');
+        }
+      });
+
+      uploadTestVideoBtn.addEventListener('click', async () => {
+        const file = testVideoFileInput.files[0];
+        if (!file) {
+          showToast('Выберите видеофайл', 'error');
+          return;
+        }
+
+        uploadTestVideoBtn.disabled = true;
+        uploadTestVideoBtn.textContent = 'Загрузка...';
+
+        try {
+          const createResponse = await fetch('/api/videos', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': document.querySelector('[name="csrf-token"]').content
+            },
+            body: JSON.stringify({ name: `Тестовая загрузка: ${file.name}` })
+          });
+
+          const createData = await createResponse.json();
+          if (!createResponse.ok) {
+            throw new Error(Array.isArray(createData.error) ? createData.error.join(', ') : (createData.error || 'Не удалось создать видео'));
+          }
+
+          const formData = new FormData();
+          formData.append('shard_index', '1');
+          formData.append('video', file);
+
+          const uploadResponse = await fetch(`/api/videos/${createData.id}/upload_shard`, {
+            method: 'POST',
+            headers: {
+              'X-CSRF-Token': document.querySelector('[name="csrf-token"]').content
+            },
+            body: formData
+          });
+
+          const uploadData = await uploadResponse.json();
+          if (!uploadResponse.ok) {
+            throw new Error(Array.isArray(uploadData.error) ? uploadData.error.join(', ') : (uploadData.error || 'Не удалось загрузить файл'));
+          }
+
+          showToast(`Файл загружен. Видео ID: ${createData.id}`, 'success');
+          testVideoFileInput.value = '';
+          setTimeout(() => window.location.reload(), 1500);
+        } catch (error) {
+          console.error('Upload test video error:', error);
+          showToast(`Ошибка загрузки: ${error.message}`, 'error');
+        } finally {
+          uploadTestVideoBtn.disabled = false;
+          uploadTestVideoBtn.textContent = 'Загрузить файл (тест)';
         }
       });
     });

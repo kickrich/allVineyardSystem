@@ -2,7 +2,7 @@ module Api
   module V1
     class VineyardAppController < BaseController
       skip_before_action :authenticate_request!, only: [:results]
-      skip_before_action :verify_authenticity_token, only: [:results]
+      skip_before_action :verify_authenticity_token, only: [:results], raise: false
 
       # POST /api/v1/vineyard_app/results
       # Получение результатов анализа от VineyardApp
@@ -19,23 +19,28 @@ module Api
         # Сохраняем результаты AI анализа
         ai_result = mission.ai_result || mission.build_ai_result
 
-        ai_result.assign_attributes(
-          bushes_count: params[:statistics][:total_bushes].to_i,
-          gaps_count: params[:statistics][:total_gaps].to_i,
-          avg_bush_spacing: params[:statistics][:avg_bush_spacing].to_f,
-          result_json: {
-            bushes_positions: params[:statistics][:bushes_positions] || [],
-            gaps_positions: params[:statistics][:gaps_positions] || [],
-            processing_progress: params[:processing_progress],
-            shards_count: params[:shards_count],
-            processed_shards: params[:processed_shards]
-          }
-        )
+        stats = params[:statistics].is_a?(ActionController::Parameters) || params[:statistics].is_a?(Hash) ? params[:statistics] : {}
+
+        result_json = {
+          bushes_positions: stats[:bushes_positions] || [],
+          gaps_positions: stats[:gaps_positions] || [],
+          rows_schema: stats[:rows_schema] || [],
+          total_bushes: stats[:total_bushes].to_i,
+          total_gaps: stats[:total_gaps].to_i,
+          avg_bush_spacing: stats[:avg_bush_spacing].to_f,
+          processing_progress: params[:processing_progress],
+          shards_count: params[:shards_count],
+          processed_shards: params[:processed_shards]
+        }
+
+        attrs = { result_json: result_json }
+        attrs[:bushes_count] = stats[:total_bushes].to_i if ai_result.has_attribute?(:bushes_count)
+        attrs[:gaps_count] = stats[:total_gaps].to_i if ai_result.has_attribute?(:gaps_count)
+        attrs[:avg_bush_spacing] = stats[:avg_bush_spacing].to_f if ai_result.has_attribute?(:avg_bush_spacing)
+
+        ai_result.assign_attributes(attrs)
 
         if ai_result.save
-          # Отправляем результаты обратно во внешний сервис если нужно
-          mission.send_results_to_vineyard_app!(ai_result_payload(ai_result))
-
           render_data({
             success: true,
             message: "Результаты сохранены",

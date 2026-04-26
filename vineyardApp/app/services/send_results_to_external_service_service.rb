@@ -27,7 +27,7 @@ class SendResultsToExternalServiceService
     headers = {}
     headers['Authorization'] = "Bearer #{@video.external_callback_token}" if @video.external_callback_token.present?
 
-    response = conn.post('/api/missions/results') do |req|
+    response = conn.post('/api/v1/vineyard_app/results') do |req|
       req.headers.merge!(headers)
       req.body = results.to_json
     end

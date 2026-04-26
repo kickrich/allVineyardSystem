@@ -10,5 +10,7 @@ class SendResultsToExternalServiceJob < ApplicationJob
     service = SendResultsToExternalServiceService.new(video)
     service.send_results
   rescue => e
+    Rails.logger.error("[SendResultsToExternalServiceJob] video_id=#{video_id}: #{e.class}: #{e.message}")
+    Rails.logger.debug(e.backtrace&.first(20)&.join("\n"))
   end
 end

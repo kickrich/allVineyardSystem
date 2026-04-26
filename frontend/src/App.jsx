@@ -33,6 +33,7 @@ import {
   completeMissionInBackend,
   cancelMissionInBackend,
   fetchActiveMissionsForDrone,
+  fetchCompletedMissionSchemas,
   postTelemetryToBackend,
   multipartInitForVideo,
   multipartPresignPart,
@@ -54,6 +55,7 @@ const FIRST_WAYPOINT_TRANSIT_THRESHOLD_M = 10;
 const ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS = 1200;
 const TEMPLATE_ROUTE_REJECT_COOLDOWN_MS = 1200;
 const TELEMETRY_SEND_EVERY_MS = 1000;
+const TELEMETRY_REQUEST_TIMEOUT_MS = 8000;
 const ZONE_COLORS_STORAGE_KEY = 'zone_colors_v1';
 
 const VIDEO_CANVAS_WIDTH = 640;
@@ -285,6 +287,33 @@ function buildAutoZoneName(zones, colorHex = '#22c55e') {
   return `Зона №${ord}("${colorName}")`;
 }
 
+function computeZoneBadgePoint(boundary) {
+  if (!Array.isArray(boundary) || boundary.length < 4) return null;
+  let minLat = Number.POSITIVE_INFINITY;
+  let maxLat = Number.NEGATIVE_INFINITY;
+  let minLng = Number.POSITIVE_INFINITY;
+  let maxLng = Number.NEGATIVE_INFINITY;
+
+  for (const point of boundary) {
+    const lng = Number(point?.[0]);
+    const lat = Number(point?.[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    minLat = Math.min(minLat, lat);
+    maxLat = Math.max(maxLat, lat);
+    minLng = Math.min(minLng, lng);
+    maxLng = Math.max(maxLng, lng);
+  }
+
+  if (!Number.isFinite(minLat) || !Number.isFinite(maxLat) || !Number.isFinite(minLng) || !Number.isFinite(maxLng)) {
+    return null;
+  }
+
+  const latSpan = maxLat - minLat;
+  const centerLng = (minLng + maxLng) / 2;
+  const badgeLat = maxLat + Math.max(0.00008, latSpan * 0.08);
+  return [badgeLat, centerLng];
+}
+
 function updateAutoZoneNameColor(name, colorHex = '#22c55e') {
   const m = String(name ?? '').trim().match(/^Зона\s*№\s*(\d+)\(".*"\)$/i);
   if (!m) return null;
@@ -316,6 +345,9 @@ function buildAutoRouteTemplateName(templates) {
 function mapBackendTemplateToFrontend(template) {
   const id = template?.id;
   const rawPath = Array.isArray(template?.path) ? template.path : [];
+  const rawShiftSegments = Array.isArray(template?.shift_segment_indices)
+    ? template.shift_segment_indices
+    : (Array.isArray(template?.shiftSegments) ? template.shiftSegments : []);
   return {
     id: id != null ? String(id) : `tpl_${Date.now()}`,
     name: template?.name || 'Без названия',
@@ -323,6 +355,10 @@ function mapBackendTemplateToFrontend(template) {
       .map((point) => (Array.isArray(point) && point.length >= 2 ? [Number(point[0]), Number(point[1])] : null))
       .filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1])),
     zoneId: template?.zone_id ?? template?.zoneId ?? null,
+    shiftSegments: rawShiftSegments
+      .map((i) => Number(i))
+      .filter((i) => Number.isInteger(i) && i >= 0)
+      .sort((a, b) => a - b),
   };
 }
 
@@ -388,6 +424,7 @@ function App() {
           name,
           path: [...templateDraftPath],
           zoneId: draftZoneId,
+          shiftSegmentIndices: [...templateDraftShiftSegments],
         });
       } else if (templateEditMode && templateEditMode.type === 'edit') {
         const current = missionTemplates.find((t) => t.id === templateEditMode.id);
@@ -395,6 +432,7 @@ function App() {
           name,
           path: [...templateDraftPath],
           zoneId: draftZoneId ?? current?.zoneId ?? null,
+          shiftSegmentIndices: [...templateDraftShiftSegments],
         });
       } else {
         return;
@@ -410,7 +448,7 @@ function App() {
     setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
-  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
+  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, templateDraftShiftSegments, missionTemplates, reloadMissionTemplates]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
@@ -474,6 +512,9 @@ function App() {
   const applyTemplateToDrone = useCallback((droneId, tplId) => {
     const tpl = missionTemplates.find((t) => t.id === tplId);
     if (!tpl || !tpl.path || !tpl.path.length) return;
+    const normalizedShiftSegments = Array.isArray(tpl.shiftSegments)
+      ? [...new Set(tpl.shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+      : [];
     setDrones((prev) => {
       const path = tpl.path.map((p) => [p[0], p[1]]);
       const next = prev.map((d) =>
@@ -488,6 +529,10 @@ function App() {
       }
       return next;
     });
+    setRouteShiftSegmentsByDroneId((prev) => ({
+      ...prev,
+      [String(droneId)]: normalizedShiftSegments,
+    }));
     setTemplateToApplyId(null);
   }, [missionTemplates, computeMissionParamsFromPath]);
 
@@ -505,6 +550,7 @@ function App() {
   const backendMissionIdsRef = useRef(new Map());
 
   const [backendZones, setBackendZones] = useState([]);
+  const [completedMissionSchemas, setCompletedMissionSchemas] = useState([]);
   const [activeZoneId, setActiveZoneId] = useState(null);
   const activeZoneIdRef = useRef(null);
   const routeZoneRejectLogAtRef = useRef(0);
@@ -573,6 +619,48 @@ function App() {
     const saved = zoneColorsById[String(activeZoneId)];
     return /^#[0-9a-fA-F]{6}$/.test(saved) ? saved : '#22c55e';
   }, [activeZoneId, zoneColorsById, backendZones]);
+  const zoneResultOverlays = useMemo(() => {
+    if (!Array.isArray(completedMissionSchemas) || !completedMissionSchemas.length) return [];
+
+    const zonesById = new Map(
+      (Array.isArray(backendZones) ? backendZones : []).map((zone) => [String(zone.id), zone])
+    );
+    const latestByZoneId = new Map();
+
+    for (const mission of completedMissionSchemas) {
+      const ai = mission?.ai_result;
+      if (!ai) continue;
+      const zoneId = mission?.zone_id ?? mission?.zone?.id;
+      if (zoneId == null) continue;
+      const zone = zonesById.get(String(zoneId)) || mission?.zone;
+      const boundary = zone?.boundary;
+      const position = computeZoneBadgePoint(boundary);
+
+      const updatedAtRaw = ai.updated_at || mission.updated_at || mission.created_at;
+      const updatedAt = updatedAtRaw ? new Date(updatedAtRaw) : null;
+      const prev = latestByZoneId.get(String(zoneId));
+      if (prev?.updatedAt && updatedAt && prev.updatedAt >= updatedAt) continue;
+
+      latestByZoneId.set(String(zoneId), {
+        id: `zone-result-${zoneId}`,
+        missionId: mission.id,
+        zoneId,
+        zoneName: zone?.name || `Зона ${zoneId}`,
+        position,
+        bushesCount: Number(ai.bushes_count || 0),
+        gapsCount: Number(ai.gaps_count || 0),
+        avgBushSpacing: Number(ai.avg_bush_spacing || 0),
+        rowsSchema: Array.isArray(ai?.result_json?.rows_schema) ? ai.result_json.rows_schema : [],
+        updatedAt,
+      });
+    }
+
+    return Array.from(latestByZoneId.values()).sort((a, b) => {
+      const at = a.updatedAt?.getTime?.() ?? 0;
+      const bt = b.updatedAt?.getTime?.() ?? 0;
+      return bt - at;
+    });
+  }, [completedMissionSchemas, backendZones]);
 
   const workZoneReady = useMemo(
     () => Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4,
@@ -714,6 +802,36 @@ function App() {
     };
   }, [authReady]);
 
+  useEffect(() => {
+    if (!authReady) {
+      setCompletedMissionSchemas([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadCompletedMissionSchemas = async () => {
+      try {
+        const missions = await fetchCompletedMissionSchemas();
+        if (!cancelled) {
+          setCompletedMissionSchemas(missions);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Не удалось получить схемы миссий:', error?.message ?? error);
+        }
+      }
+    };
+
+    loadCompletedMissionSchemas();
+    const timer = setInterval(loadCompletedMissionSchemas, 15_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [authReady]);
+
   const [mapCenter, setMapCenter] = useState(initialMapCenter);
   const [selectedDroneForModal, setSelectedDroneForModal] = useState(null);
   const [mapZoom, setMapZoom] = useState(13);
@@ -724,6 +842,7 @@ function App() {
 
   const telemetryLastSentAtRef = useRef(new Map());
   const telemetrySendingRef = useRef(new Map());
+  const telemetryPendingPayloadRef = useRef(new Map());
 
   const videoRecordingByDroneRef = useRef(new Map());
   const videoRecorderConfigByDroneRef = useRef(new Map());
@@ -779,6 +898,40 @@ function App() {
       console.warn('stopVideoRecordingForDrone blob error:', e?.message ?? e);
       return null;
     }
+  };
+
+  const sendTelemetryForDrone = (droneId, payload) => {
+    const sending = telemetrySendingRef.current.get(droneId) ?? false;
+    if (sending) {
+      // Храним последнюю точку, чтобы отправить ее сразу после завершения in-flight запроса.
+      telemetryPendingPayloadRef.current.set(droneId, payload);
+      return;
+    }
+
+    telemetrySendingRef.current.set(droneId, true);
+    telemetryLastSentAtRef.current.set(droneId, Date.now());
+
+    const requestPromise = postTelemetryToBackend(payload);
+    const timeoutPromise = new Promise((_, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(`telemetry timeout after ${TELEMETRY_REQUEST_TIMEOUT_MS}ms`));
+      }, TELEMETRY_REQUEST_TIMEOUT_MS);
+      requestPromise.finally(() => clearTimeout(timeoutId));
+    });
+
+    void Promise.race([requestPromise, timeoutPromise])
+      .catch((e) => {
+        console.warn('POST telemetry:', e?.message ?? e);
+      })
+      .finally(() => {
+        telemetrySendingRef.current.set(droneId, false);
+
+        const pending = telemetryPendingPayloadRef.current.get(droneId);
+        if (pending) {
+          telemetryPendingPayloadRef.current.delete(droneId);
+          setTimeout(() => sendTelemetryForDrone(droneId, pending), 0);
+        }
+      });
   };
 
   const toNormalizedShiftSegmentsForDrone = (droneId) => {
@@ -1469,6 +1622,12 @@ function App() {
     try {
       await completeMissionInBackend(missionId);
       backendMissionIdsRef.current.delete(droneId);
+      try {
+        const missions = await fetchCompletedMissionSchemas();
+        setCompletedMissionSchemas(missions);
+      } catch (refreshError) {
+        console.warn('Не удалось обновить схемы миссий после завершения:', refreshError?.message ?? refreshError);
+      }
     } catch (e) {
       console.warn('complete mission:', e?.message ?? e);
     }
@@ -1597,6 +1756,7 @@ function App() {
 
     telemetryLastSentAtRef.current.set(droneId, 0);
     telemetrySendingRef.current.set(droneId, false);
+    telemetryPendingPayloadRef.current.delete(droneId);
 
     let videoCtx = null;
     try {
@@ -1763,9 +1923,7 @@ function App() {
         nowMs - lastSentAt >= TELEMETRY_SEND_EVERY_MS;
 
       if (shouldSendTelemetry) {
-        telemetrySendingRef.current.set(droneId, true);
-        telemetryLastSentAtRef.current.set(droneId, nowMs);
-        void postTelemetryToBackend({
+        sendTelemetryForDrone(droneId, {
           missionId,
           recordedAt: new Date().toISOString(),
           latitude: currentLat,
@@ -1773,10 +1931,6 @@ function App() {
           altitude: Math.round(currentDrone.altitude ?? 50),
           speed: Math.max(0, Number(missionParams.optimalSpeed ?? 0) / 3.6),
           battery: Math.round(remainingBattery),
-        }).catch((e) => {
-          console.warn('POST telemetry:', e?.message ?? e);
-        }).finally(() => {
-          telemetrySendingRef.current.set(droneId, false);
         });
       }
 
@@ -2158,6 +2312,7 @@ function App() {
 
     telemetryLastSentAtRef.current = new Map();
     telemetrySendingRef.current = new Map();
+    telemetryPendingPayloadRef.current = new Map();
 
     videoRecordingByDroneRef.current = new Map();
     videoRecorderConfigByDroneRef.current = new Map();
@@ -2658,6 +2813,7 @@ function App() {
                   zoneBoundary={activeZoneBoundary}
                   zoneColor={activeZoneColor}
                   zoneFitNonce={zoneFitNonce}
+                  zoneResultOverlays={[]}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                 />
@@ -2941,6 +3097,7 @@ function App() {
                   zoneBoundary={activeZoneBoundary}
                   zoneColor={activeZoneColor}
                   zoneFitNonce={zoneFitNonce}
+                  zoneResultOverlays={zoneResultOverlays}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                   placementMode={placementMode && droneToPlace != null}

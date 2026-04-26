@@ -11,12 +11,18 @@ module Api
         missions = missions.for_drone(params[:drone_id]) if params[:drone_id].present?
         missions = missions.where(zone_id: params[:zone_id]) if params[:zone_id].present?
         missions = missions.active if truthy_param?(params[:active])
-        render json: missions
+        include_ai_results = truthy_param?(params[:with_ai_results]) || truthy_param?(params[:include_ai_results])
+
+        if include_ai_results
+          render json: missions.includes(:ai_result, :zone).map { |mission| mission_payload(mission, include_ai_results: true) }
+        else
+          render json: missions
+        end
       end
 
       # Показать миссию GET /api/v1/missions/:id
       def show
-        render json: @mission.as_json(include: :routes)
+        render json: mission_payload(@mission, include_routes: true, include_ai_results: true)
       end
 
       # Создание миссии POST /api/v1/missions
@@ -71,6 +77,25 @@ module Api
       # Параметры миссии
       def mission_params
         params.require(:mission).permit(:user_id, :zone_id, :drone_id, :status, :mission_type)
+      end
+
+      def mission_payload(mission, include_routes: false, include_ai_results: false)
+        includes = {}
+        includes[:routes] = {} if include_routes
+        if include_ai_results
+          includes[:ai_result] = {
+            only: %i[id bushes_count gaps_count avg_bush_spacing result_json created_at updated_at]
+          }
+          includes[:zone] = {
+            only: %i[id name color boundary]
+          }
+        end
+
+        if includes.empty?
+          mission.as_json
+        else
+          mission.as_json(include: includes)
+        end
       end
     end
   end

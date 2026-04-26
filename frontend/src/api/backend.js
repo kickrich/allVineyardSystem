@@ -111,7 +111,7 @@ export async function fetchRouteTemplatesFromBackend() {
   return Array.isArray(templates) ? templates : [];
 }
 
-export async function createRouteTemplateInBackend({ name, path, zoneId = null }) {
+export async function createRouteTemplateInBackend({ name, path, zoneId = null, shiftSegmentIndices = [] }) {
   if (!name || !String(name).trim()) throw new Error('Укажите название шаблона');
   if (!Array.isArray(path) || path.length < 2) throw new Error('Шаблон должен содержать минимум 2 точки');
   const payload = {
@@ -119,18 +119,22 @@ export async function createRouteTemplateInBackend({ name, path, zoneId = null }
       name: String(name).trim(),
       path,
       zone_id: zoneId ?? null,
+      shift_segment_indices: Array.isArray(shiftSegmentIndices) ? shiftSegmentIndices : [],
     },
   };
   const response = await apiPost('/api/v1/route_templates', payload);
   return extractData(response);
 }
 
-export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId }) {
+export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId, shiftSegmentIndices }) {
   if (templateId == null) throw new Error('Не выбран шаблон для обновления');
   const routeTemplatePatch = {};
   if (typeof name === 'string' && name.trim()) routeTemplatePatch.name = name.trim();
   if (Array.isArray(path)) routeTemplatePatch.path = path;
   if (zoneId !== undefined) routeTemplatePatch.zone_id = zoneId ?? null;
+  if (shiftSegmentIndices !== undefined) {
+    routeTemplatePatch.shift_segment_indices = Array.isArray(shiftSegmentIndices) ? shiftSegmentIndices : [];
+  }
   const response = await apiPatch(`/api/v1/route_templates/${templateId}`, {
     route_template: routeTemplatePatch,
   });
@@ -276,6 +280,12 @@ export async function cancelMissionInBackend(missionId) {
 export async function fetchActiveMissionsForDrone(droneId) {
   if (droneId == null) return [];
   const response = await apiGet(`/api/v1/missions?drone_id=${encodeURIComponent(droneId)}&active=1`);
+  const missions = extractData(response);
+  return Array.isArray(missions) ? missions : [];
+}
+
+export async function fetchCompletedMissionSchemas() {
+  const response = await apiGet('/api/v1/missions?status=completed&with_ai_results=1');
   const missions = extractData(response);
   return Array.isArray(missions) ? missions : [];
 }

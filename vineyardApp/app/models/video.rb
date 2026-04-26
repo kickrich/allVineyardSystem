@@ -48,7 +48,12 @@ class Video < ApplicationRecord
       new_status = :uploading
     end
 
-    update!(status: new_status) if status != new_status.to_s
+    status_changed = status != new_status.to_s
+    update!(status: new_status) if status_changed
+
+    if status_changed && new_status.to_s == 'completed' && external_service?
+      SendResultsToExternalServiceJob.perform_later(id)
+    end
   end
 
   def next_available_shard_index
@@ -74,7 +79,8 @@ class Video < ApplicationRecord
         total_gaps: total_gaps_count,
         avg_bush_spacing: avg_bush_spacing,
         bushes_positions: all_bushes_positions,
-        gaps_positions: all_gaps_positions
+        gaps_positions: all_gaps_positions,
+        rows_schema: rows_schema
       },
       created_at: created_at,
       updated_at: updated_at
@@ -83,5 +89,17 @@ class Video < ApplicationRecord
 
   def external_service?
     external_service_url.present?
+  end
+
+  def rows_schema
+    video_shards.order(:shard_index).map do |shard|
+      {
+        shard_index: shard.shard_index,
+        bushes_count: shard.bushes_count,
+        gaps_count: shard.gaps_count,
+        row_sequence: shard.result_json&.dig('row_sequence') || [],
+        row_length: shard.result_json&.dig('row_length')
+      }
+    end
   end
 end
