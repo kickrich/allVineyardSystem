@@ -1,6 +1,7 @@
 services:
   cv:
     build: ./cvService
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
@@ -18,6 +19,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
     container_name: vineyard_minio
     command: server /data --console-address ":9001"
     ports:
@@ -26,8 +28,3 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio-data:/data
-
-volumes:
-  minio-data:
