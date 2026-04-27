@@ -56,7 +56,7 @@ class VideoShardProcessorService
 
     conn = Faraday.new(url: @cv_service_url) do |faraday|
       faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 600
+      faraday.options.timeout = 1200
     end
 
     callback_host = ENV.fetch("RAILS_URL", "http://localhost:3000")
