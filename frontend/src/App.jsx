@@ -750,9 +750,12 @@ function App() {
             });
 
             const restoredResults = {};
-            // После F5 не трогаем завершённые/старые миссии — запрашиваем ai_result только для активных.
-            for (const missionId of activeMissionIds) {
+            // После F5 восстанавливаем ai_result для последних миссий (включая завершённые),
+            // но в polling добавляем только активные без результата.
+            for (const mission of recentMissions) {
               if (cancelled) return;
+              const missionId = Number(mission?.id);
+              if (!Number.isFinite(missionId)) continue;
               try {
                 const payload = await fetchMissionAiResultFromBackend(missionId);
                 const result = payload?.ai_result;
