@@ -1059,6 +1059,7 @@ function App() {
   const [parkingOpen, setParkingOpen] = useState(false);
   const [workspaceTourOpen, setWorkspaceTourOpen] = useState(false);
   const [workspaceOnboardingStepId, setWorkspaceOnboardingStepId] = useState(null);
+  const isTemplateCreationMode = templateEditMode === 'create';
 
   const createDroneFromParking = useCallback(async (nameFromModal) => {
     const suffix = `${Date.now()}`.slice(-6);
@@ -2863,7 +2864,7 @@ function App() {
           onClick={() => { setSidebarOpen(false); setParkingOpen(false); }}
         />
       )}
-      {authUserLabel && (
+      {authUserLabel && !isTemplateCreationMode && (
         <div className="fixed top-2 right-2 sm:top-3 sm:right-3 z-[1200]">
           <div className="w-[300px] rounded-2xl border border-[rgba(0,188,125,0.4)] bg-emerald-900/30 px-3 py-2 text-sm text-emerald-100 shadow-lg shadow-emerald-900/20 backdrop-blur-sm">
             <div className="flex items-center justify-between gap-2">
@@ -2927,36 +2928,38 @@ function App() {
         </div>
       )}
 
-      <div className="flex flex-1 gap-2 lg:gap-3 min-h-0 overflow-hidden flex-col lg:flex-row">
-        <div
-          className={`fixed left-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-72 lg:max-w-none lg:flex-shrink-0 ${
-            workspaceVisible
-              ? `${parkingOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} opacity-100`
-              : 'pointer-events-none translate-x-[100vw] opacity-0'
-          }`}
-          style={{
-            transitionDuration: `${VIEW_TRANSITION_MS}ms`,
-            transitionTimingFunction: DESKTOP_SWITCH_EASE,
-            paddingTop: 'env(safe-area-inset-top, 0px)',
-          }}
-        >
-          <DroneParking
-            drones={drones}
-            onPlaceDrone={startDronePlacement}
-            onRemoveDrone={removeDroneFromMap}
-            onCreateDrone={createDroneFromParking}
-            onBackToTemplates={() => {
-              setExitingToTemplates(true);
-              setParkingOpen(false);
-              setTimeout(() => {
-                setHasStarted(false);
-                setExitingToTemplates(false);
-              }, EXIT_PANELS_MS);
+      <div className={`flex flex-1 min-h-0 overflow-hidden ${isTemplateCreationMode ? '' : 'gap-2 lg:gap-3 flex-col lg:flex-row'}`}>
+        {!isTemplateCreationMode && (
+          <div
+            className={`fixed left-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-72 lg:max-w-none lg:flex-shrink-0 ${
+              workspaceVisible
+                ? `${parkingOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} opacity-100`
+                : 'pointer-events-none translate-x-[100vw] opacity-0'
+            }`}
+            style={{
+              transitionDuration: `${VIEW_TRANSITION_MS}ms`,
+              transitionTimingFunction: DESKTOP_SWITCH_EASE,
+              paddingTop: 'env(safe-area-inset-top, 0px)',
             }}
-            onClose={() => setParkingOpen(false)}
-          />
-        </div>
-        <main className="flex-1 bg-transparent p-2 sm:p-3 rounded flex flex-col min-w-0 min-h-0">
+          >
+            <DroneParking
+              drones={drones}
+              onPlaceDrone={startDronePlacement}
+              onRemoveDrone={removeDroneFromMap}
+              onCreateDrone={createDroneFromParking}
+              onBackToTemplates={() => {
+                setExitingToTemplates(true);
+                setParkingOpen(false);
+                setTimeout(() => {
+                  setHasStarted(false);
+                  setExitingToTemplates(false);
+                }, EXIT_PANELS_MS);
+              }}
+              onClose={() => setParkingOpen(false)}
+            />
+          </div>
+        )}
+        <main className={`flex-1 bg-transparent flex flex-col min-w-0 min-h-0 ${isTemplateCreationMode ? 'p-0 rounded-none' : 'p-2 sm:p-3 rounded'}`}>
           {templateEditMode ? (
             <div className="flex-1 flex flex-col min-h-0 relative">
               <div className="flex-1 min-h-0">
@@ -3340,58 +3343,60 @@ function App() {
           )}
         </main>
 
-        <div
-          className={`fixed right-0 top-0 bottom-0 z-50 transform transition-transform duration-300 ease-out lg:relative lg:flex-shrink-0 ${
-            workspaceTourOpen && sidebarOpen
-              ? 'w-[min(calc(100vw-12px),28rem)] max-w-none lg:w-80 lg:max-w-none'
-              : 'w-[85%] max-w-sm lg:w-80 lg:max-w-none'
-          } ${
-            workspaceVisible
-              ? `${sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} opacity-100`
-              : 'pointer-events-none translate-x-[100vw] opacity-0'
-          }`}
-          style={{
-            transitionDuration: `${VIEW_TRANSITION_MS}ms`,
-            transitionTimingFunction: DESKTOP_SWITCH_EASE,
-            paddingTop: 'env(safe-area-inset-top, 0px)',
-          }}
-        >
-          <div className="flex h-full min-h-0 flex-col pt-[72px]">
-            <div className="min-h-0 flex-1">
-              <Sidebar
-                dronesData={drones}
-                selectedDroneId={selectedDroneForSidebar}
-                onSelectDrone={setSelectedDroneForSidebar}
-                missionLog={globalMissionLog}
-                aiResults={aiResultsForSidebar}
-                initialTab={sidebarTab}
-                onTabChange={setSidebarTab}
-                onOpenAiMission={openBushesPanelForMission}
-                activeFlights={getActiveFlights()}
-                onStartFlight={startDroneFlight}
-                onPauseFlight={pauseDroneFlight}
-                onResumeFlight={resumeDroneFlight}
-                onStopFlight={stopDroneFlight}
-                onStopAllFlights={stopAllFlights}
-                onAddRoutePoint={addRoutePoint}
-                onUndoLastPoint={undoLastPoint}
-                onClearRoute={clearRoute}
-                onClearLogs={() => setGlobalMissionLog([])}
-                onDroneClick={handleDroneClick}
-                isRouteEditMode={isRouteEditMode}
-                onToggleRouteMode={handleToggleRouteMode}
-                onCenterToFirstWaypoint={centerMapToFirstWaypoint}
-                onFlyToFirstWaypoint={flyDroneToFirstWaypoint}
-                flightAllowedByWeather={weatherFlightSafe}
-                weatherFlightReasons={weatherFlightReasons}
-                isDroneAtMissionStart={isDroneAtMissionStart}
-                workZoneReady={workZoneReady}
-                instructionTourActive={workspaceTourOpen}
-                onClose={() => setSidebarOpen(false)}
-              />
+        {!isTemplateCreationMode && (
+          <div
+            className={`fixed right-0 top-0 bottom-0 z-50 transform transition-transform duration-300 ease-out lg:relative lg:flex-shrink-0 ${
+              workspaceTourOpen && sidebarOpen
+                ? 'w-[min(calc(100vw-12px),28rem)] max-w-none lg:w-80 lg:max-w-none'
+                : 'w-[85%] max-w-sm lg:w-80 lg:max-w-none'
+            } ${
+              workspaceVisible
+                ? `${sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} opacity-100`
+                : 'pointer-events-none translate-x-[100vw] opacity-0'
+            }`}
+            style={{
+              transitionDuration: `${VIEW_TRANSITION_MS}ms`,
+              transitionTimingFunction: DESKTOP_SWITCH_EASE,
+              paddingTop: 'env(safe-area-inset-top, 0px)',
+            }}
+          >
+            <div className="flex h-full min-h-0 flex-col pt-[72px]">
+              <div className="min-h-0 flex-1">
+                <Sidebar
+                  dronesData={drones}
+                  selectedDroneId={selectedDroneForSidebar}
+                  onSelectDrone={setSelectedDroneForSidebar}
+                  missionLog={globalMissionLog}
+                  aiResults={aiResultsForSidebar}
+                  initialTab={sidebarTab}
+                  onTabChange={setSidebarTab}
+                  onOpenAiMission={openBushesPanelForMission}
+                  activeFlights={getActiveFlights()}
+                  onStartFlight={startDroneFlight}
+                  onPauseFlight={pauseDroneFlight}
+                  onResumeFlight={resumeDroneFlight}
+                  onStopFlight={stopDroneFlight}
+                  onStopAllFlights={stopAllFlights}
+                  onAddRoutePoint={addRoutePoint}
+                  onUndoLastPoint={undoLastPoint}
+                  onClearRoute={clearRoute}
+                  onClearLogs={() => setGlobalMissionLog([])}
+                  onDroneClick={handleDroneClick}
+                  isRouteEditMode={isRouteEditMode}
+                  onToggleRouteMode={handleToggleRouteMode}
+                  onCenterToFirstWaypoint={centerMapToFirstWaypoint}
+                  onFlyToFirstWaypoint={flyDroneToFirstWaypoint}
+                  flightAllowedByWeather={weatherFlightSafe}
+                  weatherFlightReasons={weatherFlightReasons}
+                  isDroneAtMissionStart={isDroneAtMissionStart}
+                  workZoneReady={workZoneReady}
+                  instructionTourActive={workspaceTourOpen}
+                  onClose={() => setSidebarOpen(false)}
+                />
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {selectedDroneForModal && (
