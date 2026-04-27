@@ -43,8 +43,11 @@ module Api
         )
 
         if ai_result.save
-          # Отправляем результаты обратно во внешний сервис если нужно
-          mission.send_results_to_vineyard_app!(ai_result_payload(ai_result))
+          # Опциональный callback обратно в VineyardApp оставляем отключенным по умолчанию:
+          # он не нужен для пользовательского потока "VineyardApp -> backend -> frontend".
+          if ActiveModel::Type::Boolean.new.cast(ENV['FORWARD_RESULTS_BACK_TO_VINEYARD_APP'])
+            mission.send_results_to_vineyard_app!(ai_result_payload(ai_result))
+          end
 
           render_data({
             success: true,

@@ -1,5 +1,6 @@
 require 'faraday'
 require 'faraday/multipart'
+require 'uri'
 
 class SendResultsToExternalServiceService
   def initialize(video)
@@ -27,8 +28,7 @@ class SendResultsToExternalServiceService
     headers = {}
     headers['Authorization'] = "Bearer #{@video.external_callback_token}" if @video.external_callback_token.present?
 
-    callback_path = ENV.fetch('EXTERNAL_RESULTS_PATH', '/api/v1/vineyard_app/results')
-    response = conn.post(callback_path) do |req|
+    response = conn.post(resolved_callback_path) do |req|
       req.headers.merge!(headers)
       req.body = results.to_json
     end
@@ -53,5 +53,23 @@ class SendResultsToExternalServiceService
     stats[:bushes_positions] = []
     stats[:gaps_positions] = []
     payload.merge(statistics: stats)
+  end
+
+  def resolved_callback_path
+    default_path = '/api/v1/vineyard_app/results'
+    configured_path = ENV.fetch('EXTERNAL_RESULTS_PATH', '').to_s.strip
+    return default_path if configured_path.empty?
+    return default_path if configured_path.include?('%{')
+
+    if configured_path.start_with?('http://', 'https://')
+      uri = URI.parse(configured_path)
+      path = uri.request_uri
+      return default_path if path.blank?
+      return path
+    end
+
+    configured_path.start_with?('/') ? configured_path : "/#{configured_path}"
+  rescue URI::InvalidURIError
+    default_path
   end
 end

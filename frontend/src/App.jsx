@@ -33,6 +33,7 @@ import {
   completeMissionInBackend,
   cancelMissionInBackend,
   fetchActiveMissionsForDrone,
+  fetchMissionsFromBackend,
   fetchMissionAiResultFromBackend,
   postTelemetryToBackend,
   multipartInitForVideo,
@@ -704,6 +705,62 @@ function App() {
             status: 'connected-empty',
             message: ''
           });
+        }
+
+        try {
+          const missions = await fetchMissionsFromBackend();
+          if (!cancelled && Array.isArray(missions) && missions.length > 0) {
+            const recentMissions = [...missions]
+              .sort((a, b) => Number(b?.id ?? 0) - Number(a?.id ?? 0))
+              .slice(0, 12);
+
+            const isMissionActiveForPolling = (mission) => {
+              const status = String(mission?.status ?? '').toLowerCase();
+              return status === 'planned' || status === 'approved' || status === 'in_progress';
+            };
+
+            recentMissions.forEach((mission) => {
+              const missionId = Number(mission?.id);
+              if (!Number.isFinite(missionId)) return;
+              const droneId = Number(mission?.drone_id);
+              if (Number.isFinite(droneId)) {
+                missionDroneByMissionIdRef.current.set(missionId, droneId);
+              }
+              if (isMissionActiveForPolling(mission)) {
+                trackedMissionIdsRef.current.add(missionId);
+              }
+            });
+
+            const restoredResults = {};
+            for (const mission of recentMissions) {
+              if (cancelled) return;
+              const missionId = Number(mission?.id);
+              if (!Number.isFinite(missionId)) continue;
+              try {
+                const payload = await fetchMissionAiResultFromBackend(missionId);
+                const result = payload?.ai_result;
+                if (!result) continue;
+                restoredResults[String(missionId)] = result;
+              } catch {
+                // Ignore per-mission restore errors; polling will retry.
+              }
+            }
+
+            if (!cancelled && Object.keys(restoredResults).length > 0) {
+              setAiResultsByMissionId((prev) => ({ ...restoredResults, ...prev }));
+              Object.entries(restoredResults).forEach(([missionId, result]) => {
+                const versionKey = [
+                  missionId,
+                  result?.updated_at ?? '',
+                  result?.bushes_count ?? '',
+                  result?.gaps_count ?? '',
+                ].join(':');
+                seenAiResultKeysRef.current.add(versionKey);
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('Restore ai panels failed:', e?.message ?? e);
         }
       } catch (error) {
         if (cancelled) return;
@@ -1565,11 +1622,13 @@ function App() {
       void syncDroneStateToBackend(drone.id, { battery: drone.battery }).catch((e) =>
         console.warn('PATCH drone (battery после start):', e?.message ?? e)
       );
+      return missionId;
     } catch (error) {
       console.warn('Синхронизация миссии с backend:', error?.message ?? error);
       addToGlobalLog(drone.id, '⚠️ Миссия не синхронизирована с backend', {
         error: String(error?.message ?? error),
       });
+      return null;
     }
   }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone]);
 
@@ -1618,7 +1677,9 @@ function App() {
 
     let cancelled = false;
     const poll = async () => {
-      const missionIds = Array.from(trackedMissionIdsRef.current.values());
+      const missionIds = Array.from(trackedMissionIdsRef.current.values())
+        .sort((a, b) => Number(b) - Number(a))
+        .slice(0, 8);
       if (!missionIds.length) return;
 
       for (const missionId of missionIds) {
@@ -1639,6 +1700,13 @@ function App() {
             delete copy[String(missionId)];
             return copy;
           });
+
+          const shardsCount = Number(result?.shards_count ?? 0);
+          const processedShards = Number(result?.processed_shards ?? 0);
+          const stillProcessing = shardsCount > 0 && processedShards < shardsCount;
+          if (!stillProcessing) {
+            trackedMissionIdsRef.current.delete(missionId);
+          }
 
           const versionKey = [
             missionId,
@@ -1684,7 +1752,7 @@ function App() {
     );
   }, []);
 
-  const startDroneFlight = useCallback((droneId) => {
+  const startDroneFlight = useCallback(async (droneId) => {
     const drone = drones.find(d => d.id === droneId);
     if (!drone || !drone.path || drone.path.length < 2) {
       console.warn('Start flight blocked: route needs >= 2 points');
@@ -1753,7 +1821,26 @@ function App() {
       totalDistance: missionParams.totalDistance,
       estimatedTime: missionParams.estimatedTime
     });
-    void createAndStartBackendMission(drone, drone.path);
+    const missionId = await createAndStartBackendMission(drone, drone.path);
+    if (!missionId) {
+      addToDroneLog(droneId, '⚠️ Старт отменён: backend миссия не создалась');
+      setDrones(prev =>
+        prev.map(d => {
+          if (d.id !== droneId) return d;
+          return {
+            ...d,
+            flightStatus: flightStatus.IDLE,
+            isFlying: false,
+            speed: 0,
+            altitude: 0,
+            missionElapsedTime: 0,
+            flightProgress: 0,
+            currentWaypointIndex: 0
+          };
+        })
+      );
+      return;
+    }
     addToDroneLog(droneId, '🛸 Старт с первой точки маршрута');
     setTimeout(() => startFlightMovement(droneId), 0);
   }, [
@@ -2295,8 +2382,29 @@ function App() {
         })
       );
       addToDroneLog(droneId, '🛫 Взлёт выполнен');
-      void createAndStartBackendMission(drone, flightPath);
-      startFlightMovement(droneId);
+      void (async () => {
+        const missionId = await createAndStartBackendMission(drone, flightPath);
+        if (!missionId) {
+          addToDroneLog(droneId, '⚠️ Перелёт отменён: backend миссия не создалась');
+          setDrones(prev =>
+            prev.map(d => {
+              if (d.id !== droneId) return d;
+              return {
+                ...d,
+                flightStatus: flightStatus.IDLE,
+                isFlying: false,
+                speed: 0,
+                altitude: 0,
+                missionElapsedTime: 0,
+                flightProgress: 0,
+                currentWaypointIndex: 0
+              };
+            })
+          );
+          return;
+        }
+        startFlightMovement(droneId);
+      })();
     }, 2000);
   }, [drones, addToDroneLog, createAndStartBackendMission]);
 
