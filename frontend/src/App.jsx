@@ -1501,6 +1501,8 @@ function App() {
           avgBushSpacing: Number(result?.avg_bush_spacing),
           rowsCount: Number(result?.rows_count ?? result?.shards_count ?? 0),
           processedRows: Number(result?.processed_shards ?? 0),
+          bushesPositions: Array.isArray(result?.bushes_positions) ? result.bushes_positions : [],
+          gapsPositions: Array.isArray(result?.gaps_positions) ? result.gaps_positions : [],
           updatedAt: result?.updated_at ?? null,
           createdAt: result?.created_at ?? null,
         };
@@ -2542,6 +2544,19 @@ function App() {
     setDrawRectZoneMode(false);
   }, []);
 
+  const getZoneCreateConflictMessage = useCallback((err) => {
+    const raw = String(err?.message ?? err ?? '');
+    const text = raw.toLowerCase();
+    if (
+      text.includes('не должна пересекаться или соприкасаться') ||
+      (text.includes('пересек') && text.includes('соприкас')) ||
+      (text.includes('boundary') && text.includes('пересек'))
+    ) {
+      return 'Нельзя создать (или обновить) зону поверх другой: зоны не должны пересекаться и соприкасаться.';
+    }
+    return raw;
+  }, []);
+
   const handleZoneClickToEdit = useCallback((boundary, zoneMeta) => {
     const targetZoneId = zoneMeta?.id ?? activeZoneId;
     if (targetZoneId == null) return;
@@ -2627,12 +2642,12 @@ function App() {
       setEditingZoneId(null);
       setDraftRectBoundary(null);
     } catch (err) {
-      setZoneKmlMessage(String(err?.message ?? err));
+      setZoneKmlMessage(getZoneCreateConflictMessage(err));
       setZoneKmlIsError(true);
     } finally {
       setRectZoneBusy(false);
     }
-  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, templateDraftZoneId, backendZones, activeZoneId, draftRectZoneColor]);
+  }, [draftRectBoundary, newRectZoneName, editingZoneId, addToZoneLog, templateEditMode, templateDraftZoneId, backendZones, activeZoneId, draftRectZoneColor, getZoneCreateConflictMessage]);
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
@@ -2915,13 +2930,13 @@ function App() {
           setZoneKmlIsError(false);
         }
       } catch (err) {
-        setZoneKmlMessage(String(err?.message ?? err));
+        setZoneKmlMessage(getZoneCreateConflictMessage(err));
         setZoneKmlIsError(true);
       } finally {
         setZoneKmlBusy(false);
       }
     },
-    [activeZoneId, newZoneKmlName, addToZoneLog, backendZones, draftRectZoneColor]
+    [activeZoneId, newZoneKmlName, addToZoneLog, backendZones, draftRectZoneColor, getZoneCreateConflictMessage]
   );
 
   const handleWorkspaceTourOpenChange = useCallback((open) => {
@@ -2945,6 +2960,75 @@ function App() {
   const handleDroneClick = (drone) => {
     setSelectedDroneForModal(drone);
   };
+
+  const [zoneMapMessageUi, setZoneMapMessageUi] = useState({
+    message: null,
+    isError: false,
+    visible: false,
+  });
+
+  useEffect(() => {
+    let hideTimerId;
+    let rafId;
+    if (zoneKmlMessage) {
+      setZoneMapMessageUi({
+        message: zoneKmlMessage,
+        isError: Boolean(zoneKmlIsError),
+        visible: false,
+      });
+      rafId = window.requestAnimationFrame(() => {
+        setZoneMapMessageUi((prev) => ({ ...prev, visible: true }));
+      });
+    } else {
+      setZoneMapMessageUi((prev) => {
+        if (!prev.message) return prev;
+        return { ...prev, visible: false };
+      });
+      hideTimerId = window.setTimeout(() => {
+        setZoneMapMessageUi((prev) => ({ ...prev, message: null }));
+      }, 260);
+    }
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      if (hideTimerId) window.clearTimeout(hideTimerId);
+    };
+  }, [zoneKmlMessage, zoneKmlIsError]);
+
+  const zoneMapMessageOverlay = zoneMapMessageUi.message ? (
+    <div className="pointer-events-none absolute top-2 left-1/2 z-[220] w-[min(92vw,560px)] -translate-x-1/2 px-2">
+      <div
+        className={`pointer-events-auto rounded-xl border px-3 py-2 text-sm shadow-xl backdrop-blur-sm transition-all duration-250 ease-out ${
+          zoneMapMessageUi.isError
+            ? 'border-red-500/70 bg-red-950/85 text-red-100'
+            : 'border-emerald-500/70 bg-emerald-950/85 text-emerald-100'
+        } ${
+          zoneMapMessageUi.visible
+            ? 'translate-y-0 opacity-100'
+            : '-translate-y-1 opacity-0'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <span>{zoneMapMessageUi.message}</span>
+          <button
+            type="button"
+            className="rounded px-2 py-0.5 text-xs hover:bg-black/20"
+            onClick={() => setZoneKmlMessage(null)}
+            aria-label="Скрыть сообщение"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  useEffect(() => {
+    if (!zoneKmlMessage) return undefined;
+    const timerId = window.setTimeout(() => {
+      setZoneKmlMessage(null);
+    }, 7000);
+    return () => window.clearTimeout(timerId);
+  }, [zoneKmlMessage]);
 
   if (!authReady) {
     return (
@@ -3089,6 +3173,7 @@ function App() {
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                 />
+                {zoneMapMessageOverlay}
               </div>
               {(drawRectZoneMode || draftRectBoundary) && (
                 <div className="absolute top-2 left-2 z-[130] w-[min(82vw,340px)] rounded-xl border border-amber-600/40 bg-gray-900/80 p-2 backdrop-blur-sm">
@@ -3373,6 +3458,7 @@ function App() {
                   drawRectZoneMode={drawRectZoneMode}
                   placementMode={placementMode && droneToPlace != null}
                 />
+                {zoneMapMessageOverlay}
                 <ZoneMapMenu
                   zones={backendZones}
                   activeZoneId={activeZoneId}
@@ -3382,6 +3468,14 @@ function App() {
                   deleteBusy={rectZoneBusy || zoneKmlBusy}
                   showEmptyMenuDuringTour={workspaceTourOpen && backendZones.length === 0}
                 />
+                {workspaceVisible && hasStarted && (
+                  <WorkspaceOnboarding
+                    enabled
+                    onBeforeStep={handleOnboardingBeforeStep}
+                    onTourOpenChange={handleWorkspaceTourOpenChange}
+                    layoutKey={`${sidebarOpen}-${parkingOpen}-${workspaceTourOpen}`}
+                  />
+                )}
                 {placementMode && droneToPlace && (
                   <div
                     className="pointer-events-auto absolute bottom-3 left-1/2 z-[200] w-[min(92vw,420px)] -translate-x-1/2 rounded-xl border border-yellow-500/70 bg-yellow-950/90 px-3 py-2.5 shadow-xl backdrop-blur-sm sm:bottom-4"
@@ -3512,15 +3606,6 @@ function App() {
         <DroneModal
           drone={selectedDroneForModal}
           onClose={() => setSelectedDroneForModal(null)}
-        />
-      )}
-
-      {workspaceVisible && hasStarted && !templateEditMode && (
-        <WorkspaceOnboarding
-          enabled
-          onBeforeStep={handleOnboardingBeforeStep}
-          onTourOpenChange={handleWorkspaceTourOpenChange}
-          layoutKey={`${sidebarOpen}-${parkingOpen}-${workspaceTourOpen}`}
         />
       )}
 

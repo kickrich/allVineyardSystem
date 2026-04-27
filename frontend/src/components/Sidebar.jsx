@@ -113,8 +113,33 @@ export const Sidebar = ({
   };
   const selectedDronePathLength = selectedDrone?.path?.length || 0;
   const selectedDroneStatus = selectedDrone?.flightStatus || flightStatus.IDLE;
+  const [selectedAiMissionId, setSelectedAiMissionId] = useState(null);
   const atMissionStart =
     typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
+
+  const parsePointXY = (value) => {
+    if (Array.isArray(value) && value.length >= 2) {
+      const x = Number(value[0]);
+      const y = Number(value[1]);
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+    }
+    if (value && typeof value === 'object') {
+      const x = Number(value.x ?? value.lng ?? value.lon ?? value.longitude ?? value[0]);
+      const y = Number(value.y ?? value.lat ?? value.latitude ?? value[1]);
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+    }
+    return null;
+  };
+
+  const buildMissionSchemePoints = (result) => {
+    const bushes = Array.isArray(result?.bushesPositions)
+      ? result.bushesPositions.map(parsePointXY).filter(Boolean)
+      : [];
+    const gaps = Array.isArray(result?.gapsPositions)
+      ? result.gapsPositions.map(parsePointXY).filter(Boolean)
+      : [];
+    return { bushes, gaps };
+  };
 
   const canEnableRouteMode = Boolean(
     (workZoneReady || tourUiPreview) && selectedDrone && !selectedDrone.isFlying
@@ -497,7 +522,7 @@ export const Sidebar = ({
         {activeTab === 'bushes' && (
           <div className="h-full min-h-0 flex flex-col gap-4">
             <div className="flex justify-between items-center mb-1">
-              <h3 className="text-lg font-semibold text-white">Результаты по кустам</h3>
+              <h3 className="text-lg font-semibold text-white">Результаты Миссий</h3>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -526,7 +551,25 @@ export const Sidebar = ({
                 {aiResults.map((result) => (
                   <div
                     key={`${result.missionId}-${result.updatedAt ?? result.createdAt ?? 'unknown'}`}
-                    className="rounded-lg border border-emerald-800/70 bg-emerald-950/25 p-3"
+                    role={typeof onOpenAiMission === 'function' ? 'button' : undefined}
+                    tabIndex={typeof onOpenAiMission === 'function' ? 0 : undefined}
+                    onClick={() => {
+                      setSelectedAiMissionId(result.missionId);
+                      onOpenAiMission?.(result.missionId);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedAiMissionId(result.missionId);
+                        onOpenAiMission?.(result.missionId);
+                      }
+                    }}
+                    className={`rounded-lg border border-emerald-800/70 bg-emerald-950/25 p-3 transition-colors ${
+                      typeof onOpenAiMission === 'function'
+                        ? 'cursor-pointer hover:bg-emerald-900/35 focus:outline-none focus:ring-2 focus:ring-emerald-400/70'
+                        : ''
+                    }`}
+                    title={typeof onOpenAiMission === 'function' ? `Открыть схему участка миссии #${result.missionId}` : undefined}
                   >
                     <div className="mb-2 flex items-start justify-between gap-2">
                       <div>
@@ -539,7 +582,10 @@ export const Sidebar = ({
                       </div>
                       <button
                         type="button"
-                        onClick={() => onDeleteAiMissionResult?.(result.missionId)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteAiMissionResult?.(result.missionId);
+                        }}
                         aria-label={`Удалить результат миссии #${result.missionId}`}
                         className="rounded px-2 py-1 text-xs bg-red-700/80 text-red-100 hover:bg-red-600 transition-colors"
                         title={`Удалить результат миссии #${result.missionId}`}
@@ -566,6 +612,53 @@ export const Sidebar = ({
                         </p>
                       </div>
                     </div>
+                    {selectedAiMissionId === result.missionId && (() => {
+                      const { bushes, gaps } = buildMissionSchemePoints(result);
+                      const all = [...bushes, ...gaps];
+                      if (!all.length) {
+                        return (
+                          <div className="mt-3 rounded border border-gray-700/70 bg-gray-900/50 px-3 py-2 text-xs text-gray-400">
+                            Схема участка от VineyardApp пока не содержит координат рядов для этой миссии.
+                          </div>
+                        );
+                      }
+                      const minX = Math.min(...all.map((p) => p.x));
+                      const maxX = Math.max(...all.map((p) => p.x));
+                      const minY = Math.min(...all.map((p) => p.y));
+                      const maxY = Math.max(...all.map((p) => p.y));
+                      const spanX = Math.max(1e-9, maxX - minX);
+                      const spanY = Math.max(1e-9, maxY - minY);
+                      const pad = 8;
+                      const w = 240;
+                      const h = 140;
+                      const toSvg = (p) => ({
+                        x: pad + ((p.x - minX) / spanX) * (w - pad * 2),
+                        y: h - pad - ((p.y - minY) / spanY) * (h - pad * 2),
+                      });
+                      return (
+                        <div className="mt-3 rounded border border-emerald-700/40 bg-gray-900/60 p-2">
+                          <div className="mb-1 flex items-center justify-between text-[11px] text-gray-300">
+                            <span>Схема участка VineyardApp</span>
+                            <span>ряды: {result.rowsCount || '—'}</span>
+                          </div>
+                          <svg viewBox={`0 0 ${w} ${h}`} className="h-[140px] w-full rounded bg-gray-950/80">
+                            <rect x="0" y="0" width={w} height={h} fill="transparent" stroke="rgba(75,85,99,0.55)" />
+                            {bushes.map((p, i) => {
+                              const c = toSvg(p);
+                              return <circle key={`b-${i}`} cx={c.x} cy={c.y} r="2.6" fill="#34d399" />;
+                            })}
+                            {gaps.map((p, i) => {
+                              const c = toSvg(p);
+                              return <circle key={`g-${i}`} cx={c.x} cy={c.y} r="2.6" fill="#f87171" />;
+                            })}
+                          </svg>
+                          <div className="mt-1 flex items-center gap-3 text-[11px] text-gray-400">
+                            <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />Кусты</span>
+                            <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-red-400" />Пропуски</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>

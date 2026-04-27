@@ -436,7 +436,7 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
       {showFab && (
         <button
           type="button"
-          className="fixed bottom-[5.5rem] left-4 z-[1400] flex h-14 w-14 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-500 text-2xl font-black text-gray-900 shadow-lg shadow-amber-900/40 animate-pulse hover:animate-none hover:bg-amber-400 lg:bottom-8"
+          className="absolute bottom-[5.5rem] left-4 z-[1400] flex h-14 w-14 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-500 text-2xl font-black text-gray-900 shadow-lg shadow-amber-900/40 animate-pulse hover:animate-none hover:bg-amber-400 lg:bottom-8"
           style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}
           title="Подсказка для новых пользователей"
           aria-label="Открыть подсказку"
