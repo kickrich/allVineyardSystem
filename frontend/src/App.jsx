@@ -2667,7 +2667,10 @@ function App() {
     }
     const targetZone = backendZones.find((z) => z.id === activeZoneId);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${activeZoneId}`;
-    const confirmed = window.confirm(`Удалить зону ${title}? Это действие нельзя отменить.`);
+    const confirmed = window.confirm(
+      `Удалить зону ${title}? Это действие нельзя отменить.\n` +
+      'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.'
+    );
     if (!confirmed) return;
 
     setRectZoneBusy(true);
@@ -2675,9 +2678,34 @@ function App() {
       await deleteZoneInBackend(zoneIdToDelete);
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
+      const deletedBoundary = targetZone?.boundary;
+      let clearedRoutes = 0;
+      if (Array.isArray(deletedBoundary) && deletedBoundary.length >= 4) {
+        setDrones((prev) =>
+          prev.map((d) => {
+            if (!Array.isArray(d?.path) || d.path.length === 0) return d;
+            const touchesDeletedZone = d.path.some(
+              (point) =>
+                Array.isArray(point) &&
+                point.length >= 2 &&
+                isPointInsideZoneBoundary(deletedBoundary, { lat: point[0], lng: point[1] })
+            );
+            if (!touchesDeletedZone) return d;
+            clearedRoutes += 1;
+            return {
+              ...d,
+              path: [],
+              missionParameters: null,
+              currentWaypointIndex: 0,
+              flightProgress: 0,
+            };
+          })
+        );
+      }
       addToZoneLog('🗑️ Зона удалена', {
         zoneId: zoneIdToDelete,
         zoneName: targetZone?.name ?? `ID ${zoneIdToDelete}`,
+        clearedRoutes,
       });
 
       const nextActiveZoneId = zones.length > 0 ? zones[0].id : null;
@@ -2714,7 +2742,10 @@ function App() {
     }
     const targetZone = backendZones.find((z) => z.id === zoneIdToDelete);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${zoneIdToDelete}`;
-    const confirmed = window.confirm(`Удалить зону ${title}? Это действие нельзя отменить.`);
+    const confirmed = window.confirm(
+      `Удалить зону ${title}? Это действие нельзя отменить.\n` +
+      'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.'
+    );
     if (!confirmed) return;
 
     setRectZoneBusy(true);
@@ -2722,9 +2753,34 @@ function App() {
       await deleteZoneInBackend(zoneIdToDelete);
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
+      const deletedBoundary = targetZone?.boundary;
+      let clearedRoutes = 0;
+      if (Array.isArray(deletedBoundary) && deletedBoundary.length >= 4) {
+        setDrones((prev) =>
+          prev.map((d) => {
+            if (!Array.isArray(d?.path) || d.path.length === 0) return d;
+            const touchesDeletedZone = d.path.some(
+              (point) =>
+                Array.isArray(point) &&
+                point.length >= 2 &&
+                isPointInsideZoneBoundary(deletedBoundary, { lat: point[0], lng: point[1] })
+            );
+            if (!touchesDeletedZone) return d;
+            clearedRoutes += 1;
+            return {
+              ...d,
+              path: [],
+              missionParameters: null,
+              currentWaypointIndex: 0,
+              flightProgress: 0,
+            };
+          })
+        );
+      }
       addToZoneLog('🗑️ Зона удалена', {
         zoneId: zoneIdToDelete,
         zoneName: targetZone?.name ?? `ID ${zoneIdToDelete}`,
+        clearedRoutes,
       });
 
       const currentActiveStillExists = zones.some((z) => z.id === activeZoneId);
