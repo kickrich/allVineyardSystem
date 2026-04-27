@@ -76,6 +76,8 @@ async def process_video_shard(
             "bushes_count": results["statistics"]["bushes_count"],
             "gaps_count": results["statistics"]["gaps_count"],
             "result_json": {
+                "bushes_positions": results["statistics"].get("bushes_positions", []),
+                "gaps_positions": results["statistics"].get("gaps_positions", []),
                 "video_info": results["video_info"],
                 "tracking_stats": results["tracking_stats"],
                 "details": results["statistics"]["details"],
@@ -202,6 +204,8 @@ def process_video_file(video_path: str, frame_interval: int = 4) -> dict:
         "bushes_count": results["statistics"]["bushes_count"],
         "gaps_count": results["statistics"]["gaps_count"],
         "result_json": {
+            "bushes_positions": results["statistics"].get("bushes_positions", []),
+            "gaps_positions": results["statistics"].get("gaps_positions", []),
             "video_info": results["video_info"],
             "tracking_stats": results["tracking_stats"],
             "details": results["statistics"]["details"],

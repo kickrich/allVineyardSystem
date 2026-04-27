@@ -1728,8 +1728,8 @@ function App() {
           const payload = await fetchMissionAiResultFromBackend(missionId);
           const result = payload?.ai_result;
           if (!result) {
-            // Одноразовый запрос по миссии: если результата ещё нет — не спамим сеть повторными polling-запросами.
-            trackedMissionIdsRef.current.delete(missionId);
+            // Результат может прийти с задержкой после complete/callback.
+            // Оставляем миссию в polling, чтобы уведомление и карточка появились без F5.
             continue;
           }
 

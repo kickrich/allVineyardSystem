@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { flightStatus } from '../constants/drones_data';
 import { getTourDemoDrone, isTourDemoDrone } from '../constants/tour_Demo_Drone';
 import { calculateDistance, calculateOptimalSpeed, calculateFlightTime } from '../utils/flight_Calculator';
@@ -114,6 +115,11 @@ export const Sidebar = ({
   const selectedDronePathLength = selectedDrone?.path?.length || 0;
   const selectedDroneStatus = selectedDrone?.flightStatus || flightStatus.IDLE;
   const [selectedAiMissionId, setSelectedAiMissionId] = useState(null);
+  const [expandedSchemeMissionId, setExpandedSchemeMissionId] = useState(null);
+  const expandedSvgRef = useRef(null);
+  const [expandedViewBox, setExpandedViewBox] = useState({ x: 0, y: 0, width: 1000, height: 600 });
+  const [isExpandedPanning, setIsExpandedPanning] = useState(false);
+  const [expandedPanStart, setExpandedPanStart] = useState(null);
   const atMissionStart =
     typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
 
@@ -141,6 +147,41 @@ export const Sidebar = ({
     return { bushes, gaps };
   };
 
+  const expandedSchemeResult = useMemo(
+    () => aiResults.find((item) => Number(item?.missionId) === Number(expandedSchemeMissionId)) || null,
+    [aiResults, expandedSchemeMissionId]
+  );
+
+  const applyExpandedZoom = (factor) => {
+    setExpandedViewBox((prev) => {
+      const cx = prev.x + prev.width / 2;
+      const cy = prev.y + prev.height / 2;
+      const nextWidth = Math.min(5000, Math.max(160, prev.width / factor));
+      const nextHeight = Math.min(5000, Math.max(100, prev.height / factor));
+      return {
+        x: cx - nextWidth / 2,
+        y: cy - nextHeight / 2,
+        width: nextWidth,
+        height: nextHeight,
+      };
+    });
+  };
+  const zoomInExpandedScheme = () => applyExpandedZoom(1.2);
+  const zoomOutExpandedScheme = () => applyExpandedZoom(1 / 1.2);
+  const resetExpandedSchemeZoom = () => setExpandedViewBox({ x: 0, y: 0, width: 1000, height: 600 });
+  const closeExpandedScheme = () => {
+    setExpandedSchemeMissionId(null);
+    setExpandedViewBox({ x: 0, y: 0, width: 1000, height: 600 });
+    setIsExpandedPanning(false);
+    setExpandedPanStart(null);
+  };
+  const openExpandedScheme = (missionId) => {
+    setExpandedSchemeMissionId(missionId);
+    setExpandedViewBox({ x: 0, y: 0, width: 1000, height: 600 });
+    setIsExpandedPanning(false);
+    setExpandedPanStart(null);
+  };
+
   const canEnableRouteMode = Boolean(
     (workZoneReady || tourUiPreview) && selectedDrone && !selectedDrone.isFlying
   );
@@ -166,6 +207,7 @@ export const Sidebar = ({
   }, [instructionTourActive]);
 
   return (
+    <>
     <div className="w-full lg:w-80 bg-gray-800/95 lg:bg-gray-800/85 border border-gray-700/70 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full">
       <div className="bg-gradient-to-r from-gray-800 to-gray-900 p-4 border-b border-gray-700/80">
         <div className="flex items-center justify-between gap-2">
@@ -652,35 +694,90 @@ export const Sidebar = ({
                           </div>
                         );
                       }
-                      const minX = Math.min(...all.map((p) => p.x));
-                      const maxX = Math.max(...all.map((p) => p.x));
-                      const minY = Math.min(...all.map((p) => p.y));
-                      const maxY = Math.max(...all.map((p) => p.y));
-                      const spanX = Math.max(1e-9, maxX - minX);
-                      const spanY = Math.max(1e-9, maxY - minY);
-                      const pad = 8;
-                      const w = 240;
-                      const h = 140;
-                      const toSvg = (p) => ({
-                        x: pad + ((p.x - minX) / spanX) * (w - pad * 2),
-                        y: h - pad - ((p.y - minY) / spanY) * (h - pad * 2),
+                      const rowsCount = Math.max(1, Number(result.rowsCount || 0) || 1);
+                      const rowHeight = 70;
+                      const startY = 50;
+                      const startX = 80;
+                      const mapWidth = 1000;
+                      const mapHeight = Math.max(380, startY + rowsCount * rowHeight + 35);
+                      const points = [
+                        ...bushes.map((p) => ({ ...p, kind: 'bush' })),
+                        ...gaps.map((p) => ({ ...p, kind: 'gap' })),
+                      ];
+                      let rows = Array.from({ length: rowsCount }, () => []);
+                      if (points.length) {
+                        const minY = Math.min(...points.map((p) => p.y));
+                        const maxY = Math.max(...points.map((p) => p.y));
+                        const spanY = Math.max(1e-9, maxY - minY);
+                        points.forEach((point) => {
+                          const rowIdx = Math.min(
+                            rowsCount - 1,
+                            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
+                          );
+                          rows[rowIdx].push(point);
+                        });
+                      }
+                      rows = rows.map((row) => row.sort((a, b) => a.x - b.x));
+                      const maxRowLength = Math.max(1, ...rows.map((r) => r.length));
+                      const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
+                      const renderedPoints = [];
+                      rows.forEach((row, rowIdx) => {
+                        row.forEach((point, pointIdx) => {
+                          renderedPoints.push({
+                            x: startX + pointIdx * bushSpacing,
+                            y: startY + rowIdx * rowHeight + 5,
+                            kind: point.kind,
+                          });
+                        });
                       });
+                      const pointCount = renderedPoints.length;
+                      const pointRadius = pointCount > 2500 ? 3.2 : pointCount > 1200 ? 3.6 : 4.2;
                       return (
                         <div className="mt-3 rounded border border-emerald-700/40 bg-gray-900/60 p-2">
                           <div className="mb-1 flex items-center justify-between text-[11px] text-gray-300">
-                            <span>Схема участка VineyardApp</span>
-                            <span>ряды: {result.rowsCount || '—'}</span>
+                            <span>Схема участка</span>
+                            <span>ряды: {result.rowsCount || '—'} · точек: {pointCount}</span>
                           </div>
-                          <svg viewBox={`0 0 ${w} ${h}`} className="h-[140px] w-full rounded bg-gray-950/80">
-                            <rect x="0" y="0" width={w} height={h} fill="transparent" stroke="rgba(75,85,99,0.55)" />
-                            {bushes.map((p, i) => {
-                              const c = toSvg(p);
-                              return <circle key={`b-${i}`} cx={c.x} cy={c.y} r="2.6" fill="#34d399" />;
+                          <svg
+                            viewBox={`0 0 ${mapWidth} ${mapHeight}`}
+                            className="h-[140px] w-full rounded bg-gray-50 cursor-zoom-in transition hover:ring-1 hover:ring-emerald-400/50"
+                            onClick={() => openExpandedScheme(result.missionId)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                openExpandedScheme(result.missionId);
+                              }
+                            }}
+                            title="Открыть схему на весь экран"
+                          >
+                            <defs>
+                              <pattern id={`mini-grid-main-${result.missionId}`} patternUnits="userSpaceOnUse" width="50" height="50">
+                                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#cbd5e1" strokeWidth="1" />
+                              </pattern>
+                              <pattern id={`mini-grid-fine-${result.missionId}`} patternUnits="userSpaceOnUse" width="10" height="10">
+                                <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#e2e8f0" strokeWidth="0.5" />
+                              </pattern>
+                            </defs>
+                            <rect x="-5000" y="-5000" width="10000" height="10000" fill={`url(#mini-grid-fine-${result.missionId})`} />
+                            <rect x="-5000" y="-5000" width="10000" height="10000" fill={`url(#mini-grid-main-${result.missionId})`} />
+                            {Array.from({ length: rowsCount }).map((_, idx) => {
+                              const y = startY + idx * rowHeight + 5;
+                              return (
+                                <g key={`mini-row-${idx}`}>
+                                  <text x="22" y={y + 6} fill="#374151" fontSize="12" fontWeight="bold">{`Р${idx + 1}`}</text>
+                                  <line x1="70" y1={y} x2="960" y2={y} stroke="#9ca3af" strokeWidth="1.5" strokeDasharray="6 4" />
+                                </g>
+                              );
                             })}
-                            {gaps.map((p, i) => {
-                              const c = toSvg(p);
-                              return <circle key={`g-${i}`} cx={c.x} cy={c.y} r="2.6" fill="#f87171" />;
-                            })}
+                            {renderedPoints.map((point, i) =>
+                              point.kind === 'bush' ? (
+                                <circle key={`mini-b-${i}`} cx={point.x} cy={point.y} r={pointRadius} fill="#10b981" fillOpacity="0.85" stroke="#059669" strokeWidth="1.2" />
+                              ) : (
+                                <circle key={`mini-g-${i}`} cx={point.x} cy={point.y} r={pointRadius} fill="#fecaca" fillOpacity="0.95" stroke="#ef4444" strokeWidth="1.2" />
+                              )
+                            )}
                           </svg>
                           <div className="mt-1 flex items-center gap-3 text-[11px] text-gray-400">
                             <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />Кусты</span>
@@ -709,5 +806,180 @@ export const Sidebar = ({
         </div>
       </div>
     </div>
+    {expandedSchemeResult && (() => {
+      const { bushes, gaps } = buildMissionSchemePoints(expandedSchemeResult);
+      const all = [
+        ...bushes.map((p) => ({ ...p, kind: 'bush' })),
+        ...gaps.map((p) => ({ ...p, kind: 'gap' })),
+      ];
+      const rowsCount = Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
+      const rowHeight = 70;
+      const startY = 50;
+      const startX = 80;
+      const mapWidth = 1000;
+      const mapHeight = Math.max(600, startY + rowsCount * rowHeight + 40);
+
+      let renderedRows = Array.from({ length: rowsCount }, () => []);
+      if (all.length) {
+        const minY = Math.min(...all.map((p) => p.y));
+        const maxY = Math.max(...all.map((p) => p.y));
+        const spanY = Math.max(1e-9, maxY - minY);
+        all.forEach((point) => {
+          const rowIdx = Math.min(
+            rowsCount - 1,
+            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
+          );
+          renderedRows[rowIdx].push(point);
+        });
+      }
+
+      renderedRows = renderedRows.map((row) => row.sort((a, b) => a.x - b.x));
+      const maxRowLength = Math.max(1, ...renderedRows.map((r) => r.length));
+      const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
+
+      const renderedPoints = [];
+      renderedRows.forEach((row, rowIdx) => {
+        row.forEach((point, pointIdx) => {
+          renderedPoints.push({
+            x: startX + pointIdx * bushSpacing,
+            y: startY + rowIdx * rowHeight + 5,
+            kind: point.kind,
+            row: rowIdx + 1,
+            pos: pointIdx + 1,
+          });
+        });
+      });
+
+      const markerRadius = renderedPoints.length > 2500 ? 6 : renderedPoints.length > 1200 ? 8 : 10;
+      const markerOpacity = renderedPoints.length > 2500 ? 0.7 : 0.85;
+      const zoomPercent = Math.round((1000 / expandedViewBox.width) * 100);
+
+      const onExpandedMouseDown = (e) => {
+        setIsExpandedPanning(true);
+        setExpandedPanStart({ x: e.clientX, y: e.clientY, vb: expandedViewBox });
+      };
+      const onExpandedMouseMove = (e) => {
+        if (!isExpandedPanning || !expandedPanStart) return;
+        const dx = e.clientX - expandedPanStart.x;
+        const dy = e.clientY - expandedPanStart.y;
+        const scaleX = expandedPanStart.vb.width / 1000;
+        const scaleY = expandedPanStart.vb.height / 600;
+        setExpandedViewBox({
+          x: expandedPanStart.vb.x - dx * scaleX,
+          y: expandedPanStart.vb.y - dy * scaleY,
+          width: expandedPanStart.vb.width,
+          height: expandedPanStart.vb.height,
+        });
+      };
+      const onExpandedMouseUp = () => {
+        setIsExpandedPanning(false);
+        setExpandedPanStart(null);
+      };
+      const onExpandedWheel = (e) => {
+        e.preventDefault();
+        if (e.deltaY < 0) zoomInExpandedScheme();
+        else zoomOutExpandedScheme();
+      };
+
+      const overlay = (
+        <div className="fixed inset-0 z-[120] flex h-screen w-screen flex-col bg-gray-950">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-700 bg-gray-900/95 px-3 py-2 sm:px-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-emerald-300">
+                  Схема миссии #{expandedSchemeResult.missionId}
+                </p>
+                <p className="truncate text-xs text-gray-400">
+                  Ряды: {expandedSchemeResult.rowsCount || '—'} · кустов: {expandedSchemeResult.bushesCount} · пропусков: {expandedSchemeResult.gapsCount}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button type="button" onClick={zoomOutExpandedScheme} className="rounded bg-gray-800 px-2.5 py-1 text-sm text-gray-100 hover:bg-gray-700" title="Уменьшить">−</button>
+                <button type="button" onClick={resetExpandedSchemeZoom} className="rounded bg-gray-800 px-2.5 py-1 text-xs text-gray-100 hover:bg-gray-700" title="Сбросить масштаб">{zoomPercent}%</button>
+                <button type="button" onClick={zoomInExpandedScheme} className="rounded bg-gray-800 px-2.5 py-1 text-sm text-gray-100 hover:bg-gray-700" title="Увеличить">+</button>
+                <button
+                  type="button"
+                  onClick={closeExpandedScheme}
+                  aria-label="Закрыть схему"
+                  title="Закрыть"
+                  className="rounded bg-red-700/80 px-2.5 py-1 text-base font-semibold leading-none text-red-100 hover:bg-red-600"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              {!renderedPoints.length ? (
+                <div className="flex h-full w-full items-center justify-center text-sm text-gray-400">
+                  Нет координат рядов для отображения.
+                </div>
+              ) : (
+                <svg
+                  ref={expandedSvgRef}
+                  viewBox={`${expandedViewBox.x} ${expandedViewBox.y} ${expandedViewBox.width} ${expandedViewBox.height}`}
+                  className="h-full w-full bg-gray-50"
+                  onMouseDown={onExpandedMouseDown}
+                  onMouseMove={onExpandedMouseMove}
+                  onMouseUp={onExpandedMouseUp}
+                  onMouseLeave={onExpandedMouseUp}
+                  onWheel={onExpandedWheel}
+                  style={{ cursor: isExpandedPanning ? 'grabbing' : 'grab' }}
+                >
+                  <defs>
+                    <pattern id="fullGridMain" patternUnits="userSpaceOnUse" width="50" height="50">
+                      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#cbd5e1" strokeWidth="1" />
+                    </pattern>
+                    <pattern id="fullGridFine" patternUnits="userSpaceOnUse" width="10" height="10">
+                      <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#e2e8f0" strokeWidth="0.5" />
+                    </pattern>
+                  </defs>
+                  <rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#fullGridFine)" />
+                  <rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#fullGridMain)" />
+
+                  {Array.from({ length: rowsCount }).map((_, idx) => {
+                    const y = startY + idx * rowHeight + 5;
+                    return (
+                      <g key={`full-row-${idx}`}>
+                        <text x="25" y={y + 7} fill="#374151" fontSize="13" fontWeight="bold">{`Ряд ${idx + 1}`}</text>
+                        <line x1="70" y1={y} x2="960" y2={y} stroke="#9ca3af" strokeWidth="1.5" strokeDasharray="6 4" />
+                      </g>
+                    );
+                  })}
+
+                  {renderedPoints.map((point, idx) =>
+                    point.kind === 'bush' ? (
+                      <circle
+                        key={`full-b-${idx}`}
+                        cx={point.x}
+                        cy={point.y}
+                        r={markerRadius}
+                        fill="#10b981"
+                        fillOpacity={markerOpacity}
+                        stroke="#059669"
+                        strokeWidth="2"
+                      />
+                    ) : (
+                      <circle
+                        key={`full-g-${idx}`}
+                        cx={point.x}
+                        cy={point.y}
+                        r={markerRadius}
+                        fill="#fecaca"
+                        fillOpacity={markerOpacity}
+                        stroke="#ef4444"
+                        strokeWidth="2"
+                      />
+                    )
+                  )}
+                </svg>
+              )}
+            </div>
+        </div>
+      );
+      if (typeof document !== 'undefined' && document.body) {
+        return createPortal(overlay, document.body);
+      }
+      return overlay;
+    })()}
+    </>
   );
 };

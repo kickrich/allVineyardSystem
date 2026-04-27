@@ -274,6 +274,7 @@ class ONNXYOLODetector:
         unique_gaps = set()
         
         bushes_positions = []
+        gaps_positions = []
         
         row_sequence = []
         tracked_objects = {}
@@ -319,6 +320,13 @@ class ONNXYOLODetector:
                         
                     elif det['class_name'] == 'gap':
                         unique_gaps.add(det['track_id'])
+                        gaps_positions.append({
+                            'track_id': det['track_id'],
+                            'frame': frame_count,
+                            'x': center_x,
+                            'y': center_y,
+                            'confidence': det['confidence']
+                        })
                         
                         if det['track_id'] not in tracked_objects:
                             tracked_objects[det['track_id']] = {
@@ -354,6 +362,7 @@ class ONNXYOLODetector:
             unique_bushes, 
             unique_gaps, 
             bushes_positions,
+            gaps_positions,
             frame_count,
             fps
         )
@@ -378,13 +387,15 @@ class ONNXYOLODetector:
             "row_length": len(row_sequence)
         }
     
-    def calculate_statistics(self, unique_bushes, unique_gaps, bushes_positions, total_frames, fps):
+    def calculate_statistics(self, unique_bushes, unique_gaps, bushes_positions, gaps_positions, total_frames, fps):
         row_spacing = self._calculate_row_spacing(bushes_positions)
         
         return {
             "bushes_count": len(unique_bushes),
             "gaps_count": len(unique_gaps),
             "row_spacing": row_spacing,
+            "bushes_positions": bushes_positions,
+            "gaps_positions": gaps_positions,
             "details": {
                 "processed_frames": len(set(p['frame'] for p in bushes_positions)),
                 "total_positions": len(bushes_positions),
@@ -458,6 +469,8 @@ class DummyVideoDetector:
             "bushes_count": 0,
             "gaps_count": 0,
             "row_spacing": 0.0,
+            "bushes_positions": [],
+            "gaps_positions": [],
             "details": {
                 "processed_frames": processed_frames,
                 "total_positions": 0,
