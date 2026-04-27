@@ -170,9 +170,9 @@ export const DroneParking = ({
       : null;
 
   return (
-    <div className="flex flex-shrink-0 w-72">
-      <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden h-full flex flex-col w-full">
-        <div className="bg-gradient-to-r from-gray-700 to-gray-800 p-4">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col lg:w-72">
+      <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg bg-gray-800 shadow-lg">
+        <div className="shrink-0 bg-gradient-to-r from-gray-700 to-gray-800 p-4">
           <div className="flex justify-between items-center gap-2">
             <h2 className="text-xl font-bold text-white leading-tight whitespace-nowrap min-w-0 truncate">
               Стоянка для дронов
@@ -197,7 +197,7 @@ export const DroneParking = ({
             </span>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pr-2 space-y-4 [scrollbar-gutter:stable]">
           {placedDrones.length > 0 && (
             <div>
               <h3 className="text-lg font-semibold text-white mb-3">Размещенные дроны</h3>
@@ -299,7 +299,7 @@ export const DroneParking = ({
           )}
         </div>
         {onBackToTemplates && (
-          <div className="flex-shrink-0 p-4 pt-2 border-t border-gray-700 hidden lg:block">
+          <div className="shrink-0 border-t border-gray-700 bg-gray-800/95 p-4 pt-2 backdrop-blur-sm hidden lg:block">
             <button
               type="button"
               onClick={onBackToTemplates}

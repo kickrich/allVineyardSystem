@@ -3035,7 +3035,7 @@ function App() {
       <div className={`flex flex-1 min-h-0 overflow-hidden ${isTemplateCreationMode ? '' : 'gap-2 lg:gap-3 flex-col lg:flex-row'}`}>
         {!isTemplateCreationMode && (
           <div
-            className={`fixed left-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-72 lg:max-w-none lg:flex-shrink-0 ${
+            className={`fixed left-0 top-0 bottom-0 z-50 w-[85%] max-w-sm flex h-full min-h-0 flex-col transform transition-transform duration-300 ease-out lg:relative lg:w-72 lg:max-w-none lg:flex-shrink-0 ${
               workspaceVisible
                 ? `${parkingOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} opacity-100`
                 : 'pointer-events-none translate-x-[100vw] opacity-0'
