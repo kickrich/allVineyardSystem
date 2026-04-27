@@ -52,9 +52,113 @@ module Api
       def route_template_params
         t = params.require(:route_template)
         permitted = t.permit(:name, :zone_id)
-        raw_path = t[:path]
-        permitted[:path] = raw_path if raw_path.is_a?(Array)
+
+        normalized_path = normalize_template_path_param(t[:path])
+        permitted[:path] = normalized_path unless normalized_path.nil?
+
+        normalized_shift_segment_indices = normalize_shift_segment_indices_param(t[:shift_segment_indices])
+        permitted[:shift_segment_indices] = normalized_shift_segment_indices unless normalized_shift_segment_indices.nil?
+
         permitted
+      end
+
+      def normalize_template_path_param(raw)
+        parsed =
+          case raw
+          when String
+            parse_json_array(raw)
+          when ActionController::Parameters
+            raw.to_unsafe_h
+          else
+            raw
+          end
+
+        points =
+          case parsed
+          when Array
+            parsed
+          when Hash
+            parsed
+              .sort_by { |key, _| sortable_param_index(key) }
+              .map { |_, value| value }
+          else
+            return nil
+          end
+
+        normalized = points.map { |point| normalize_point(point) }.compact
+        normalized
+      end
+
+      def normalize_point(point)
+        lat, lng =
+          case point
+          when Array
+            [point[0], point[1]]
+          when ActionController::Parameters
+            extract_point_coords(point.to_unsafe_h)
+          when Hash
+            extract_point_coords(point)
+          else
+            return nil
+          end
+
+        lat = to_float(lat)
+        lng = to_float(lng)
+        return nil if lat.nil? || lng.nil?
+
+        [lat, lng]
+      end
+
+      def normalize_shift_segment_indices_param(raw)
+        parsed =
+          case raw
+          when String
+            parse_json_array(raw)
+          when Array
+            raw
+          else
+            nil
+          end
+        return nil unless parsed.is_a?(Array)
+
+        parsed
+          .map { |value| Integer(value, exception: false) }
+          .compact
+          .select { |index| index >= 0 }
+          .uniq
+          .sort
+      end
+
+      def parse_json_array(raw)
+        text = raw.to_s.strip
+        return nil if text.empty?
+
+        parsed = JSON.parse(text)
+        parsed.is_a?(Array) ? parsed : nil
+      rescue JSON::ParserError
+        nil
+      end
+
+      def to_float(value)
+        Float(value)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def sortable_param_index(key)
+        str = key.to_s
+        return str.to_i if str.match?(/\A\d+\z/)
+
+        str
+      end
+
+      def extract_point_coords(hash)
+        h = hash.transform_keys(&:to_s)
+        return [h["lat"], h["lng"]] if h.key?("lat") || h.key?("lng")
+        return [h["0"], h["1"]] if h.key?("0") || h.key?("1")
+
+        values = h.values
+        [values[0], values[1]]
       end
     end
   end

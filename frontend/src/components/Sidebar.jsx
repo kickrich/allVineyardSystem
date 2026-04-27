@@ -542,13 +542,6 @@ export const Sidebar = ({
                           {result.droneName ? `Дрон: ${result.droneName}` : 'Дрон не определён'}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => onOpenAiMission?.(result.missionId)}
-                        className="rounded-lg border border-emerald-400/50 bg-emerald-700/30 px-2.5 py-1.5 text-xs text-emerald-50 hover:bg-emerald-600/50"
-                      >
-                        Перейти
-                      </button>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 text-center">
