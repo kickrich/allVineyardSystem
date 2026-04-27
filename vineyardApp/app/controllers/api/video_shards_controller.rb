@@ -7,7 +7,6 @@ class Api::VideoShardsController < ApplicationController
     shard.update_columns(
       bushes_count: params[:bushes_count],
       gaps_count: params[:gaps_count],
-      bush_spacing_avg: params[:bush_spacing_avg],
       result_json: params[:result_json],
       recorded_at: Time.current,
       status: VideoShard.statuses[:completed],

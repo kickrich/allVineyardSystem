@@ -18,11 +18,6 @@ class Video < ApplicationRecord
     video_shards.sum(:gaps_count)
   end
 
-  def avg_bush_spacing
-    spacings = video_shards.where.not(bush_spacing_avg: nil).pluck(:bush_spacing_avg)
-    spacings.any? ? spacings.sum / spacings.size : 0.0
-  end
-
   def all_bushes_positions
     video_shards.flat_map { |s| s.result_json&.dig('bushes_positions') }.compact
   end
@@ -83,7 +78,6 @@ class Video < ApplicationRecord
       statistics: {
         total_bushes: total_bushes_count,
         total_gaps: total_gaps_count,
-        avg_bush_spacing: avg_bush_spacing,
         bushes_positions: all_bushes_positions,
         gaps_positions: all_gaps_positions
       },

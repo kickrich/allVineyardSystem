@@ -87,7 +87,6 @@ class Api::VideosController < ApplicationController
       statistics: {
         total_bushes: video.total_bushes_count,
         total_gaps: video.total_gaps_count,
-        avg_bush_spacing: video.avg_bush_spacing,
         bushes_positions: video.all_bushes_positions,
         gaps_positions: video.all_gaps_positions
       },
@@ -99,7 +98,6 @@ class Api::VideosController < ApplicationController
           filename: shard.original_filename,
           bushes_count: shard.bushes_count,
           gaps_count: shard.gaps_count,
-          bush_spacing_avg: shard.bush_spacing_avg,
           processed_at: shard.updated_at
         }
       end
@@ -144,7 +142,6 @@ class Api::VideosController < ApplicationController
       status: shard.status,
       bushes_count: shard.bushes_count,
       gaps_count: shard.gaps_count,
-      bush_spacing_avg: shard.bush_spacing_avg,
       progress: case shard.status
                 when 'pending' then 0
                 when 'processing' then 50

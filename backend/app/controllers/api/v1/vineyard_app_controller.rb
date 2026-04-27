@@ -37,7 +37,6 @@ module Api
 
         ai_result.assign_attributes(
           bushes_count: stats[:total_bushes].to_i,
-          avg_distance_between_bushes: stats[:avg_bush_spacing].to_f,
           rows_count: rows_count.to_i,
           result_json: {
             gaps_count: stats[:total_gaps].to_i,
@@ -91,7 +90,6 @@ module Api
           mission_id: ai_result.mission_id,
           bushes_count: ai_result.bushes_count,
           gaps_count: ai_result.result_json&.dig("gaps_count").to_i,
-          avg_bush_spacing: ai_result.avg_distance_between_bushes,
           created_at: ai_result.created_at,
           updated_at: ai_result.updated_at
         }

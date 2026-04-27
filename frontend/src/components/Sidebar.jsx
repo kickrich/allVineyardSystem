@@ -594,7 +594,7 @@ export const Sidebar = ({
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="grid grid-cols-2 gap-2 text-center">
                       <div className="rounded bg-gray-900/50 px-2 py-1.5">
                         <p className="text-[11px] text-gray-400">Кустов</p>
                         <p className="font-semibold text-white">{result.bushesCount}</p>
@@ -602,14 +602,6 @@ export const Sidebar = ({
                       <div className="rounded bg-gray-900/50 px-2 py-1.5">
                         <p className="text-[11px] text-gray-400">Пропусков</p>
                         <p className="font-semibold text-white">{result.gapsCount}</p>
-                      </div>
-                      <div className="rounded bg-gray-900/50 px-2 py-1.5">
-                        <p className="text-[11px] text-gray-400">Ср. шаг</p>
-                        <p className="font-semibold text-white">
-                          {Number.isFinite(result.avgBushSpacing)
-                            ? `${result.avgBushSpacing.toFixed(2)} м`
-                            : '—'}
-                        </p>
                       </div>
                     </div>
                     {selectedAiMissionId === result.missionId && (() => {

@@ -148,7 +148,6 @@ class VideoShardProcessorService
     @shard.update_columns(
       bushes_count: p["bushes_count"],
       gaps_count: p["gaps_count"],
-      bush_spacing_avg: p["bush_spacing_avg"],
       result_json: result_json,
       recorded_at: Time.current,
       status: VideoShard.statuses[:completed],

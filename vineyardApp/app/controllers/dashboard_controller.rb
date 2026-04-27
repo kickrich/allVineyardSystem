@@ -35,7 +35,6 @@ class DashboardController < ApplicationController
           statistics: {
             total_bushes: video.total_bushes_count,
             total_gaps: video.total_gaps_count,
-            avg_spacing: video.avg_bush_spacing,
             shards_count: video.video_shards.count,
             processed_shards: video.video_shards.where(status: :completed).count,
             progress: video.processing_progress

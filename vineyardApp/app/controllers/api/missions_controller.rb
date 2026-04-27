@@ -181,7 +181,6 @@ class Api::MissionsController < ApplicationController
     detection.assign_attributes(
       bushes_count: params[:bushes_count] || params[:ai_result]&.dig(:bushes_count),
       gaps_count: params[:gaps_count] || params[:ai_result]&.dig(:gaps_count),
-      avg_bush_spacing: params[:avg_bush_spacing] || params[:ai_result]&.dig(:avg_bush_spacing),
       result_json: params
     )
 

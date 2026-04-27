@@ -379,13 +379,11 @@ class ONNXYOLODetector:
         }
     
     def calculate_statistics(self, unique_bushes, unique_gaps, bushes_positions, total_frames, fps):
-        bush_spacing_avg = self._calculate_bush_spacing(bushes_positions)
         row_spacing = self._calculate_row_spacing(bushes_positions)
         
         return {
             "bushes_count": len(unique_bushes),
             "gaps_count": len(unique_gaps),
-            "bush_spacing_avg": bush_spacing_avg,
             "row_spacing": row_spacing,
             "details": {
                 "processed_frames": len(set(p['frame'] for p in bushes_positions)),
@@ -393,29 +391,6 @@ class ONNXYOLODetector:
                 "enhancement_enabled": self.enhance_frames
             }
         }
-    
-    def _calculate_bush_spacing(self, positions):
-        if len(positions) < 10:
-            return 0.0
-        
-        by_track = defaultdict(list)
-        for pos in positions:
-            by_track[pos['track_id']].append(pos)
-        
-        for track_id, track_positions in by_track.items():
-            if len(track_positions) >= 3:
-                track_positions.sort(key=lambda p: p['frame'])
-                
-                x_positions = [p['x'] for p in track_positions[:3]]
-                
-                distances = []
-                for i in range(1, len(x_positions)):
-                    distances.append(abs(x_positions[i] - x_positions[i-1]))
-                
-                if distances:
-                    return sum(distances) / len(distances)
-        
-        return 0.0
     
     def _calculate_row_spacing(self, positions):
         if len(positions) < 10:
@@ -482,7 +457,6 @@ class DummyVideoDetector:
         statistics: Dict = {
             "bushes_count": 0,
             "gaps_count": 0,
-            "bush_spacing_avg": 0.0,
             "row_spacing": 0.0,
             "details": {
                 "processed_frames": processed_frames,

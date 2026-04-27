@@ -48,11 +48,9 @@ class SendResultsToExternalServiceService
 
   def callback_payload
     payload = @video.aggregated_results
-    stats = (payload[:statistics] || {}).dup
-    # Keep callback lightweight for faster delivery to backend.
-    stats[:bushes_positions] = []
-    stats[:gaps_positions] = []
-    payload.merge(statistics: stats)
+    # Keep real positions in callback so Drones backend can render vineyard scheme.
+    # Payload trimming can be reintroduced later behind an explicit env flag if needed.
+    payload
   end
 
   def resolved_callback_path

@@ -1513,7 +1513,6 @@ function App() {
           droneName,
           bushesCount: Number(result?.bushes_count ?? 0),
           gapsCount: Number(result?.gaps_count ?? 0),
-          avgBushSpacing: Number(result?.avg_bush_spacing),
           rowsCount: Number(result?.rows_count ?? result?.shards_count ?? 0),
           processedRows: Number(result?.processed_shards ?? 0),
           bushesPositions: Array.isArray(result?.bushes_positions) ? result.bushes_positions : [],

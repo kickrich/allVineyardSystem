@@ -8,7 +8,6 @@ class Api::DetectionsController < ApplicationController
       bushes_count: params[:bushes_count],
       gaps_count: params[:gaps_count],
       row_spacing: params[:row_spacing],
-      bush_spacing_avg: params[:bush_spacing_avg],
       result_json: params[:result_json]
     )
     
@@ -32,7 +31,6 @@ class Api::DetectionsController < ApplicationController
       bushes_count: detection.bushes_count,
       gaps_count: detection.gaps_count,
       row_spacing: detection.row_spacing,
-      bush_spacing_avg: detection.bush_spacing_avg,
       result_json: detection.result_json,
       created_at: detection.created_at
     }
