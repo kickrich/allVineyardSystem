@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession } from './client';
+import { apiGet, apiGetBlob, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession } from './client';
 
 const DEFAULT_DEV_EMAIL = import.meta.env.VITE_API_EMAIL ?? 'operator@drones.local';
 const DEFAULT_DEV_PASSWORD = import.meta.env.VITE_API_PASSWORD ?? 'password123';
@@ -290,6 +290,52 @@ export async function fetchCompletedMissionSchemas() {
   return Array.isArray(missions) ? missions : [];
 }
 
+/** Список тестовых видео из backend (папка TEST_MISSION_SHARD_VIDEOS_DIR). */
+export async function fetchTestMissionVideoShardList() {
+  const response = await apiGet('/api/v1/test_mission_video_shards');
+  return extractData(response);
+}
+
+/** Скачать один тестовый файл как Blob (для загрузки в MinIO как «шард»). */
+export async function fetchTestMissionVideoShardBlob(filename) {
+  const enc = encodeURIComponent(filename);
+  return apiGetBlob(`/api/v1/test_mission_video_shards/download?name=${enc}`);
+}
+
+/** Сервер копирует файл из TEST_MISSION_SHARD_VIDEOS_DIR в MinIO (без скачивания в браузер). */
+export async function pushTestMissionShardToS3({
+  missionId,
+  shardFilename,
+  rowIndex = null,
+  rowsCount = null,
+  shiftSegmentIndices = [],
+} = {}) {
+  if (missionId == null) throw new Error('missionId is required');
+  if (!shardFilename) throw new Error('shardFilename is required');
+
+  const payload = {
+    mission_id: missionId,
+    shard_filename: String(shardFilename),
+  };
+
+  if (Number.isInteger(rowIndex) && rowIndex >= 1) {
+    payload.row_index = rowIndex;
+  }
+  if (Number.isInteger(rowsCount) && rowsCount > 0) {
+    payload.rows_count = rowsCount;
+  }
+  const normalizedShifts = Array.isArray(shiftSegmentIndices)
+    ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+    : [];
+  payload.shift_segment_indices = normalizedShifts;
+
+  // Сервер читает файл с диска и заливает в MinIO — дольше обычного JSON (дефолт 10 с в client.js).
+  const response = await apiPost('/api/v1/media_uploads/push_test_mission_shard', payload, {
+    timeoutMs: 600_000,
+  });
+  return extractData(response);
+}
+
 export async function multipartInitForVideo({
   missionId,
   filename,
@@ -315,15 +361,16 @@ export async function multipartInitForVideo({
     chunk_size_bytes: chunkSizeBytes,
   };
 
-  if (Number.isInteger(rowIndex) && rowIndex > 0) {
+  if (Number.isInteger(rowIndex) && rowIndex >= 1) {
     payload.row_index = rowIndex;
   }
   if (Number.isInteger(rowsCount) && rowsCount > 0) {
     payload.rows_count = rowsCount;
   }
-  if (Array.isArray(shiftSegmentIndices) && shiftSegmentIndices.length) {
-    payload.shift_segment_indices = shiftSegmentIndices;
-  }
+  const normalizedShifts = Array.isArray(shiftSegmentIndices)
+    ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+    : [];
+  payload.shift_segment_indices = normalizedShifts;
 
   const response = await apiPost('/api/v1/media_uploads/multipart_init', payload);
   return extractData(response);

@@ -25,3 +25,7 @@ dist-ssr
 # Windows NTFS alternate data streams
 :Zone.Identifier
 **/:Zone.Identifier
+
+/.env
+/.env.local
+!/.env.example

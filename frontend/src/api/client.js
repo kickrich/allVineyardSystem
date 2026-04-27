@@ -108,8 +108,28 @@ export async function apiGet(path) {
   return handleJsonResponse(res, path);
 }
 
-export async function apiPost(path, body) {
-  const res = await apiRequest(path, { method: 'POST', body: JSON.stringify(body) });
+/** GET бинарный ответ (видео и т.п.). Увеличенный таймаут по умолчанию. */
+export async function apiGetBlob(path, { timeoutMs = 120_000 } = {}) {
+  const res = await apiRequest(path, { method: 'GET', timeoutMs });
+  if (!res.ok) {
+    const detail = await parseApiError(res);
+    if (res.status === 401 && shouldAttachAuth(path)) {
+      clearApiSession();
+      throw new Error(`Требуется авторизация или сессия устарела. ${detail} Обновите страницу.`);
+    }
+    throw new Error(detail);
+  }
+  return res.blob();
+}
+
+/** @param {object} [options] @param {number} [options.timeoutMs] — иначе см. apiRequest (по умолчанию 10 с). */
+export async function apiPost(path, body, options = {}) {
+  const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined;
+  const res = await apiRequest(path, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  });
   return handleJsonResponse(res, path);
 }
 

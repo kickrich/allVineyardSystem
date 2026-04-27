@@ -6,10 +6,15 @@ require 'json'
 # Сервис для отправки видео из Backend в VineyardApp
 # Используется после завершения загрузки видео (MediaUpload)
 class SendVideoToVineyardAppService
+  RETRYABLE_HTTP_STATUSES = [404, 408, 425, 429, 500, 502, 503, 504].freeze
+
+  attr_reader :last_error_message
+
   def initialize(media_upload)
     @media_upload = media_upload
     @mission = media_upload.mission
     @vineyard_app_url = ENV.fetch('VINEYARD_APP_URL', 'http://localhost:3000')
+    @last_error_message = nil
   end
 
   # Отправить видео в VineyardApp
@@ -22,7 +27,8 @@ class SendVideoToVineyardAppService
 
     @mission.reload.vineyard_app_video_id
   rescue => e
-    Rails.logger.error("[SendVideoToVineyardAppService] Error: #{e.message}")
+    @last_error_message = e.message.to_s.truncate(2000)
+    Rails.logger.error("[SendVideoToVineyardAppService] Error: #{@last_error_message}")
     Rails.logger.error(e.backtrace.join("\n"))
     nil
   end
@@ -114,19 +120,17 @@ class SendVideoToVineyardAppService
       faraday.request :multipart
       faraday.request :url_encoded
       faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 600
+      faraday.options.timeout = vineyard_upload_timeout_seconds
     end
 
     body = shard_request_body_common.merge(
       video: Faraday::UploadIO.new(temp_file.path, 'video/mp4', 'video.mp4')
     )
 
-    response = conn.post("/api/missions/upload_shard") do |req|
-      req.body = body
-    end
-
-    unless response.status.in?(200..299)
-      raise "Failed to upload shard: #{response.status} - #{response.body}"
+    response = with_upload_retry("file") do
+      conn.post("/api/missions/upload_shard") do |req|
+        req.body = body
+      end
     end
 
     response
@@ -141,7 +145,7 @@ class SendVideoToVineyardAppService
     conn = Faraday.new(url: @vineyard_app_url) do |faraday|
       faraday.request :json
       faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 120
+      faraday.options.timeout = vineyard_upload_timeout_seconds
     end
 
     object_key = minio_object_key
@@ -153,15 +157,61 @@ class SendVideoToVineyardAppService
       video_url: @media_upload.url
     ).compact
 
-    response = conn.post("/api/missions/upload_shard") do |req|
-      req.body = body
-    end
-
-    unless response.status.in?(200..299)
-      raise "VineyardApp upload_shard failed: #{response.status} - #{response.body}"
+    response = with_upload_retry("url") do
+      conn.post("/api/missions/upload_shard") do |req|
+        req.body = body
+      end
     end
 
     response
+  end
+
+  def with_upload_retry(mode)
+    attempts = [vineyard_upload_retry_attempts, 1].max
+    n = 0
+    begin
+      n += 1
+      response = yield
+      if !response.status.in?(200..299)
+        body = response.body.to_s.truncate(400)
+        message = "VineyardApp upload_shard failed (#{mode}): #{response.status} - #{body}"
+        if RETRYABLE_HTTP_STATUSES.include?(response.status)
+          raise Faraday::ClientError.new(message, response: response)
+        end
+        raise message
+      end
+      response
+    rescue Faraday::TimeoutError, Faraday::ConnectionFailed, Faraday::SSLError, Faraday::ClientError => e
+      raise if n >= attempts
+      delay = vineyard_upload_retry_delay_seconds * (2**(n - 1))
+      Rails.logger.warn(
+        "[SendVideoToVineyardAppService] upload retry #{n}/#{attempts - 1} " \
+        "media_upload_id=#{@media_upload.id} mode=#{mode} err=#{e.class}: #{e.message}"
+      )
+      sleep(delay)
+      retry
+    end
+  end
+
+  def vineyard_upload_timeout_seconds
+    raw = ENV["VINEYARD_APP_UPLOAD_TIMEOUT_SECONDS"].to_s.strip
+    value = raw.empty? ? 600 : raw.to_i
+    value = 600 if value < 1
+    value.clamp(30, 86_400)
+  end
+
+  def vineyard_upload_retry_attempts
+    raw = ENV["VINEYARD_APP_UPLOAD_RETRY_ATTEMPTS"].to_s.strip
+    value = raw.empty? ? 4 : raw.to_i
+    value = 4 if value < 1
+    value.clamp(1, 10)
+  end
+
+  def vineyard_upload_retry_delay_seconds
+    raw = ENV["VINEYARD_APP_UPLOAD_RETRY_DELAY_SECONDS"].to_s.strip
+    value = raw.empty? ? 3 : raw.to_i
+    value = 3 if value < 1
+    value.clamp(1, 60)
   end
 
   def minio_object_key

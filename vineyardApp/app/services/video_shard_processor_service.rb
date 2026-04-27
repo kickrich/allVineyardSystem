@@ -53,11 +53,7 @@ class VideoShardProcessorService
       raise "Не найден object_key для обработки (и нет прикрепленного файла)"
     end
 
-    conn = Faraday.new(url: @cv_service_url) do |faraday|
-      faraday.request :json
-      faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 600
-    end
+    conn = faraday_client_to_cv
 
     callback_host = ENV.fetch("RAILS_URL", "http://localhost:3000")
     callback_url = "#{callback_host}/api/video_shards/#{@shard.id}/results"
@@ -194,6 +190,24 @@ class VideoShardProcessorService
     [nil, nil]
   end
 
+  # Таймаут ожидания ответа от cvService (сек), см. .env: CV_SERVICE_HTTP_TIMEOUT_SECONDS
+  def faraday_client_to_cv(multipart: false)
+    Faraday.new(url: @cv_service_url) do |faraday|
+      faraday.request :multipart if multipart
+      faraday.request :url_encoded if multipart
+      faraday.request :json unless multipart
+      faraday.adapter Faraday.default_adapter
+      faraday.options.timeout = cv_service_http_timeout_seconds
+    end
+  end
+
+  def cv_service_http_timeout_seconds
+    raw = ENV["CV_SERVICE_HTTP_TIMEOUT_SECONDS"].to_s.strip
+    t = raw.empty? ? 1800 : raw.to_i
+    t = 1800 if t < 1
+    t.clamp(60, 86_400)
+  end
+
   def send_to_cv_service_legacy
     blob = @shard.video_file.blob
 
@@ -212,12 +226,7 @@ class VideoShardProcessorService
       raise "Скачанный файл имеет нулевой размер"
     end
 
-    conn = Faraday.new(url: @cv_service_url) do |faraday|
-      faraday.request :multipart
-      faraday.request :url_encoded
-      faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 600
-    end
+    conn = faraday_client_to_cv(multipart: true)
 
     callback_host = ENV.fetch('RAILS_URL', 'http://localhost:3000')
     callback_url = "#{callback_host}/api/video_shards/#{@shard.id}/results"

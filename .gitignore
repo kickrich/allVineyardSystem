@@ -40,6 +40,10 @@
 # Модели CV часто большие — при необходимости закоммить вручную с git add -f
 *.onnx
 
+# Тестовые видео для шардов (кладите файлы локально; пустая папка — через .gitkeep)
+test_mission_shard_videos/*
+!test_mission_shard_videos/.gitkeep
+
 # БД локально
 **/config/database.yml
 **/*.sqlite3

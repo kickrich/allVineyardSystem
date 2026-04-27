@@ -148,7 +148,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_26_180500) do
 
   create_table "zones", force: :cascade do |t|
     t.jsonb "boundary", default: []
-    t.string "color", default: "#22c55e", null: false
+    t.string "color"
     t.datetime "created_at", null: false
     t.text "description"
     t.string "name", null: false

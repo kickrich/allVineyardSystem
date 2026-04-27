@@ -1,1 +1,2 @@
-@import "tailwindcss";
+/* Глобальные стили Tailwind собираются в app/assets/builds/tailwind.css (tailwindcss-rails).
+   Доп. правила для утилит — в app/assets/tailwind/application.css */

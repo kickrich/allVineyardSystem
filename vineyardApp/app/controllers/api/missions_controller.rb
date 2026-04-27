@@ -207,14 +207,23 @@ class Api::MissionsController < ApplicationController
       return { video: existing }
     end
 
-    video = Video.create!(
-      mission_id: mid,
-      external_service_url: external_service_url,
-      external_callback_token: callback_token,
-      name: name,
-      status: :uploading
-    )
+    video = Video.find_or_create_by!(mission_id: mid) do |v|
+      v.external_service_url = external_service_url
+      v.external_callback_token = callback_token
+      v.name = name
+      v.status = :uploading
+    end
+    err = shard_callback_token_error(video, callback_token)
+    return { error: err, status: :unauthorized } if err
     { video: video }
+  rescue ActiveRecord::RecordNotUnique
+    # Параллельные upload_shard запросы могут одновременно создавать Video для одной mission_id.
+    # Если запись уже создалась конкурентным запросом — просто используем её.
+    existing = Video.find_by(mission_id: mid)
+    return { error: "Видео миссии не найдено после гонки создания", status: :conflict } if existing.nil?
+    err = shard_callback_token_error(existing, callback_token)
+    return { error: err, status: :unauthorized } if err
+    { video: existing }
   rescue ActiveRecord::RecordInvalid => e
     { error: e.record.errors.full_messages.join(", "), status: :unprocessable_entity }
   end

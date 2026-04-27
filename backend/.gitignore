@@ -7,8 +7,10 @@
 # Ignore bundler config.
 /.bundle
 
-# Ignore all environment files.
-/.env*
+# Секреты: локальная копия из .env.example (не в git)
+/.env
+/.env.local
+!/.env.example
 
 # Ignore all logfiles and tempfiles.
 /log/*

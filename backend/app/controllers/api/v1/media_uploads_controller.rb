@@ -124,6 +124,7 @@ module Api
 
       # POST /api/v1/media_uploads/multipart_init
       # Параметры: mission_id, media_type, filename, byte_size, content_type, chunk_size_bytes(optional)
+      # Опционально для нарезки по рядам: row_index (>=1), rows_count, shift_segment_indices (массив int)
       def multipart_init
         mission = find_mission_or_render_error
         return if mission.nil?
@@ -135,17 +136,23 @@ module Api
         content_type = params[:content_type].to_s
         filename = params[:filename].to_s
         chunk_size_bytes = (params[:chunk_size_bytes].presence || 5 * 1024 * 1024).to_i
+        row_index = parse_multipart_row_index
+        rows_count = parse_multipart_rows_count
+        shift_segment_indices = parse_multipart_shift_segment_indices
 
         if byte_size <= 0 || filename.blank? || content_type.blank?
+          Rails.logger.warn("[multipart_init] 422: filename, byte_size и content_type обязательны")
           render_errors("filename, byte_size и content_type обязательны", status: :unprocessable_entity)
           return
         end
         if chunk_size_bytes < 1024 * 1024
+          Rails.logger.warn("[multipart_init] 422: chunk_size_bytes=#{chunk_size_bytes} < 1 MiB")
           render_errors("chunk_size_bytes слишком маленький", status: :unprocessable_entity)
           return
         end
         if media_type == "video"
           unless MediaUpload::ALLOWED_VIDEO_CONTENT_TYPES.include?(content_type)
+            Rails.logger.warn("[multipart_init] 422: content_type=#{content_type.inspect} для video")
             render_errors("Недопустимый content_type для video", status: :unprocessable_entity)
             return
           end
@@ -158,25 +165,36 @@ module Api
         # Генерируем server-side сессию multipart и сохраняем метаданные,
         # чтобы клиент мог дозапрашивать presign-URL по частям.
         session_id = SecureRandom.hex(16)
-        key = build_multipart_key(mission_id: mission.id, session_id: session_id, filename: filename)
+        key = build_multipart_key(
+          mission_id: mission.id,
+          session_id: session_id,
+          filename: filename,
+          row_index: row_index
+        )
         upload_id = multipart_service.create_multipart_upload(key: key, content_type: content_type)
         total_parts = (byte_size.to_f / chunk_size_bytes).ceil
+
+        upload_meta = {
+          "storage" => "s3",
+          "key" => key,
+          "upload_id" => upload_id,
+          "filename" => filename,
+          "content_type" => content_type,
+          "byte_size" => byte_size,
+          "chunk_size_bytes" => chunk_size_bytes,
+          "total_parts" => total_parts,
+          "mission_id" => mission.id
+        }
+        upload_meta["row_index"] = row_index if row_index
+        upload_meta["rows_count"] = rows_count if rows_count
+        upload_meta["shift_segment_indices"] = shift_segment_indices if media_type == "video"
 
         media_upload = MediaUpload.create!(
           mission_id: mission.id,
           media_type: media_type,
           status: "uploading",
           upload_session_id: session_id,
-          upload_meta: {
-            "storage" => "s3",
-            "key" => key,
-            "upload_id" => upload_id,
-            "filename" => filename,
-            "content_type" => content_type,
-            "byte_size" => byte_size,
-            "chunk_size_bytes" => chunk_size_bytes,
-            "total_parts" => total_parts
-          }
+          upload_meta: upload_meta
         )
 
         render_data(
@@ -191,7 +209,11 @@ module Api
           status: :created
         )
       rescue S3MultipartUploadService::ConfigError => e
-        render_errors(e.message, status: :unprocessable_entity)
+        Rails.logger.error("[multipart_init] S3 config: #{e.class}: #{e.message}")
+        render_errors(
+          e.message,
+          status: :unprocessable_entity
+        )
       rescue Aws::S3::Errors::ServiceError => e
         Rails.logger.error("[multipart_init] S3 #{e.class} code=#{e.code.inspect} message=#{e.message}")
         render_errors("S3 multipart init failed: #{e.message}", status: :unprocessable_entity)
@@ -339,6 +361,104 @@ module Api
         render_errors(e.message, status: :unprocessable_entity)
       rescue Aws::S3::Errors::ServiceError => e
         render_errors("S3 abort multipart failed: #{e.message}", status: :unprocessable_entity)
+      end
+
+      # POST /api/v1/media_uploads/push_test_mission_shard
+      # Копирует файл с диска (TEST_MISSION_SHARD_VIDEOS_DIR) в MinIO на сервере — без скачивания blob в браузер.
+      # JSON: mission_id, shard_filename, row_index?, rows_count?, shift_segment_indices?
+      def push_test_mission_shard
+        mission = find_mission_or_render_error
+        return if mission.nil?
+
+        unless mission.user_id == @current_user.id
+          render_errors("Нет доступа к миссии", status: :forbidden)
+          return
+        end
+
+        unless Rails.env.development? || truthy_param?(ENV["ENABLE_TEST_MISSION_VIDEO_SHARDS"])
+          render_errors("Тестовые шард-видео отключены", status: :not_found)
+          return
+        end
+
+        shard_filename = params.require(:shard_filename).to_s
+        disk_path = TestMissionShardDisk.absolute_path_for_shard(shard_filename)
+        unless disk_path&.file?
+          render_errors("Файл шарда не найден или имя недопустимо", status: :not_found)
+          return
+        end
+
+        content_type = TestMissionShardDisk.content_type_for_path(disk_path)
+        unless MediaUpload::ALLOWED_VIDEO_CONTENT_TYPES.include?(content_type)
+          render_errors("Недопустимый тип файла", status: :unprocessable_entity)
+          return
+        end
+
+        byte_size = disk_path.size
+        if byte_size > MediaUpload::MAX_VIDEO_SIZE_BYTES
+          render_errors("Видео слишком большое", status: :unprocessable_entity)
+          return
+        end
+
+        row_index = parse_multipart_row_index
+        rows_count = parse_multipart_rows_count
+        shift_segment_indices = parse_multipart_shift_segment_indices
+
+        session_id = SecureRandom.hex(16)
+        dest_filename = "mission_#{mission.id}_shard_#{session_id}#{disk_path.extname.downcase}"
+        key = build_multipart_key(
+          mission_id: mission.id,
+          session_id: session_id,
+          filename: dest_filename,
+          row_index: row_index
+        )
+
+        multipart_service.upload_file(key: key, path: disk_path.to_s, content_type: content_type)
+
+        upload_meta = {
+          "storage" => "s3",
+          "key" => key,
+          "filename" => dest_filename,
+          "content_type" => content_type,
+          "byte_size" => byte_size,
+          "mission_id" => mission.id,
+          "source" => "test_mission_shard_disk",
+          "shard_original_name" => shard_filename
+        }
+        upload_meta["row_index"] = row_index if row_index
+        upload_meta["rows_count"] = rows_count if rows_count
+        upload_meta["shift_segment_indices"] = shift_segment_indices
+
+        public_url = multipart_service.object_public_url(key)
+
+        media_upload = MediaUpload.new(
+          mission_id: mission.id,
+          media_type: "video",
+          status: "processing",
+          url: public_url,
+          upload_session_id: session_id,
+          upload_meta: upload_meta.merge(
+            "source_key" => key,
+            "source_url" => public_url
+          )
+        )
+
+        unless media_upload.save
+          render_errors(media_upload.errors.full_messages, status: :unprocessable_entity)
+          return
+        end
+
+        MediaUploadTranscodeJob.perform_later(media_upload.id)
+
+        render_data(media_upload_payload(media_upload), status: :created)
+      rescue S3MultipartUploadService::ConfigError => e
+        Rails.logger.error("[push_test_mission_shard] #{e.class}: #{e.message}")
+        render_errors(e.message, status: :unprocessable_entity)
+      rescue Aws::S3::Errors::ServiceError => e
+        Rails.logger.error("[push_test_mission_shard] S3 #{e.class} code=#{e.code.inspect} message=#{e.message}")
+        render_errors("S3 upload failed: #{e.message}", status: :unprocessable_entity)
+      rescue Seahorse::Client::NetworkingError, Errno::ECONNREFUSED, SocketError => e
+        Rails.logger.error("[push_test_mission_shard] network #{e.class}: #{e.message}")
+        render_errors("MinIO/S3 недоступен: #{e.message}", status: :service_unavailable)
       end
 
       # POST /api/v1/media_uploads/resumable_init
@@ -553,6 +673,7 @@ module Api
       end
 
       def media_upload_payload(media_upload)
+        meta = media_upload.upload_meta || {}
         {
           id: media_upload.id,
           mission_id: media_upload.mission_id,
@@ -563,6 +684,10 @@ module Api
           file_attached: media_upload.media_file.attached?,
           file_content_type: media_upload.media_file.attached? ? media_upload.media_file.content_type : nil,
           file_byte_size: media_upload.media_file.attached? ? media_upload.media_file.blob.byte_size : nil,
+          row_index: meta["row_index"],
+          rows_count: meta["rows_count"],
+          shift_segment_indices: meta["shift_segment_indices"],
+          s3_key: meta["key"],
           created_at: media_upload.created_at,
           updated_at: media_upload.updated_at
         }
@@ -576,9 +701,36 @@ module Api
         @multipart_service ||= S3MultipartUploadService.new
       end
 
-      def build_multipart_key(mission_id:, session_id:, filename:)
+      # Каждая миссия — свой префикс; нарезки по рядам — подпапка row_N, иначе whole (единый ролик).
+      def build_multipart_key(mission_id:, session_id:, filename:, row_index: nil)
         safe_filename = filename.gsub(/[^\w.\-]/, "_")
-        "missions/#{mission_id}/uploads/#{session_id}/#{safe_filename}"
+        row_folder =
+          if row_index.is_a?(Integer) && row_index >= 1
+            "row_#{row_index}"
+          else
+            "whole"
+          end
+        "missions/#{mission_id}/videos/#{row_folder}/#{session_id}/#{safe_filename}"
+      end
+
+      def parse_multipart_row_index
+        v = params[:row_index]
+        return nil if v.blank?
+        i = v.to_i
+        (i >= 1) ? i : nil
+      end
+
+      def parse_multipart_rows_count
+        v = params[:rows_count]
+        return nil if v.blank?
+        i = v.to_i
+        (i > 0) ? i : nil
+      end
+
+      def parse_multipart_shift_segment_indices
+        raw = params[:shift_segment_indices]
+        arr = raw.is_a?(Array) ? raw : []
+        arr.map { |x| x.to_i }.select { |x| x >= 0 }.uniq.sort
       end
 
       def find_mission_or_render_error
