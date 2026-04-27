@@ -736,6 +736,7 @@ function App() {
               return status === 'planned' || status === 'approved' || status === 'in_progress';
             };
 
+            const activeMissionIds = [];
             recentMissions.forEach((mission) => {
               const missionId = Number(mission?.id);
               if (!Number.isFinite(missionId)) return;
@@ -744,20 +745,24 @@ function App() {
                 missionDroneByMissionIdRef.current.set(missionId, droneId);
               }
               if (isMissionActiveForPolling(mission)) {
-                trackedMissionIdsRef.current.add(missionId);
+                activeMissionIds.push(missionId);
               }
             });
 
             const restoredResults = {};
-            for (const mission of recentMissions) {
+            // После F5 не трогаем завершённые/старые миссии — запрашиваем ai_result только для активных.
+            for (const missionId of activeMissionIds) {
               if (cancelled) return;
-              const missionId = Number(mission?.id);
-              if (!Number.isFinite(missionId)) continue;
               try {
                 const payload = await fetchMissionAiResultFromBackend(missionId);
                 const result = payload?.ai_result;
-                if (!result) continue;
+                if (!result) {
+                  // После F5: если по миссии пока нет ai_result, оставляем её для одноразового polling.
+                  continue;
+                }
                 restoredResults[String(missionId)] = result;
+                // После F5: уже получили ai_result в restore, не нужно повторно опрашивать ту же миссию.
+                trackedMissionIdsRef.current.delete(missionId);
               } catch {
                 // Ignore per-mission restore errors; polling will retry.
               }
@@ -775,6 +780,15 @@ function App() {
                 seenAiResultKeysRef.current.add(versionKey);
               });
             }
+
+            // После F5: добавляем в polling только активные миссии без уже восстановленного ai_result.
+            activeMissionIds.forEach((missionId) => {
+              if (restoredResults[String(missionId)]) {
+                trackedMissionIdsRef.current.delete(missionId);
+              } else {
+                trackedMissionIdsRef.current.add(missionId);
+              }
+            });
           }
         } catch (e) {
           console.warn('Restore ai panels failed:', e?.message ?? e);
@@ -1643,7 +1657,11 @@ function App() {
         try {
           const payload = await fetchMissionAiResultFromBackend(missionId);
           const result = payload?.ai_result;
-          if (!result) continue;
+          if (!result) {
+            // Одноразовый запрос по миссии: если результата ещё нет — не спамим сеть повторными polling-запросами.
+            trackedMissionIdsRef.current.delete(missionId);
+            continue;
+          }
 
           setAiResultsByMissionId((prev) => {
             const prevResult = prev[String(missionId)];
@@ -1657,12 +1675,8 @@ function App() {
             return copy;
           });
 
-          const shardsCount = Number(result?.shards_count ?? 0);
-          const processedShards = Number(result?.processed_shards ?? 0);
-          const stillProcessing = shardsCount > 0 && processedShards < shardsCount;
-          if (!stillProcessing) {
-            trackedMissionIdsRef.current.delete(missionId);
-          }
+          // Одноразовый запрос по миссии: после первого полученного ai_result больше не опрашиваем.
+          trackedMissionIdsRef.current.delete(missionId);
 
           const versionKey = [
             missionId,

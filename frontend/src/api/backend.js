@@ -8,6 +8,12 @@ function extractData(payload) {
   return payload?.data ?? payload;
 }
 
+// Защита от дублей ai_result:
+// - inFlight: склеивает параллельные запросы по одной миссии
+// - cache: после первого успешного ответа с ai_result повторно сеть не дёргаем
+const missionAiResultInFlight = new Map();
+const missionAiResultCache = new Map();
+
 async function login(email, password) {
   const result = await apiPost('/api/v1/auth/login', { email, password });
   const data = extractData(result);
@@ -296,8 +302,27 @@ export async function fetchMissionsFromBackend() {
 
 export async function fetchMissionAiResultFromBackend(missionId) {
   if (missionId == null) return null;
-  const response = await apiGet(`/api/v1/missions/${encodeURIComponent(missionId)}/ai_result`);
-  return extractData(response);
+  const key = String(missionId);
+  if (missionAiResultCache.has(key)) {
+    return missionAiResultCache.get(key);
+  }
+  if (missionAiResultInFlight.has(key)) {
+    return missionAiResultInFlight.get(key);
+  }
+
+  const requestPromise = (async () => {
+    const response = await apiGet(`/api/v1/missions/${encodeURIComponent(missionId)}/ai_result`);
+    const data = extractData(response);
+    if (data?.ai_result) {
+      missionAiResultCache.set(key, data);
+    }
+    return data;
+  })().finally(() => {
+    missionAiResultInFlight.delete(key);
+  });
+
+  missionAiResultInFlight.set(key, requestPromise);
+  return requestPromise;
 }
 
 export async function multipartInitForVideo({
