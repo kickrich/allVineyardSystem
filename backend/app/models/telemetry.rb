@@ -1,5 +1,6 @@
 class Telemetry < ApplicationRecord
   ACCEPTED_MISSION_STATUSES = %i[in_progress completed].freeze
+  MAX_CLOCK_SKEW_SECONDS = 10
 
   belongs_to :mission
 
@@ -57,7 +58,7 @@ class Telemetry < ApplicationRecord
 
   def recorded_at_not_in_future
     return if recorded_at.blank?
-    return if recorded_at <= Time.current
+    return if recorded_at <= Time.current + MAX_CLOCK_SKEW_SECONDS.seconds
     errors.add(:recorded_at, "не может быть в будущем")
   end
 end

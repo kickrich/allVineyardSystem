@@ -284,6 +284,12 @@ export async function fetchActiveMissionsForDrone(droneId) {
   return Array.isArray(missions) ? missions : [];
 }
 
+export async function fetchActiveMissions() {
+  const response = await apiGet('/api/v1/missions?active=1');
+  const missions = extractData(response);
+  return Array.isArray(missions) ? missions : [];
+}
+
 export async function fetchCompletedMissionSchemas() {
   const response = await apiGet('/api/v1/missions?status=completed&with_ai_results=1');
   const missions = extractData(response);

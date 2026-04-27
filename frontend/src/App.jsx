@@ -33,6 +33,7 @@ import {
   completeMissionInBackend,
   cancelMissionInBackend,
   fetchActiveMissionsForDrone,
+  fetchActiveMissions,
   fetchCompletedMissionSchemas,
   postTelemetryToBackend,
   multipartInitForVideo,
@@ -64,6 +65,8 @@ const VIDEO_RECORDING_FPS = 15;
 const VIDEO_BACKEND_CONTENT_TYPE = 'video/webm';
 const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
 const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024; // >= 1MB (минимум в backend)
+const VIDEO_UPLOAD_QUEUE_WAIT_STEP_MS = 250;
+const VIDEO_UPLOAD_QUEUE_WAIT_MAX_MS = 120000;
 
 function hasStoredApiToken() {
   if (typeof window === 'undefined') return false;
@@ -224,6 +227,10 @@ function nextZoneOrdinal(zones) {
     if (Number.isFinite(n)) max = Math.max(max, n);
   }
   return max + 1;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function zoneColorNameFromHex(colorHex = '#22c55e') {
@@ -950,7 +957,14 @@ function App() {
   }) => {
     if (missionId == null) return;
     if (!blob || blob.size <= 0) return;
-    if (videoUploadInProgressRef.current.get(droneId)) return;
+
+    const waitStartedAt = Date.now();
+    while (videoUploadInProgressRef.current.get(droneId)) {
+      if (Date.now() - waitStartedAt > VIDEO_UPLOAD_QUEUE_WAIT_MAX_MS) {
+        throw new Error('Ожидание очереди загрузки видео превысило лимит');
+      }
+      await sleep(VIDEO_UPLOAD_QUEUE_WAIT_STEP_MS);
+    }
 
     videoUploadInProgressRef.current.set(droneId, true);
     try {
@@ -1562,6 +1576,17 @@ function App() {
       if (!ctx?.userId || !ctx?.zoneId) {
         ctx = await hydrateBackendContext();
       }
+
+      const inferredZoneId = inferZoneIdForTemplatePath(routePath, backendZones);
+      if (
+        inferredZoneId != null &&
+        String(inferredZoneId) !== String(ctx.zoneId)
+      ) {
+        ctx = { ...ctx, zoneId: inferredZoneId };
+        backendContextRef.current = ctx;
+        setActiveZoneId(inferredZoneId);
+      }
+
       const createOnce = async () => createMissionInBackend({
         userId: ctx.userId,
         zoneId: ctx.zoneId,
@@ -1574,10 +1599,17 @@ function App() {
         mission = await createOnce();
       } catch (e) {
         const msg = String(e?.message ?? e);
-        if (msg.includes('уже назначен')) {
+        if (msg.includes('уже назначен') || msg.includes('уже управляет')) {
           try {
-            const active = await fetchActiveMissionsForDrone(drone.id);
-            for (const m of active) {
+            const [activeForDrone, activeGlobal] = await Promise.all([
+              fetchActiveMissionsForDrone(drone.id),
+              fetchActiveMissions(),
+            ]);
+            const toCancel = new Map();
+            [...activeForDrone, ...activeGlobal].forEach((m) => {
+              if (m?.id != null) toCancel.set(String(m.id), m);
+            });
+            for (const m of toCancel.values()) {
               if (m?.id != null) {
                 try {
                   await cancelMissionInBackend(m.id);
@@ -1614,7 +1646,7 @@ function App() {
         error: String(error?.message ?? error),
       });
     }
-  }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone]);
+  }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone, fetchActiveMissions, backendZones]);
 
   const completeBackendMissionForDrone = useCallback(async (droneId) => {
     const missionId = backendMissionIdsRef.current.get(droneId);
@@ -1859,10 +1891,22 @@ function App() {
         rowSplitState.lastSplitSegmentIndex = currentSegment;
         videoSplitInProgressRef.current.set(droneId, true);
         void (async () => {
+          let blob = null;
+          let finishedRow = null;
           try {
-            const finishedRow = rowSplitState.currentRowIndex;
-            const blob = await stopVideoRecordingForDrone(droneId);
-            if (rowSplitState.missionId && blob) {
+            finishedRow = rowSplitState.currentRowIndex;
+            blob = await stopVideoRecordingForDrone(droneId);
+            rowSplitState.currentRowIndex = finishedRow + 1;
+            startVideoRecordingChunkForDrone(droneId);
+            addToDroneLog(droneId, `🎞️ Ряд ${finishedRow} записан, начат ряд ${rowSplitState.currentRowIndex}`);
+          } catch (e) {
+            console.warn('Row split video upload failed:', e?.message ?? e);
+          } finally {
+            videoSplitInProgressRef.current.set(droneId, false);
+          }
+
+          if (rowSplitState.missionId && blob && Number.isInteger(finishedRow) && finishedRow > 0) {
+            try {
               await uploadVideoMultipartForMission({
                 missionId: rowSplitState.missionId,
                 droneId,
@@ -1871,14 +1915,9 @@ function App() {
                 rowsCount: rowSplitState.rowsCount,
                 shiftSegmentIndices: rowSplitState.shiftSegments
               });
+            } catch (e) {
+              console.warn('Row split video upload failed:', e?.message ?? e);
             }
-            rowSplitState.currentRowIndex = finishedRow + 1;
-            startVideoRecordingChunkForDrone(droneId);
-            addToDroneLog(droneId, `🎞️ Ряд ${finishedRow} записан, начат ряд ${rowSplitState.currentRowIndex}`);
-          } catch (e) {
-            console.warn('Row split video upload failed:', e?.message ?? e);
-          } finally {
-            videoSplitInProgressRef.current.set(droneId, false);
           }
         })();
       }
