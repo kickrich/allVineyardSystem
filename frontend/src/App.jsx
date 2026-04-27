@@ -575,7 +575,9 @@ function App() {
   }, [templateEditMode]);
 
   const activeZoneBoundary = useMemo(() => {
-    const z = backendZones.find((x) => x.id === activeZoneId);
+    if (activeZoneId == null) return null;
+    const activeIdKey = String(activeZoneId);
+    const z = backendZones.find((x) => String(x?.id) === activeIdKey);
     return Array.isArray(z?.boundary) ? z.boundary : null;
   }, [backendZones, activeZoneId]);
   const zonesForMap = useMemo(
@@ -589,7 +591,7 @@ function App() {
             (typeof z?.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(z.color))
               ? z.color
               : (/^#[0-9a-fA-F]{6}$/.test(zoneColorsById[String(z.id)]) ? zoneColorsById[String(z.id)] : '#22c55e'),
-          isActive: z.id === activeZoneId,
+          isActive: activeZoneId != null && String(z.id) === String(activeZoneId),
         })),
     [backendZones, zoneColorsById, activeZoneId]
   );
@@ -660,6 +662,18 @@ function App() {
       return changed ? next : prev;
     });
   }, [backendZones]);
+
+  useEffect(() => {
+    if (!backendZones.length) return;
+    if (activeZoneId == null) {
+      setActiveZoneId(backendZones[0].id);
+      return;
+    }
+    const exists = backendZones.some((z) => String(z?.id) === String(activeZoneId));
+    if (!exists) {
+      setActiveZoneId(backendZones[0].id);
+    }
+  }, [backendZones, activeZoneId]);
 
   const dronesRef = useRef(drones);
   useEffect(() => {
