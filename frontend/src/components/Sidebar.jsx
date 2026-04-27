@@ -156,23 +156,6 @@ export const Sidebar = ({
             </button>
           )}
         </div>
-        <div className="flex items-center justify-between mt-2">
-          <div className="flex items-center gap-2">
-            <div className="bg-green-500 rounded-full w-2 h-2 animate-pulse"></div>
-            <span className="text-sm">
-              Активных полетов: {flyingDrones.length}
-            </span>
-          </div>
-          {flyingDrones.length > 0 && (
-            <button
-              onClick={onStopAllFlights}
-              className="text-xs bg-red-600 hover:bg-red-700 px-2 py-1 rounded transition-colors min-h-[44px] flex items-center"
-              title="Остановить все полеты"
-            >
-              Стоп все
-            </button>
-          )}
-        </div>
       </div>
       <div className="flex border-b border-gray-700">
         <button
