@@ -169,15 +169,6 @@ function areSamePolylineCoords(currentCoords, nextCoords) {
   return true;
 }
 
-function formatSchemaRows(rowsSchema) {
-  if (!Array.isArray(rowsSchema) || rowsSchema.length === 0) return [];
-  return rowsSchema.map((row) => {
-    const index = Number(row?.shard_index || 0);
-    const sequence = Array.isArray(row?.row_sequence) ? row.row_sequence.join(' ') : '—';
-    return `#${index}: ${sequence}`;
-  });
-}
-
 /**
  * Порог в «глобальных пикселях» Яндекс.Карт (MapEvent.globalPixels / projection.toGlobalPixels).
  * Одна система координат; масштаб зависит от zoom — порог слегка уменьшается на мелком масштабе.
@@ -421,8 +412,6 @@ export function YandexMap({
   zoneColor = '#22c55e',
   /** Увеличивайте после загрузки KML / смены зоны — карта подгонит вид под полигон. */
   zoneFitNonce = 0,
-  /** Маркеры со схемой обработанной миссии рядом с зонами. */
-  zoneResultOverlays = [],
   /** Превью прямоугольника до сохранения зоны (тот же формат boundary). */
   draftRectBoundary = null,
   /** Режим рисования прямоугольника мышью (зажал-потянул-отпустил). */
@@ -481,7 +470,6 @@ export function YandexMap({
   const [routeShiftPanelOpen, setRouteShiftPanelOpen] = useState(false);
   const [routeShiftSelectionMode, setRouteShiftSelectionMode] = useState(false);
   const [routeShiftDemoAnchorVersion, setRouteShiftDemoAnchorVersion] = useState(0);
-  const [schemaPanelOpen, setSchemaPanelOpen] = useState(false);
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
 
@@ -509,10 +497,6 @@ export function YandexMap({
   const activeStroke = /^#[0-9a-fA-F]{6}$/.test(activeZoneFromList?.color) ? activeZoneFromList.color : zoneStrokeColor;
   const activeFill = `${activeStroke}2e`;
   const activeHoverFill = `${activeStroke}47`;
-  const schemaOverlays = useMemo(
-    () => (Array.isArray(zoneResultOverlays) ? zoneResultOverlays : []),
-    [zoneResultOverlays]
-  );
 
   useEffect(() => {
     if (window.ymaps && window.yandexMapsLoaded) {
@@ -1522,12 +1506,6 @@ export function YandexMap({
   }, [mapLoaded, normalizedZones, zoneBoundary, zoneColor, zoneFitNonce, activeFill, activeStroke]);
 
   useEffect(() => {
-    if (!schemaOverlays.length) {
-      setSchemaPanelOpen(false);
-    }
-  }, [schemaOverlays.length]);
-
-  useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !activeBoundary || drawRectZoneMode) return;
     const map = mapInstanceRef.current;
 
@@ -2291,101 +2269,6 @@ export function YandexMap({
           cursor: cursorAddPoint ? 'crosshair' : 'grab',
         }}
       />
-      {(
-        <>
-          <div className="pointer-events-auto absolute bottom-2 right-2 z-[166]">
-            <button
-              type="button"
-              title="Показать схему участка"
-              aria-label="Показать схему участка"
-              onClick={() => setSchemaPanelOpen((v) => !v)}
-              className={`h-10 w-10 rounded-full border text-xl font-bold shadow-lg transition-colors ${
-                schemaPanelOpen
-                  ? 'border-amber-300 bg-amber-600 text-white'
-                  : 'border-amber-500/80 bg-amber-900/90 text-amber-100 hover:bg-amber-800'
-              }`}
-            >
-              {schemaOverlays.length > 0 ? '!' : '?'}
-            </button>
-          </div>
-
-          {schemaPanelOpen && (
-            <div className="pointer-events-auto absolute bottom-14 right-2 z-[166] w-[min(92vw,360px)] max-h-[70vh] overflow-y-auto rounded-xl border border-amber-600/50 bg-gray-900/95 p-3 shadow-2xl backdrop-blur-sm">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold text-amber-200">Схема участков</p>
-                <button
-                  type="button"
-                  onClick={() => setSchemaPanelOpen(false)}
-                  className="rounded border border-gray-500 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-800"
-                >
-                  Закрыть
-                </button>
-              </div>
-              {schemaOverlays.length === 0 ? (
-                <div className="rounded-lg border border-gray-700 bg-gray-800/80 p-3">
-                  <p className="text-sm text-gray-200">Схема участка пока не получена.</p>
-                  <p className="mt-1 text-xs text-gray-400">Проверь завершение миссии и отправку AI-результатов с backend.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {schemaOverlays.map((overlay) => {
-                    const rows = formatSchemaRows(overlay?.rowsSchema);
-                    const canFocusOnMap =
-                      Number.isFinite(Number(overlay?.position?.[0])) &&
-                      Number.isFinite(Number(overlay?.position?.[1]));
-                    return (
-                      <div
-                        key={overlay?.id || `${overlay?.zoneId}-${overlay?.missionId}`}
-                        className="rounded-lg border border-gray-700 bg-gray-800/80 p-2"
-                      >
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-medium text-white">{overlay?.zoneName || `Зона ${overlay?.zoneId}`}</p>
-                          <button
-                            type="button"
-                            disabled={!canFocusOnMap}
-                            className="shrink-0 rounded border border-gray-500 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => {
-                              const map = mapInstanceRef.current;
-                              const lat = Number(overlay?.position?.[0]);
-                              const lng = Number(overlay?.position?.[1]);
-                              if (!map || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-                              try {
-                                map.panTo([lat, lng], { delay: 0, duration: 350, flying: true, timingFunction: 'ease-in-out' });
-                              } catch {
-                                try {
-                                  map.setCenter([lat, lng]);
-                                } catch {
-                                  /* ignore */
-                                }
-                              }
-                            }}
-                          >
-                            На карте
-                          </button>
-                        </div>
-                        <p className="text-xs text-gray-300">
-                          Миссия #{overlay?.missionId} · Кустов: <strong>{overlay?.bushesCount ?? 0}</strong> · Пропусков: <strong>{overlay?.gapsCount ?? 0}</strong>
-                        </p>
-                        <p className="text-xs text-gray-400">Средний шаг: {Number(overlay?.avgBushSpacing || 0).toFixed(2)}</p>
-                        {rows.length > 0 && (
-                          <div className="mt-1 rounded border border-gray-700 bg-gray-900/70 p-1.5">
-                            <p className="mb-1 text-[11px] uppercase tracking-wide text-amber-300">Ряды</p>
-                            <div className="space-y-0.5">
-                              {rows.map((rowLine) => (
-                                <p key={rowLine} className="text-xs text-gray-200">{rowLine}</p>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
       {showRouteShiftUi && (
         <>
           <div className="pointer-events-auto absolute bottom-24 right-3 z-[165] flex max-w-[min(92vw,360px)] items-center gap-2 sm:bottom-20">

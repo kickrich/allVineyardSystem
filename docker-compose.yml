@@ -1,9 +1,43 @@
+# MinIO (S3) + CV (FastAPI). Запуск всего стека:
+#   docker compose up -d
+# Только хранилище (без сборки CV):
+#   docker compose up -d minio minio-init
+#
+# CV: http://127.0.0.1:8000  |  MinIO API: http://127.0.0.1:9000  |  Консоль: http://127.0.0.1:9001
+
 services:
-  cv:
-    build: ./cvService
-    restart: unless-stopped
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done &&
+      until mc ready local; do sleep 1; done &&
+      mc mb local/vineyard-videos --ignore-existing &&
+      echo 'bucket vineyard-videos ready'
+      "
+
+  cv:
+    build:
+      context: ./cvService
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./cvService/models:/app/models
     environment:
@@ -13,18 +47,13 @@ services:
       MINIO_BUCKET: vineyard-videos
       MINIO_REGION: us-east-1
       MINIO_SECURE: "false"
-    container_name: vineyard_cv_service
+      # Пока нет models/best.onnx — отдаёт нулевые метрики, но пайплайн S3→CV→callback работает.
+      # Положите веса в ./cvService/models/ и установите false.
+      CV_DUMMY_INFERENCE: "true"
     depends_on:
-      - minio
-
-  minio:
-    image: minio/minio:latest
+      minio-init:
+        condition: service_completed_successfully
     restart: unless-stopped
-    container_name: vineyard_minio
-    command: server /data --console-address ":9001"
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+
+volumes:
+  minio-data:

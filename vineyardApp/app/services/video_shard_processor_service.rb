@@ -4,6 +4,7 @@ require "aws-sdk-s3"
 require "securerandom"
 require "uri"
 require "json"
+require "cgi"
 
 class VideoShardProcessorService
   def initialize(shard)
@@ -54,7 +55,6 @@ class VideoShardProcessorService
     end
 
     conn = Faraday.new(url: @cv_service_url) do |faraday|
-      faraday.request :json
       faraday.adapter Faraday.default_adapter
       faraday.options.timeout = 600
     end
@@ -72,7 +72,7 @@ class VideoShardProcessorService
 
     response = conn.post("/process_video_shard_from_minio") do |req|
       req.headers["Content-Type"] = "application/json"
-      req.body = payload
+      req.body = JSON.generate(payload)
     end
 
     parsed =
@@ -187,8 +187,8 @@ class VideoShardProcessorService
     segments = uri.path.to_s.split('/').reject(&:blank?)
     return [nil, nil] if segments.size < 2
 
-    bucket = segments.first
-    key = segments[1..].join('/')
+    bucket = CGI.unescape(segments.first)
+    key = CGI.unescape(segments[1..].join('/'))
     [bucket, key]
   rescue URI::InvalidURIError
     [nil, nil]

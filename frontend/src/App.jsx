@@ -33,8 +33,7 @@ import {
   completeMissionInBackend,
   cancelMissionInBackend,
   fetchActiveMissionsForDrone,
-  fetchActiveMissions,
-  fetchCompletedMissionSchemas,
+  fetchMissionAiResultFromBackend,
   postTelemetryToBackend,
   multipartInitForVideo,
   multipartPresignPart,
@@ -56,7 +55,6 @@ const FIRST_WAYPOINT_TRANSIT_THRESHOLD_M = 10;
 const ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS = 1200;
 const TEMPLATE_ROUTE_REJECT_COOLDOWN_MS = 1200;
 const TELEMETRY_SEND_EVERY_MS = 1000;
-const TELEMETRY_REQUEST_TIMEOUT_MS = 8000;
 const ZONE_COLORS_STORAGE_KEY = 'zone_colors_v1';
 
 const VIDEO_CANVAS_WIDTH = 640;
@@ -65,8 +63,7 @@ const VIDEO_RECORDING_FPS = 15;
 const VIDEO_BACKEND_CONTENT_TYPE = 'video/webm';
 const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
 const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024; // >= 1MB (минимум в backend)
-const VIDEO_UPLOAD_QUEUE_WAIT_STEP_MS = 250;
-const VIDEO_UPLOAD_QUEUE_WAIT_MAX_MS = 120000;
+const AI_RESULTS_POLL_INTERVAL_MS = 5000;
 
 function hasStoredApiToken() {
   if (typeof window === 'undefined') return false;
@@ -229,10 +226,6 @@ function nextZoneOrdinal(zones) {
   return max + 1;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function zoneColorNameFromHex(colorHex = '#22c55e') {
   const m = String(colorHex).trim().match(/^#([0-9a-fA-F]{6})$/);
   if (!m) return 'цветной';
@@ -294,33 +287,6 @@ function buildAutoZoneName(zones, colorHex = '#22c55e') {
   return `Зона №${ord}("${colorName}")`;
 }
 
-function computeZoneBadgePoint(boundary) {
-  if (!Array.isArray(boundary) || boundary.length < 4) return null;
-  let minLat = Number.POSITIVE_INFINITY;
-  let maxLat = Number.NEGATIVE_INFINITY;
-  let minLng = Number.POSITIVE_INFINITY;
-  let maxLng = Number.NEGATIVE_INFINITY;
-
-  for (const point of boundary) {
-    const lng = Number(point?.[0]);
-    const lat = Number(point?.[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    minLat = Math.min(minLat, lat);
-    maxLat = Math.max(maxLat, lat);
-    minLng = Math.min(minLng, lng);
-    maxLng = Math.max(maxLng, lng);
-  }
-
-  if (!Number.isFinite(minLat) || !Number.isFinite(maxLat) || !Number.isFinite(minLng) || !Number.isFinite(maxLng)) {
-    return null;
-  }
-
-  const latSpan = maxLat - minLat;
-  const centerLng = (minLng + maxLng) / 2;
-  const badgeLat = maxLat + Math.max(0.00008, latSpan * 0.08);
-  return [badgeLat, centerLng];
-}
-
 function updateAutoZoneNameColor(name, colorHex = '#22c55e') {
   const m = String(name ?? '').trim().match(/^Зона\s*№\s*(\d+)\(".*"\)$/i);
   if (!m) return null;
@@ -352,9 +318,6 @@ function buildAutoRouteTemplateName(templates) {
 function mapBackendTemplateToFrontend(template) {
   const id = template?.id;
   const rawPath = Array.isArray(template?.path) ? template.path : [];
-  const rawShiftSegments = Array.isArray(template?.shift_segment_indices)
-    ? template.shift_segment_indices
-    : (Array.isArray(template?.shiftSegments) ? template.shiftSegments : []);
   return {
     id: id != null ? String(id) : `tpl_${Date.now()}`,
     name: template?.name || 'Без названия',
@@ -362,10 +325,6 @@ function mapBackendTemplateToFrontend(template) {
       .map((point) => (Array.isArray(point) && point.length >= 2 ? [Number(point[0]), Number(point[1])] : null))
       .filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1])),
     zoneId: template?.zone_id ?? template?.zoneId ?? null,
-    shiftSegments: rawShiftSegments
-      .map((i) => Number(i))
-      .filter((i) => Number.isInteger(i) && i >= 0)
-      .sort((a, b) => a - b),
   };
 }
 
@@ -431,7 +390,6 @@ function App() {
           name,
           path: [...templateDraftPath],
           zoneId: draftZoneId,
-          shiftSegmentIndices: [...templateDraftShiftSegments],
         });
       } else if (templateEditMode && templateEditMode.type === 'edit') {
         const current = missionTemplates.find((t) => t.id === templateEditMode.id);
@@ -439,7 +397,6 @@ function App() {
           name,
           path: [...templateDraftPath],
           zoneId: draftZoneId ?? current?.zoneId ?? null,
-          shiftSegmentIndices: [...templateDraftShiftSegments],
         });
       } else {
         return;
@@ -455,7 +412,7 @@ function App() {
     setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
-  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, templateDraftShiftSegments, missionTemplates, reloadMissionTemplates]);
+  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
@@ -519,9 +476,6 @@ function App() {
   const applyTemplateToDrone = useCallback((droneId, tplId) => {
     const tpl = missionTemplates.find((t) => t.id === tplId);
     if (!tpl || !tpl.path || !tpl.path.length) return;
-    const normalizedShiftSegments = Array.isArray(tpl.shiftSegments)
-      ? [...new Set(tpl.shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
-      : [];
     setDrones((prev) => {
       const path = tpl.path.map((p) => [p[0], p[1]]);
       const next = prev.map((d) =>
@@ -536,16 +490,16 @@ function App() {
       }
       return next;
     });
-    setRouteShiftSegmentsByDroneId((prev) => ({
-      ...prev,
-      [String(droneId)]: normalizedShiftSegments,
-    }));
     setTemplateToApplyId(null);
   }, [missionTemplates, computeMissionParamsFromPath]);
 
   const [drones, setDrones] = useState(() => createLocalDrones());
   const [backendSync, setBackendSync] = useState({ status: 'idle', message: '' });
   const [authReady, setAuthReady] = useState(hasStoredApiToken);
+  const [aiResultsByMissionId, setAiResultsByMissionId] = useState({});
+  const [aiPendingByMissionId, setAiPendingByMissionId] = useState({});
+  const [aiCloudNotice, setAiCloudNotice] = useState(null);
+  const [sidebarTab, setSidebarTab] = useState('control');
   const authUser = useMemo(() => getStoredApiUser(), [authReady]);
   const authUserLabel = useMemo(() => {
     if (authUser?.name && String(authUser.name).trim()) return String(authUser.name).trim();
@@ -555,9 +509,11 @@ function App() {
   }, [authUser]);
   const backendContextRef = useRef({ userId: null, zoneId: null });
   const backendMissionIdsRef = useRef(new Map());
+  const missionDroneByMissionIdRef = useRef(new Map());
+  const trackedMissionIdsRef = useRef(new Set());
+  const seenAiResultKeysRef = useRef(new Set());
 
   const [backendZones, setBackendZones] = useState([]);
-  const [completedMissionSchemas, setCompletedMissionSchemas] = useState([]);
   const [activeZoneId, setActiveZoneId] = useState(null);
   const activeZoneIdRef = useRef(null);
   const routeZoneRejectLogAtRef = useRef(0);
@@ -626,48 +582,6 @@ function App() {
     const saved = zoneColorsById[String(activeZoneId)];
     return /^#[0-9a-fA-F]{6}$/.test(saved) ? saved : '#22c55e';
   }, [activeZoneId, zoneColorsById, backendZones]);
-  const zoneResultOverlays = useMemo(() => {
-    if (!Array.isArray(completedMissionSchemas) || !completedMissionSchemas.length) return [];
-
-    const zonesById = new Map(
-      (Array.isArray(backendZones) ? backendZones : []).map((zone) => [String(zone.id), zone])
-    );
-    const latestByZoneId = new Map();
-
-    for (const mission of completedMissionSchemas) {
-      const ai = mission?.ai_result;
-      if (!ai) continue;
-      const zoneId = mission?.zone_id ?? mission?.zone?.id;
-      if (zoneId == null) continue;
-      const zone = zonesById.get(String(zoneId)) || mission?.zone;
-      const boundary = zone?.boundary;
-      const position = computeZoneBadgePoint(boundary);
-
-      const updatedAtRaw = ai.updated_at || mission.updated_at || mission.created_at;
-      const updatedAt = updatedAtRaw ? new Date(updatedAtRaw) : null;
-      const prev = latestByZoneId.get(String(zoneId));
-      if (prev?.updatedAt && updatedAt && prev.updatedAt >= updatedAt) continue;
-
-      latestByZoneId.set(String(zoneId), {
-        id: `zone-result-${zoneId}`,
-        missionId: mission.id,
-        zoneId,
-        zoneName: zone?.name || `Зона ${zoneId}`,
-        position,
-        bushesCount: Number(ai.bushes_count || 0),
-        gapsCount: Number(ai.gaps_count || 0),
-        avgBushSpacing: Number(ai.avg_bush_spacing || 0),
-        rowsSchema: Array.isArray(ai?.result_json?.rows_schema) ? ai.result_json.rows_schema : [],
-        updatedAt,
-      });
-    }
-
-    return Array.from(latestByZoneId.values()).sort((a, b) => {
-      const at = a.updatedAt?.getTime?.() ?? 0;
-      const bt = b.updatedAt?.getTime?.() ?? 0;
-      return bt - at;
-    });
-  }, [completedMissionSchemas, backendZones]);
 
   const workZoneReady = useMemo(
     () => Array.isArray(activeZoneBoundary) && activeZoneBoundary.length >= 4,
@@ -809,36 +723,6 @@ function App() {
     };
   }, [authReady]);
 
-  useEffect(() => {
-    if (!authReady) {
-      setCompletedMissionSchemas([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadCompletedMissionSchemas = async () => {
-      try {
-        const missions = await fetchCompletedMissionSchemas();
-        if (!cancelled) {
-          setCompletedMissionSchemas(missions);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.warn('Не удалось получить схемы миссий:', error?.message ?? error);
-        }
-      }
-    };
-
-    loadCompletedMissionSchemas();
-    const timer = setInterval(loadCompletedMissionSchemas, 15_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [authReady]);
-
   const [mapCenter, setMapCenter] = useState(initialMapCenter);
   const [selectedDroneForModal, setSelectedDroneForModal] = useState(null);
   const [mapZoom, setMapZoom] = useState(13);
@@ -849,7 +733,6 @@ function App() {
 
   const telemetryLastSentAtRef = useRef(new Map());
   const telemetrySendingRef = useRef(new Map());
-  const telemetryPendingPayloadRef = useRef(new Map());
 
   const videoRecordingByDroneRef = useRef(new Map());
   const videoRecorderConfigByDroneRef = useRef(new Map());
@@ -907,40 +790,6 @@ function App() {
     }
   };
 
-  const sendTelemetryForDrone = (droneId, payload) => {
-    const sending = telemetrySendingRef.current.get(droneId) ?? false;
-    if (sending) {
-      // Храним последнюю точку, чтобы отправить ее сразу после завершения in-flight запроса.
-      telemetryPendingPayloadRef.current.set(droneId, payload);
-      return;
-    }
-
-    telemetrySendingRef.current.set(droneId, true);
-    telemetryLastSentAtRef.current.set(droneId, Date.now());
-
-    const requestPromise = postTelemetryToBackend(payload);
-    const timeoutPromise = new Promise((_, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error(`telemetry timeout after ${TELEMETRY_REQUEST_TIMEOUT_MS}ms`));
-      }, TELEMETRY_REQUEST_TIMEOUT_MS);
-      requestPromise.finally(() => clearTimeout(timeoutId));
-    });
-
-    void Promise.race([requestPromise, timeoutPromise])
-      .catch((e) => {
-        console.warn('POST telemetry:', e?.message ?? e);
-      })
-      .finally(() => {
-        telemetrySendingRef.current.set(droneId, false);
-
-        const pending = telemetryPendingPayloadRef.current.get(droneId);
-        if (pending) {
-          telemetryPendingPayloadRef.current.delete(droneId);
-          setTimeout(() => sendTelemetryForDrone(droneId, pending), 0);
-        }
-      });
-  };
-
   const toNormalizedShiftSegmentsForDrone = (droneId) => {
     const raw = routeShiftSegmentsByDroneIdRef.current[String(droneId)];
     if (!Array.isArray(raw)) return [];
@@ -957,14 +806,7 @@ function App() {
   }) => {
     if (missionId == null) return;
     if (!blob || blob.size <= 0) return;
-
-    const waitStartedAt = Date.now();
-    while (videoUploadInProgressRef.current.get(droneId)) {
-      if (Date.now() - waitStartedAt > VIDEO_UPLOAD_QUEUE_WAIT_MAX_MS) {
-        throw new Error('Ожидание очереди загрузки видео превысило лимит');
-      }
-      await sleep(VIDEO_UPLOAD_QUEUE_WAIT_STEP_MS);
-    }
+    if (videoUploadInProgressRef.current.get(droneId)) return;
 
     videoUploadInProgressRef.current.set(droneId, true);
     try {
@@ -975,6 +817,13 @@ function App() {
         Number.isInteger(rowsCount) && rowsCount > 0
           ? rowsCount
           : normalizedShiftSegments.length + 1;
+      setAiPendingByMissionId((prev) => ({
+        ...prev,
+        [String(missionId)]: {
+          rowsCount: derivedRowsCount,
+          updatedAt: Date.now(),
+        },
+      }));
       const filenameRowSuffix = Number.isInteger(rowIndex) && rowIndex > 0 ? `_row_${rowIndex}` : '';
       const filename = `mission_${missionId}_drone_${droneId}${filenameRowSuffix}_${Date.now()}.webm`;
       const init = await multipartInitForVideo({
@@ -1034,6 +883,9 @@ function App() {
         uploadSessionId,
         parts,
       });
+
+      missionDroneByMissionIdRef.current.set(missionId, droneId);
+      trackedMissionIdsRef.current.add(missionId);
     } finally {
       videoUploadInProgressRef.current.delete(droneId);
     }
@@ -1538,6 +1390,97 @@ function App() {
     setGlobalMissionLog((prev) => [zoneLogEntry, ...prev].slice(0, 100));
   }, []);
 
+  const aiResultsForSidebar = useMemo(() => {
+    const entries = Object.entries(aiResultsByMissionId);
+    if (!entries.length) return [];
+    return entries
+      .map(([missionId, result]) => {
+        const numericMissionId = Number(missionId);
+        const droneId = missionDroneByMissionIdRef.current.get(numericMissionId);
+        const droneName = drones.find((d) => d.id === droneId)?.name ?? null;
+        return {
+          missionId: numericMissionId,
+          droneId: droneId ?? null,
+          droneName,
+          bushesCount: Number(result?.bushes_count ?? 0),
+          gapsCount: Number(result?.gaps_count ?? 0),
+          avgBushSpacing: Number(result?.avg_bush_spacing),
+          rowsCount: Number(result?.rows_count ?? result?.shards_count ?? 0),
+          processedRows: Number(result?.processed_shards ?? 0),
+          updatedAt: result?.updated_at ?? null,
+          createdAt: result?.created_at ?? null,
+        };
+      })
+      .sort((a, b) => {
+        const aTs = Date.parse(a.updatedAt ?? a.createdAt ?? 0);
+        const bTs = Date.parse(b.updatedAt ?? b.createdAt ?? 0);
+        return bTs - aTs;
+      });
+  }, [aiResultsByMissionId, drones]);
+
+  const pendingRowsForSidebar = useMemo(() => {
+    const entries = Object.entries(aiPendingByMissionId);
+    return entries
+      .map(([missionId, pending]) => ({
+        missionId: Number(missionId),
+        rowsCount: Number(pending?.rowsCount ?? 0),
+        processedRows: 0,
+      }))
+      .sort((a, b) => b.missionId - a.missionId);
+  }, [aiPendingByMissionId]);
+
+  const rowsPanelData = useMemo(() => {
+    const latest = aiResultsForSidebar[0] || pendingRowsForSidebar[0];
+    if (!latest) return null;
+    const rowsCount = Number.isFinite(latest.rowsCount) && latest.rowsCount > 0 ? latest.rowsCount : 0;
+    const processedRowsRaw =
+      Number.isFinite(latest.processedRows) && latest.processedRows >= 0
+        ? latest.processedRows
+        : rowsCount;
+    const processedRows = rowsCount > 0 ? Math.min(processedRowsRaw, rowsCount) : processedRowsRaw;
+    const rowCountForPanel = Math.max(1, rowsCount || processedRows || 1);
+
+    const totalBushesCount = Number.isFinite(latest.bushesCount) ? Math.max(0, latest.bushesCount) : 0;
+    const totalGapsCount = Number.isFinite(latest.gapsCount) ? Math.max(0, latest.gapsCount) : 0;
+    const processedRowsForStats = Math.max(0, Math.min(processedRows, rowCountForPanel));
+    const bushesBase = processedRowsForStats > 0 ? Math.floor(totalBushesCount / processedRowsForStats) : 0;
+    const bushesRem = processedRowsForStats > 0 ? totalBushesCount % processedRowsForStats : 0;
+    const gapsBase = processedRowsForStats > 0 ? Math.floor(totalGapsCount / processedRowsForStats) : 0;
+    const gapsRem = processedRowsForStats > 0 ? totalGapsCount % processedRowsForStats : 0;
+
+    const rowStats = Array.from({ length: rowCountForPanel }, (_, idx) => {
+      const rowNum = idx + 1;
+      const isReady = rowNum <= processedRows;
+      if (!isReady) {
+        return {
+          rowNum,
+          bushesCount: null,
+          gapsCount: null,
+        };
+      }
+      return {
+        rowNum,
+        bushesCount: bushesBase + (idx < bushesRem ? 1 : 0),
+        gapsCount: gapsBase + (idx < gapsRem ? 1 : 0),
+      };
+    });
+
+    return {
+      missionId: latest.missionId,
+      rowsCount,
+      processedRows,
+      rowStats,
+    };
+  }, [aiResultsForSidebar, pendingRowsForSidebar]);
+
+  const totalMissionRowsPanelCount = useMemo(() => {
+    const ids = new Set([
+      ...Object.keys(aiPendingByMissionId).map((x) => String(x)),
+      ...Object.keys(aiResultsByMissionId).map((x) => String(x)),
+    ]);
+    return ids.size;
+  }, [aiPendingByMissionId, aiResultsByMissionId]);
+
   const hydrateBackendContext = useCallback(async () => {
     const zones = await fetchZonesFromBackend();
     setBackendZones(zones);
@@ -1576,17 +1519,6 @@ function App() {
       if (!ctx?.userId || !ctx?.zoneId) {
         ctx = await hydrateBackendContext();
       }
-
-      const inferredZoneId = inferZoneIdForTemplatePath(routePath, backendZones);
-      if (
-        inferredZoneId != null &&
-        String(inferredZoneId) !== String(ctx.zoneId)
-      ) {
-        ctx = { ...ctx, zoneId: inferredZoneId };
-        backendContextRef.current = ctx;
-        setActiveZoneId(inferredZoneId);
-      }
-
       const createOnce = async () => createMissionInBackend({
         userId: ctx.userId,
         zoneId: ctx.zoneId,
@@ -1599,17 +1531,10 @@ function App() {
         mission = await createOnce();
       } catch (e) {
         const msg = String(e?.message ?? e);
-        if (msg.includes('уже назначен') || msg.includes('уже управляет')) {
+        if (msg.includes('уже назначен')) {
           try {
-            const [activeForDrone, activeGlobal] = await Promise.all([
-              fetchActiveMissionsForDrone(drone.id),
-              fetchActiveMissions(),
-            ]);
-            const toCancel = new Map();
-            [...activeForDrone, ...activeGlobal].forEach((m) => {
-              if (m?.id != null) toCancel.set(String(m.id), m);
-            });
-            for (const m of toCancel.values()) {
+            const active = await fetchActiveMissionsForDrone(drone.id);
+            for (const m of active) {
               if (m?.id != null) {
                 try {
                   await cancelMissionInBackend(m.id);
@@ -1646,7 +1571,7 @@ function App() {
         error: String(error?.message ?? error),
       });
     }
-  }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone, fetchActiveMissions, backendZones]);
+  }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone]);
 
   const completeBackendMissionForDrone = useCallback(async (droneId) => {
     const missionId = backendMissionIdsRef.current.get(droneId);
@@ -1654,12 +1579,6 @@ function App() {
     try {
       await completeMissionInBackend(missionId);
       backendMissionIdsRef.current.delete(droneId);
-      try {
-        const missions = await fetchCompletedMissionSchemas();
-        setCompletedMissionSchemas(missions);
-      } catch (refreshError) {
-        console.warn('Не удалось обновить схемы миссий после завершения:', refreshError?.message ?? refreshError);
-      }
     } catch (e) {
       console.warn('complete mission:', e?.message ?? e);
     }
@@ -1671,10 +1590,89 @@ function App() {
     try {
       await cancelMissionInBackend(missionId);
       backendMissionIdsRef.current.delete(droneId);
+      trackedMissionIdsRef.current.delete(missionId);
+      missionDroneByMissionIdRef.current.delete(missionId);
+      setAiPendingByMissionId((prev) => {
+        if (!(String(missionId) in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[String(missionId)];
+        return copy;
+      });
     } catch (e) {
       console.warn('cancel mission:', e?.message ?? e);
     }
   }, []);
+
+  const openBushesPanelForMission = useCallback((missionId) => {
+    const droneId = missionDroneByMissionIdRef.current.get(Number(missionId));
+    if (droneId != null) {
+      setSelectedDroneForSidebar(droneId);
+    }
+    setSidebarTab('bushes');
+    setSidebarOpen(true);
+    setParkingOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      const missionIds = Array.from(trackedMissionIdsRef.current.values());
+      if (!missionIds.length) return;
+
+      for (const missionId of missionIds) {
+        if (cancelled) return;
+        try {
+          const payload = await fetchMissionAiResultFromBackend(missionId);
+          const result = payload?.ai_result;
+          if (!result) continue;
+
+          setAiResultsByMissionId((prev) => {
+            const prevResult = prev[String(missionId)];
+            if (prevResult?.updated_at === result.updated_at) return prev;
+            return { ...prev, [String(missionId)]: result };
+          });
+          setAiPendingByMissionId((prev) => {
+            if (!(String(missionId) in prev)) return prev;
+            const copy = { ...prev };
+            delete copy[String(missionId)];
+            return copy;
+          });
+
+          const versionKey = [
+            missionId,
+            result?.updated_at ?? '',
+            result?.bushes_count ?? '',
+            result?.gaps_count ?? '',
+          ].join(':');
+          if (!seenAiResultKeysRef.current.has(versionKey)) {
+            seenAiResultKeysRef.current.add(versionKey);
+            const droneId = missionDroneByMissionIdRef.current.get(Number(missionId));
+            const droneName = dronesRef.current.find((d) => d.id === droneId)?.name;
+            setAiCloudNotice({
+              missionId: Number(missionId),
+              droneName: droneName ?? null,
+              bushesCount: Number(result?.bushes_count ?? 0),
+              gapsCount: Number(result?.gaps_count ?? 0),
+            });
+          }
+        } catch (e) {
+          console.warn('poll ai_result failed:', e?.message ?? e);
+        }
+      }
+    };
+
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, AI_RESULTS_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [authReady]);
 
   const isDroneAtMissionStart = useCallback((drone) => {
     if (!drone?.path || drone.path.length < 2 || !drone.position) return false;
@@ -1788,7 +1786,6 @@ function App() {
 
     telemetryLastSentAtRef.current.set(droneId, 0);
     telemetrySendingRef.current.set(droneId, false);
-    telemetryPendingPayloadRef.current.delete(droneId);
 
     let videoCtx = null;
     try {
@@ -1891,22 +1888,10 @@ function App() {
         rowSplitState.lastSplitSegmentIndex = currentSegment;
         videoSplitInProgressRef.current.set(droneId, true);
         void (async () => {
-          let blob = null;
-          let finishedRow = null;
           try {
-            finishedRow = rowSplitState.currentRowIndex;
-            blob = await stopVideoRecordingForDrone(droneId);
-            rowSplitState.currentRowIndex = finishedRow + 1;
-            startVideoRecordingChunkForDrone(droneId);
-            addToDroneLog(droneId, `🎞️ Ряд ${finishedRow} записан, начат ряд ${rowSplitState.currentRowIndex}`);
-          } catch (e) {
-            console.warn('Row split video upload failed:', e?.message ?? e);
-          } finally {
-            videoSplitInProgressRef.current.set(droneId, false);
-          }
-
-          if (rowSplitState.missionId && blob && Number.isInteger(finishedRow) && finishedRow > 0) {
-            try {
+            const finishedRow = rowSplitState.currentRowIndex;
+            const blob = await stopVideoRecordingForDrone(droneId);
+            if (rowSplitState.missionId && blob) {
               await uploadVideoMultipartForMission({
                 missionId: rowSplitState.missionId,
                 droneId,
@@ -1915,9 +1900,14 @@ function App() {
                 rowsCount: rowSplitState.rowsCount,
                 shiftSegmentIndices: rowSplitState.shiftSegments
               });
-            } catch (e) {
-              console.warn('Row split video upload failed:', e?.message ?? e);
             }
+            rowSplitState.currentRowIndex = finishedRow + 1;
+            startVideoRecordingChunkForDrone(droneId);
+            addToDroneLog(droneId, `🎞️ Ряд ${finishedRow} записан, начат ряд ${rowSplitState.currentRowIndex}`);
+          } catch (e) {
+            console.warn('Row split video upload failed:', e?.message ?? e);
+          } finally {
+            videoSplitInProgressRef.current.set(droneId, false);
           }
         })();
       }
@@ -1962,7 +1952,9 @@ function App() {
         nowMs - lastSentAt >= TELEMETRY_SEND_EVERY_MS;
 
       if (shouldSendTelemetry) {
-        sendTelemetryForDrone(droneId, {
+        telemetrySendingRef.current.set(droneId, true);
+        telemetryLastSentAtRef.current.set(droneId, nowMs);
+        void postTelemetryToBackend({
           missionId,
           recordedAt: new Date().toISOString(),
           latitude: currentLat,
@@ -1970,6 +1962,10 @@ function App() {
           altitude: Math.round(currentDrone.altitude ?? 50),
           speed: Math.max(0, Number(missionParams.optimalSpeed ?? 0) / 3.6),
           battery: Math.round(remainingBattery),
+        }).catch((e) => {
+          console.warn('POST telemetry:', e?.message ?? e);
+        }).finally(() => {
+          telemetrySendingRef.current.set(droneId, false);
         });
       }
 
@@ -2329,11 +2325,18 @@ function App() {
   const handleLogout = useCallback(() => {
     clearApiSession();
     backendMissionIdsRef.current = new Map();
+    missionDroneByMissionIdRef.current = new Map();
+    trackedMissionIdsRef.current = new Set();
+    seenAiResultKeysRef.current = new Set();
     backendContextRef.current = { userId: null, zoneId: null };
     activeTimersRef.current.forEach((id) => clearInterval(id));
     activeTimersRef.current.clear();
     setDrones(createLocalDrones());
     setBackendSync({ status: 'idle', message: '' });
+    setAiResultsByMissionId({});
+    setAiPendingByMissionId({});
+    setAiCloudNotice(null);
+    setSidebarTab('control');
     setHasStarted(false);
     setAuthReady(false);
     setSidebarOpen(false);
@@ -2351,7 +2354,6 @@ function App() {
 
     telemetryLastSentAtRef.current = new Map();
     telemetrySendingRef.current = new Map();
-    telemetryPendingPayloadRef.current = new Map();
 
     videoRecordingByDroneRef.current = new Map();
     videoRecorderConfigByDroneRef.current = new Map();
@@ -2800,6 +2802,42 @@ function App() {
         </div>
       )}
 
+      {workspaceVisible && aiCloudNotice && (
+        <div className="fixed top-20 right-2 sm:top-24 sm:right-3 z-[1200] w-[min(92vw,360px)]">
+          <div className="rounded-2xl border border-sky-300/50 bg-sky-950/70 px-4 py-3 shadow-xl backdrop-blur-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-wide text-sky-200/90">Облако AI</p>
+                <p className="mt-0.5 text-sm text-sky-50">
+                  Результат для миссии <strong>#{aiCloudNotice.missionId}</strong> готов
+                </p>
+                <p className="mt-1 text-xs text-sky-100/90">
+                  Кустов: {aiCloudNotice.bushesCount}, пропусков: {aiCloudNotice.gapsCount}
+                  {aiCloudNotice.droneName ? `, дрон: ${aiCloudNotice.droneName}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiCloudNotice(null)}
+                className="rounded-lg border border-sky-300/40 px-2 py-1 text-xs text-sky-100 hover:bg-sky-900/70"
+              >
+                ✕
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                openBushesPanelForMission(aiCloudNotice.missionId);
+                setAiCloudNotice(null);
+              }}
+              className="mt-3 inline-flex items-center justify-center rounded-xl bg-sky-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-500"
+            >
+              Перейти в панель кустов
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-1 gap-2 lg:gap-3 min-h-0 overflow-hidden flex-col lg:flex-row">
         <div
           className={`fixed left-0 top-0 bottom-0 z-50 w-[85%] max-w-sm transform transition-transform duration-300 ease-out lg:relative lg:w-72 lg:max-w-none lg:flex-shrink-0 ${
@@ -2852,7 +2890,6 @@ function App() {
                   zoneBoundary={activeZoneBoundary}
                   zoneColor={activeZoneColor}
                   zoneFitNonce={zoneFitNonce}
-                  zoneResultOverlays={[]}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                 />
@@ -3112,6 +3149,60 @@ function App() {
                     </button>
                   </div>
                 </div>
+                <div className="pointer-events-none absolute bottom-3 right-3 z-[120] w-[min(88vw,380px)]">
+                  <div className="pointer-events-auto rounded-xl border border-emerald-500/30 bg-gray-900/80 p-3 shadow-xl backdrop-blur-sm">
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-emerald-200">Миссии и ряды</h3>
+                      <span className="rounded-md bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-100">
+                        Миссий: {totalMissionRowsPanelCount}
+                      </span>
+                    </div>
+
+                    {rowsPanelData ? (
+                      <>
+                        <div className="mb-2 text-xs text-gray-300">
+                          Миссия #{rowsPanelData.missionId}
+                          {rowsPanelData.rowsCount > 0
+                            ? ` · Обработано ${rowsPanelData.processedRows}/${rowsPanelData.rowsCount}`
+                            : ''}
+                        </div>
+                        <div className="rounded-lg border border-gray-700/80 bg-slate-900/50 px-2 py-2">
+                          <div className="grid gap-2">
+                            {rowsPanelData.rowStats.map((rowData) => {
+                              const isReady = rowData.rowNum <= rowsPanelData.processedRows;
+                              return (
+                                <div key={rowData.rowNum} className="flex items-center gap-2 text-[11px]">
+                                  <span className="w-10 shrink-0 text-gray-300">Ряд {rowData.rowNum}</span>
+                                  <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                                    {Array.from({ length: 12 }, (_, pointIdx) => (
+                                      <span
+                                        key={`${rowData.rowNum}-${pointIdx}`}
+                                        className={`h-2.5 w-2.5 rounded-full border ${
+                                          isReady
+                                            ? 'border-emerald-400 bg-emerald-400/70'
+                                            : 'border-gray-500 bg-gray-700/40'
+                                        }`}
+                                      />
+                                    ))}
+                                  </div>
+                                  <span className="shrink-0 text-[10px] text-gray-400">
+                                    {isReady
+                                      ? `Кустов: ${rowData.bushesCount ?? 0} · Пропусков: ${rowData.gapsCount ?? 0}`
+                                      : 'В обработке'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="rounded-lg border border-gray-700/80 bg-slate-900/50 px-3 py-3 text-xs text-gray-400">
+                        Пока нет данных по рядам. После завершения анализа панель заполнится автоматически.
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <YandexMap
                   drones={drones}
                   mapCenter={mapCenter}
@@ -3136,7 +3227,6 @@ function App() {
                   zoneBoundary={activeZoneBoundary}
                   zoneColor={activeZoneColor}
                   zoneFitNonce={zoneFitNonce}
-                  zoneResultOverlays={zoneResultOverlays}
                   draftRectBoundary={draftRectBoundary}
                   drawRectZoneMode={drawRectZoneMode}
                   placementMode={placementMode && droneToPlace != null}
@@ -3238,6 +3328,10 @@ function App() {
                 selectedDroneId={selectedDroneForSidebar}
                 onSelectDrone={setSelectedDroneForSidebar}
                 missionLog={globalMissionLog}
+                aiResults={aiResultsForSidebar}
+                initialTab={sidebarTab}
+                onTabChange={setSidebarTab}
+                onOpenAiMission={openBushesPanelForMission}
                 activeFlights={getActiveFlights()}
                 onStartFlight={startDroneFlight}
                 onPauseFlight={pauseDroneFlight}

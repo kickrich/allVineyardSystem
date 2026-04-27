@@ -2,6 +2,7 @@ require 'faraday'
 require 'faraday/multipart'
 require 'uri'
 require 'json'
+require 'cgi'
 
 # Сервис для отправки видео из Backend в VineyardApp
 # Используется после завершения загрузки видео (MediaUpload)
@@ -38,7 +39,12 @@ class SendVideoToVineyardAppService
   end
 
   def video_name
-    "Миссия ##{@mission.id} - #{@mission.drone&.name} - #{@media_upload.created_at&.strftime('%Y-%m-%d %H:%M')}"
+    parts = [
+      "Миссия ##{@mission.id}",
+      @mission.drone&.name,
+      (@media_upload.created_at&.strftime('%Y-%m-%d %H:%M'))
+    ].compact
+    parts.join(" - ")
   end
 
   def backend_callback_base_url
@@ -70,13 +76,16 @@ class SendVideoToVineyardAppService
   end
 
   def shard_request_body_common
+    create_new_video = use_new_video_per_upload?
     {
       mission_id: @mission.id,
-      video_id: @mission.vineyard_app_video_id,
-      shard_index: computed_shard_index,
+      video_id: (create_new_video ? nil : @mission.vineyard_app_video_id),
+      shard_index: (create_new_video ? 1 : computed_shard_index),
       name: video_name,
       callback_token: @mission.vineyard_app_callback_token,
-      external_service_url: backend_callback_base_url
+      external_service_url: backend_callback_base_url,
+      row_index: row_index_from_meta,
+      rows_count: rows_count_from_meta
     }.compact
   end
 
@@ -88,6 +97,8 @@ class SendVideoToVineyardAppService
   end
 
   def sync_mission_video_id_from_last_response!
+    return if use_new_video_per_upload?
+
     data = parse_shard_response(@last_shard_response)
     vid = data['video_id'] || data[:video_id]
     return if vid.blank?
@@ -174,8 +185,29 @@ class SendVideoToVineyardAppService
     segments = uri.path.to_s.split('/').reject(&:blank?)
     return '' if segments.size < 2
 
-    segments[1..].join('/')
+    CGI.unescape(segments[1..].join('/'))
   rescue URI::InvalidURIError
     ''
+  end
+
+  def upload_meta
+    @media_upload.upload_meta || {}
+  end
+
+  def row_index_from_meta
+    val = upload_meta["row_index"].to_i
+    val.positive? ? val : nil
+  end
+
+  def rows_count_from_meta
+    val = upload_meta["rows_count"].to_i
+    val.positive? ? val : nil
+  end
+
+  # Режим «новый ряд = новое видео» включается только флагом.
+  # По умолчанию: одна миссия/одно видео в Vineyard, ряды идут как shard'ы.
+  def use_new_video_per_upload?
+    flag = ENV["VINEYARD_NEW_VIDEO_PER_ROW"].to_s.strip.downcase
+    %w[1 true yes on].include?(flag)
   end
 end

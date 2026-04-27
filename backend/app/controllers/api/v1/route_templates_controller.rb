@@ -53,11 +53,7 @@ module Api
         t = params.require(:route_template)
         permitted = t.permit(:name, :zone_id)
         raw_path = t[:path]
-        raw_shift_segment_indices = t[:shift_segment_indices]
         permitted[:path] = raw_path if raw_path.is_a?(Array)
-        if raw_shift_segment_indices.is_a?(Array) && RouteTemplate.column_names.include?("shift_segment_indices")
-          permitted[:shift_segment_indices] = raw_shift_segment_indices
-        end
         permitted
       end
     end

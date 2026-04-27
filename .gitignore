@@ -41,7 +41,6 @@
 *.onnx
 
 # БД локально
-**/config/database.yml
 **/*.sqlite3
 **/*.sqlite3-*
 

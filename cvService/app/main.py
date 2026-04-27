@@ -2,7 +2,13 @@ import sys
 import os
 import logging
 import traceback
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_app_dir = Path(__file__).resolve().parent
+sys.path.append(str(_app_dir))
+load_dotenv(_app_dir.parent / ".env")
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
@@ -13,6 +19,7 @@ from typing import Optional
 from pydantic import BaseModel
 import boto3
 from botocore.client import Config
+from botocore.exceptions import ClientError
 
 from inference import get_detector, ONNXYOLODetector
 
@@ -23,17 +30,25 @@ logger = logging.getLogger("cvservice")
 async def startup_event():
     try:
         get_detector()
-    except Exception:
-        pass
+    except FileNotFoundError as e:
+        logger.warning("Модель не загружена при старте: %s", e)
+    except Exception as e:
+        logger.warning("Инициализация детектора при старте: %s", e)
 
 @app.get("/")
 async def root():
-    detector = get_detector()
+    try:
+        detector = get_detector()
+        classes = detector.class_names
+        model_loaded = not getattr(detector, "is_dummy", False)
+    except FileNotFoundError:
+        classes = {}
+        model_loaded = False
     return {
         "service": "Vineyard CV Service",
         "status": "running",
-        "model_loaded": detector is not None,
-        "classes": detector.class_names
+        "model_loaded": model_loaded,
+        "classes": classes,
     }
 
 @app.get("/health")
@@ -177,7 +192,13 @@ async def process_video_sync(
             os.unlink(temp_path)
 
 def process_video_file(video_path: str, frame_interval: int = 4) -> dict:
-    detector = get_detector()
+    try:
+        detector = get_detector()
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "Модель ONNX не найдена (включён CV_STRICT_MODEL): положите cvService/models/best.onnx "
+            "или уберите CV_STRICT_MODEL для режима заглушки."
+        ) from e
     results = detector.process_video(video_path, frame_interval=frame_interval)
 
     return {
@@ -223,6 +244,31 @@ def download_from_minio(object_key: str, bucket: Optional[str] = None) -> str:
     )
 
     ext = os.path.splitext(object_key)[1] or ".mp4"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        s3.download_fileobj(target_bucket, object_key, tmp)
-        return tmp.name
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            s3.download_fileobj(target_bucket, object_key, tmp)
+            path = tmp.name
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        logger.error(
+            "MinIO download failed bucket=%s key=%r code=%s",
+            target_bucket,
+            object_key,
+            code,
+        )
+        raise RuntimeError(
+            f"Не удалось скачать объект из MinIO (bucket={target_bucket}, key={object_key}): {code or e}"
+        ) from e
+
+    size = os.path.getsize(path)
+    if size == 0:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"Объект в MinIO пустой (bucket={target_bucket}, key={object_key})"
+        )
+
+    logger.info("Downloaded from MinIO bucket=%s key=%r bytes=%s", target_bucket, object_key, size)
+    return path

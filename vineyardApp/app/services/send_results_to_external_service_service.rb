@@ -16,7 +16,7 @@ class SendResultsToExternalServiceService
   private
 
   def send_to_external_service
-    results = @video.aggregated_results
+    results = callback_payload
 
     conn = Faraday.new(url: @video.external_service_url) do |faraday|
       faraday.request :json
@@ -27,7 +27,8 @@ class SendResultsToExternalServiceService
     headers = {}
     headers['Authorization'] = "Bearer #{@video.external_callback_token}" if @video.external_callback_token.present?
 
-    response = conn.post('/api/v1/vineyard_app/results') do |req|
+    callback_path = ENV.fetch('EXTERNAL_RESULTS_PATH', '/api/v1/vineyard_app/results')
+    response = conn.post(callback_path) do |req|
       req.headers.merge!(headers)
       req.body = results.to_json
     end
@@ -43,5 +44,14 @@ class SendResultsToExternalServiceService
     Rails.logger.error("SendResultsToExternalServiceService error: #{e.message}")
     Rails.logger.error(e.backtrace.join("\n"))
     false
+  end
+
+  def callback_payload
+    payload = @video.aggregated_results
+    stats = (payload[:statistics] || {}).dup
+    # Keep callback lightweight for faster delivery to backend.
+    stats[:bushes_positions] = []
+    stats[:gaps_positions] = []
+    payload.merge(statistics: stats)
   end
 end

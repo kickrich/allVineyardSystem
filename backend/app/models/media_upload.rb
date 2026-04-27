@@ -8,7 +8,8 @@ class MediaUpload < ApplicationRecord
   UPLOADING_STATUS = "uploading"
   # approved — на случай гонки UI (запрос multipart до перехода in_progress);
   # in_progress/completed — основной сценарий записи с дрона.
-  ACCEPTED_MISSION_STATUSES = %i[approved in_progress completed].freeze
+  # planned — запись/загрузка видео до approve (симулятор, гонка UI с multipart_init).
+  ACCEPTED_MISSION_STATUSES = %i[planned approved in_progress completed].freeze
 
   MAX_URL_LENGTH = 500
   URL_FORMAT = %r{\Ahttps?://}.freeze
@@ -43,7 +44,11 @@ class MediaUpload < ApplicationRecord
   private
 
   def video_ready_for_processing?
-    saved_change_to_status? && status == 'ready' && media_type == 'video' && mission&.completed?
+    return false unless saved_change_to_status? && status == 'ready' && media_type == 'video'
+    return false if mission.blank?
+
+    # Видео в S3/MinIO часто становится ready до completed миссии; ждать completed — интеграция не срабатывала.
+    ACCEPTED_MISSION_STATUSES.any? { |status_name| mission.public_send("#{status_name}?") }
   end
 
   def send_to_vineyard_app

@@ -14,6 +14,7 @@ Rails.application.routes.draw do
         member do
           post :start
           post :complete
+          get :ai_result
         end
       end
 
@@ -44,7 +45,7 @@ Rails.application.routes.draw do
       resources :users
       
       resources :zones
-      resources :route_templates
+      resources :route_templates, only: [:index, :show, :create, :update, :destroy]
     end
   end
 end

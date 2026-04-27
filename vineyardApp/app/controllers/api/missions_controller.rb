@@ -3,6 +3,8 @@ class Api::MissionsController < ApplicationController
 
   def create
     mission_id = params[:mission_id].to_s.presence
+    row_index = positive_int_or_nil(params[:row_index])
+    rows_count = positive_int_or_nil(params[:rows_count])
     external_service_url = params[:external_service_url] || params[:callback_url]
     external_callback_token = params[:external_callback_token] || params[:callback_token]
     name = params[:name] || "Миссия #{mission_id} - #{Time.current.strftime('%Y-%m-%d %H:%M')}"
@@ -13,12 +15,18 @@ class Api::MissionsController < ApplicationController
       }, status: :unprocessable_entity
     end
 
-    if Video.exists?(mission_id: mission_id)
-      video = Video.find_by(mission_id: mission_id)
+    existing_scope = Video.where(mission_id: mission_id)
+    if new_video_per_row_mode? && row_index.present?
+      existing_scope = existing_scope.where(row_index: row_index)
+    end
+    if existing_scope.exists?
+      video = existing_scope.order(created_at: :desc).first
       return render json: {
         id: video.id,
         video_id: video.id,
         mission_id: video.mission_id,
+        row_index: video.row_index,
+        rows_count: video.rows_count,
         name: video.name,
         status: video.status,
         message: "Видео уже существует"
@@ -27,6 +35,8 @@ class Api::MissionsController < ApplicationController
 
     video = Video.new(
       mission_id: mission_id,
+      row_index: (new_video_per_row_mode? ? row_index : nil),
+      rows_count: (new_video_per_row_mode? ? rows_count : nil),
       external_service_url: external_service_url,
       external_callback_token: external_callback_token,
       name: name,
@@ -38,6 +48,8 @@ class Api::MissionsController < ApplicationController
         id: video.id,
         video_id: video.id,
         mission_id: video.mission_id,
+        row_index: video.row_index,
+        rows_count: video.rows_count,
         name: video.name,
         status: video.status,
         message: "Видео создано, можно загружать шарды"
@@ -53,6 +65,8 @@ class Api::MissionsController < ApplicationController
     shard_index = params[:shard_index].to_i
     shard_index = 1 if shard_index <= 0
     callback_token = params[:callback_token].to_s.presence
+    row_index = positive_int_or_nil(params[:row_index])
+    rows_count = positive_int_or_nil(params[:rows_count])
     name = params[:name].presence || "Миссия #{mission_id} — #{Time.current.strftime('%Y-%m-%d %H:%M')}"
     external_service_url = params[:external_service_url].presence
 
@@ -64,6 +78,8 @@ class Api::MissionsController < ApplicationController
       mission_id: mission_id,
       video_id_param: video_id_param,
       callback_token: callback_token,
+      row_index: row_index,
+      rows_count: rows_count,
       name: name,
       external_service_url: external_service_url
     )
@@ -117,6 +133,8 @@ class Api::MissionsController < ApplicationController
         id: shard.id,
         video_id: video.id,
         mission_id: mission_id,
+        row_index: video.row_index,
+        rows_count: video.rows_count,
         shard_index: shard_index,
         status: shard.status,
         message: "Shard #{shard_index} загружен и поставлен в очередь на обработку"
@@ -180,8 +198,9 @@ class Api::MissionsController < ApplicationController
 
   private
 
-  # Находит Video по video_id + mission_id, иначе — единственное видео по mission_id, иначе создаёт новое.
-  def resolve_video_for_shard_upload(mission_id:, video_id_param:, callback_token:, name:, external_service_url:)
+  # Находит Video по video_id + mission_id, иначе — по mission_id.
+  # Режим "новое видео на каждый ряд" включается только через флаг окружения.
+  def resolve_video_for_shard_upload(mission_id:, video_id_param:, callback_token:, row_index:, rows_count:, name:, external_service_url:)
     mid = mission_id.to_s
 
     if video_id_param.present?
@@ -200,7 +219,11 @@ class Api::MissionsController < ApplicationController
       end
     end
 
-    existing = Video.find_by(mission_id: mid)
+    existing_scope = Video.where(mission_id: mid)
+    if new_video_per_row_mode? && row_index.present?
+      existing_scope = existing_scope.where(row_index: row_index)
+    end
+    existing = existing_scope.order(created_at: :desc).first
     if existing
       err = shard_callback_token_error(existing, callback_token)
       return { error: err, status: :unauthorized } if err
@@ -209,6 +232,8 @@ class Api::MissionsController < ApplicationController
 
     video = Video.create!(
       mission_id: mid,
+      row_index: (new_video_per_row_mode? ? row_index : nil),
+      rows_count: (new_video_per_row_mode? ? rows_count : nil),
       external_service_url: external_service_url,
       external_callback_token: callback_token,
       name: name,
@@ -226,5 +251,15 @@ class Api::MissionsController < ApplicationController
     else
       "Неверный токен"
     end
+  end
+
+  def positive_int_or_nil(value)
+    v = value.to_i
+    v.positive? ? v : nil
+  end
+
+  def new_video_per_row_mode?
+    flag = ENV["VINEYARD_NEW_VIDEO_PER_ROW"].to_s.strip.downcase
+    %w[1 true yes on].include?(flag)
   end
 end

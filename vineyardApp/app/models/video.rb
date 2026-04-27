@@ -48,10 +48,14 @@ class Video < ApplicationRecord
       new_status = :uploading
     end
 
-    status_changed = status != new_status.to_s
-    update!(status: new_status) if status_changed
+    previous_status = status
+    if status != new_status.to_s
+      update!(status: new_status)
+    end
 
-    if status_changed && new_status.to_s == 'completed' && external_service?
+    # update_columns in shard processor bypasses shard callbacks,
+    # so we trigger external callback on completed transition here.
+    if previous_status != "completed" && new_status.to_s == "completed" && external_service?
       SendResultsToExternalServiceJob.perform_later(id)
     end
   end
@@ -69,6 +73,8 @@ class Video < ApplicationRecord
     {
       video_id: id,
       mission_id: mission_id,
+      row_index: row_index,
+      rows_count: rows_count,
       name: name,
       status: status,
       processing_progress: processing_progress,
@@ -79,8 +85,7 @@ class Video < ApplicationRecord
         total_gaps: total_gaps_count,
         avg_bush_spacing: avg_bush_spacing,
         bushes_positions: all_bushes_positions,
-        gaps_positions: all_gaps_positions,
-        rows_schema: rows_schema
+        gaps_positions: all_gaps_positions
       },
       created_at: created_at,
       updated_at: updated_at
@@ -89,17 +94,5 @@ class Video < ApplicationRecord
 
   def external_service?
     external_service_url.present?
-  end
-
-  def rows_schema
-    video_shards.order(:shard_index).map do |shard|
-      {
-        shard_index: shard.shard_index,
-        bushes_count: shard.bushes_count,
-        gaps_count: shard.gaps_count,
-        row_sequence: shard.result_json&.dig('row_sequence') || [],
-        row_length: shard.result_json&.dig('row_length')
-      }
-    end
   end
 end

@@ -175,7 +175,10 @@ module Api
             "content_type" => content_type,
             "byte_size" => byte_size,
             "chunk_size_bytes" => chunk_size_bytes,
-            "total_parts" => total_parts
+            "total_parts" => total_parts,
+            "row_index" => parsed_row_index_param,
+            "rows_count" => parsed_rows_count_param,
+            "shift_segment_indices" => parsed_shift_segment_indices_param
           }
         )
 
@@ -566,6 +569,40 @@ module Api
           created_at: media_upload.created_at,
           updated_at: media_upload.updated_at
         }
+      end
+
+      def parsed_row_index_param
+        val = params[:row_index].to_i
+        val.positive? ? val : nil
+      end
+
+      def parsed_rows_count_param
+        val = params[:rows_count].to_i
+        val.positive? ? val : nil
+      end
+
+      def parsed_shift_segment_indices_param
+        raw = params[:shift_segment_indices]
+        arr =
+          case raw
+          when Array
+            raw
+          when String
+            begin
+              JSON.parse(raw)
+            rescue JSON::ParserError
+              []
+            end
+          else
+            []
+          end
+
+        arr
+          .map { |v| Integer(v, exception: false) }
+          .compact
+          .select { |i| i >= 0 }
+          .uniq
+          .sort
       end
 
       def upload_dir(media_upload)
