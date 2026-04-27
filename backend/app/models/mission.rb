@@ -59,7 +59,6 @@ class Mission < ApplicationRecord
   validate :drone_must_be_idle, on: :create
   validate :drone_availability_on_creation, on: :create
   validate :sufficient_battery_to_start, if: :in_progress?
-  validate :user_not_busy, on: :create
   validate :valid_status_transition, on: :update
 
   validates :vineyard_app_video_id, uniqueness: { allow_nil: true }

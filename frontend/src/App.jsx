@@ -319,6 +319,9 @@ function buildAutoRouteTemplateName(templates) {
 function mapBackendTemplateToFrontend(template) {
   const id = template?.id;
   const rawPath = Array.isArray(template?.path) ? template.path : [];
+  const rawShiftSegments = Array.isArray(template?.shift_segment_indices)
+    ? template.shift_segment_indices
+    : (Array.isArray(template?.shiftSegments) ? template.shiftSegments : []);
   return {
     id: id != null ? String(id) : `tpl_${Date.now()}`,
     name: template?.name || 'Без названия',
@@ -326,6 +329,9 @@ function mapBackendTemplateToFrontend(template) {
       .map((point) => (Array.isArray(point) && point.length >= 2 ? [Number(point[0]), Number(point[1])] : null))
       .filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1])),
     zoneId: template?.zone_id ?? template?.zoneId ?? null,
+    shiftSegments: [...new Set(rawShiftSegments
+      .map((i) => Number(i))
+      .filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b),
   };
 }
 
@@ -391,6 +397,7 @@ function App() {
           name,
           path: [...templateDraftPath],
           zoneId: draftZoneId,
+          shiftSegments: [...templateDraftShiftSegments],
         });
       } else if (templateEditMode && templateEditMode.type === 'edit') {
         const current = missionTemplates.find((t) => t.id === templateEditMode.id);
@@ -398,6 +405,7 @@ function App() {
           name,
           path: [...templateDraftPath],
           zoneId: draftZoneId ?? current?.zoneId ?? null,
+          shiftSegments: [...templateDraftShiftSegments],
         });
       } else {
         return;
@@ -413,7 +421,7 @@ function App() {
     setTemplateDraftShiftSegments([]);
     setTemplateDraftName('');
     setTemplateDraftZoneId(null);
-  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
+  }, [templateEditMode, templateDraftName, templateDraftPath, templateDraftShiftSegments, templateDraftZoneId, missionTemplates, reloadMissionTemplates]);
   const addTemplateDraftPoint = useCallback((latlng) => {
     setTemplateDraftPath((prev) => [...prev, [latlng.lat, latlng.lng]]);
   }, []);
@@ -477,6 +485,11 @@ function App() {
   const applyTemplateToDrone = useCallback((droneId, tplId) => {
     const tpl = missionTemplates.find((t) => t.id === tplId);
     if (!tpl || !tpl.path || !tpl.path.length) return;
+    const normalizedShiftSegments = Array.isArray(tpl.shiftSegments)
+      ? [...new Set(tpl.shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+      : [];
+    // Обновляем ref сразу, чтобы старт полёта в этот же тик видел сегменты смещения.
+    routeShiftSegmentsByDroneIdRef.current[String(droneId)] = normalizedShiftSegments;
     setDrones((prev) => {
       const path = tpl.path.map((p) => [p[0], p[1]]);
       const next = prev.map((d) =>
@@ -491,6 +504,10 @@ function App() {
       }
       return next;
     });
+    setRouteShiftSegmentsByDroneId((prev) => ({
+      ...prev,
+      [String(droneId)]: normalizedShiftSegments,
+    }));
     setTemplateToApplyId(null);
   }, [missionTemplates, computeMissionParamsFromPath]);
 
@@ -1513,9 +1530,11 @@ function App() {
       if (!ctx?.userId || !ctx?.zoneId) {
         ctx = await hydrateBackendContext();
       }
+      const inferredZoneId = inferZoneIdForTemplatePath(routePath, backendZones);
+      const missionZoneId = inferredZoneId ?? ctx.zoneId;
       const createOnce = async () => createMissionInBackend({
         userId: ctx.userId,
-        zoneId: ctx.zoneId,
+        zoneId: missionZoneId,
         droneId: drone.id,
         missionType: 'monitoring',
       });
@@ -1567,7 +1586,7 @@ function App() {
       });
       return null;
     }
-  }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone]);
+  }, [hydrateBackendContext, addToGlobalLog, fetchActiveMissionsForDrone, backendZones]);
 
   const completeBackendMissionForDrone = useCallback(async (droneId) => {
     const missionId = backendMissionIdsRef.current.get(droneId);
@@ -1899,6 +1918,14 @@ function App() {
       const rowSplitState = videoRowSplitStateRef.current.get(droneId);
       if (rowSplitState) {
         rowSplitState.missionId = missionId ?? rowSplitState.missionId;
+        // Если сплит-индексы появились чуть позже (после применения шаблона), подхватываем их во время полёта.
+        if (!rowSplitState.shiftSegments.length) {
+          const lateShiftSegs = toNormalizedShiftSegmentsForDrone(droneId);
+          if (lateShiftSegs.length) {
+            rowSplitState.shiftSegments = lateShiftSegs;
+            rowSplitState.rowsCount = lateShiftSegs.length + 1;
+          }
+        }
       }
 
       if (

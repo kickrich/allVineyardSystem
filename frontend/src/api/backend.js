@@ -111,26 +111,34 @@ export async function fetchRouteTemplatesFromBackend() {
   return Array.isArray(templates) ? templates : [];
 }
 
-export async function createRouteTemplateInBackend({ name, path, zoneId = null }) {
+export async function createRouteTemplateInBackend({ name, path, zoneId = null, shiftSegments = [] }) {
   if (!name || !String(name).trim()) throw new Error('Укажите название шаблона');
   if (!Array.isArray(path) || path.length < 2) throw new Error('Шаблон должен содержать минимум 2 точки');
+  const normalizedShiftSegments = Array.isArray(shiftSegments)
+    ? [...new Set(shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+    : [];
   const payload = {
     route_template: {
       name: String(name).trim(),
       path,
       zone_id: zoneId ?? null,
+      shift_segment_indices: normalizedShiftSegments,
     },
   };
   const response = await apiPost('/api/v1/route_templates', payload);
   return extractData(response);
 }
 
-export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId }) {
+export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId, shiftSegments }) {
   if (templateId == null) throw new Error('Не выбран шаблон для обновления');
   const routeTemplatePatch = {};
   if (typeof name === 'string' && name.trim()) routeTemplatePatch.name = name.trim();
   if (Array.isArray(path)) routeTemplatePatch.path = path;
   if (zoneId !== undefined) routeTemplatePatch.zone_id = zoneId ?? null;
+  if (Array.isArray(shiftSegments)) {
+    routeTemplatePatch.shift_segment_indices = [...new Set(shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))]
+      .sort((a, b) => a - b);
+  }
   const response = await apiPatch(`/api/v1/route_templates/${templateId}`, {
     route_template: routeTemplatePatch,
   });
