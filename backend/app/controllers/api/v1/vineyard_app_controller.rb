@@ -16,15 +16,7 @@ module Api
         end
 
         unless mission.completed?
-          Rails.logger.info("[vineyard_app/results] skip mission_id=#{mission.id} status=#{mission.status}")
-          render_data(
-            {
-              success: true,
-              ignored: true,
-              message: "Результат принят, но будет сохранён только после завершения миссии"
-            }
-          )
-          return
+          Rails.logger.warn("[vineyard_app/results] mission_id=#{mission.id} status=#{mission.status} (saving early to avoid result loss)")
         end
 
         # Сохраняем результаты AI анализа
@@ -36,9 +28,12 @@ module Api
           else
             (stats_param || {}).to_h.with_indifferent_access
           end
+        top_level = params.respond_to?(:to_unsafe_h) ? params.to_unsafe_h.with_indifferent_access : {}.with_indifferent_access
         rows_count = params[:rows_count].presence || params[:shards_count].presence || stats[:rows_count]
         processed_shards = params[:processed_shards].presence || stats[:processed_shards]
         shards_count = params[:shards_count].presence || stats[:shards_count]
+        bushes_positions = extract_positions(stats, top_level, :bushes_positions, :bushesPositions, :bushes_points, :bushesPoints)
+        gaps_positions = extract_positions(stats, top_level, :gaps_positions, :gapsPositions, :gaps_points, :gapsPoints)
 
         ai_result.assign_attributes(
           bushes_count: stats[:total_bushes].to_i,
@@ -46,8 +41,8 @@ module Api
           rows_count: rows_count.to_i,
           result_json: {
             gaps_count: stats[:total_gaps].to_i,
-            bushes_positions: stats[:bushes_positions] || [],
-            gaps_positions: stats[:gaps_positions] || [],
+            bushes_positions: bushes_positions,
+            gaps_positions: gaps_positions,
             processing_progress: params[:processing_progress],
             shards_count: shards_count,
             processed_shards: processed_shards
@@ -100,6 +95,55 @@ module Api
           created_at: ai_result.created_at,
           updated_at: ai_result.updated_at
         }
+      end
+
+      def extract_positions(stats, top_level, *keys)
+        raw =
+          keys.lazy.map { |key| stats[key] }.find(&:present?) ||
+          keys.lazy.map { |key| top_level[key] }.find(&:present?)
+        arr =
+          case raw
+          when Array
+            raw
+          when ActionController::Parameters
+            raw.to_unsafe_h.values
+          when Hash
+            raw.values
+          else
+            []
+          end
+        arr.filter_map { |item| normalize_position_item(item) }
+      end
+
+      def normalize_position_item(item)
+        case item
+        when Array
+          return nil if item.length < 2
+          lng = to_float(item[0])
+          lat = to_float(item[1])
+          return nil if lng.nil? || lat.nil?
+          [lng, lat]
+        when ActionController::Parameters
+          normalize_position_hash(item.to_unsafe_h)
+        when Hash
+          normalize_position_hash(item)
+        else
+          nil
+        end
+      end
+
+      def normalize_position_hash(hash)
+        h = hash.with_indifferent_access
+        lng = to_float(h[:lng] || h[:lon] || h[:longitude] || h[:x])
+        lat = to_float(h[:lat] || h[:latitude] || h[:y])
+        return nil if lng.nil? || lat.nil?
+        [lng, lat]
+      end
+
+      def to_float(value)
+        Float(value)
+      rescue ArgumentError, TypeError
+        nil
       end
     end
   end

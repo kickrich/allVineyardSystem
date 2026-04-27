@@ -63,6 +63,18 @@ module Api
 
       # Получение AI-результата миссии GET /api/v1/missions/:id/ai_result
       def ai_result
+        unless @mission.completed?
+          render_data(
+            {
+              mission_id: @mission.id,
+              status: "pending",
+              available: false,
+              ai_result: nil
+            }
+          )
+          return
+        end
+
         result = @mission.ai_result
         if result.nil?
           render_data(

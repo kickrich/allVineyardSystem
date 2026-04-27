@@ -554,13 +554,13 @@ export const Sidebar = ({
                     role={typeof onOpenAiMission === 'function' ? 'button' : undefined}
                     tabIndex={typeof onOpenAiMission === 'function' ? 0 : undefined}
                     onClick={() => {
-                      setSelectedAiMissionId(result.missionId);
+                      setSelectedAiMissionId((prev) => (prev === result.missionId ? null : result.missionId));
                       onOpenAiMission?.(result.missionId);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        setSelectedAiMissionId(result.missionId);
+                        setSelectedAiMissionId((prev) => (prev === result.missionId ? null : result.missionId));
                         onOpenAiMission?.(result.missionId);
                       }
                     }}
@@ -616,6 +616,44 @@ export const Sidebar = ({
                       const { bushes, gaps } = buildMissionSchemePoints(result);
                       const all = [...bushes, ...gaps];
                       if (!all.length) {
+                        const rowsCount = Number(result?.rowsCount ?? 0);
+                        if (rowsCount > 0) {
+                          const w = 240;
+                          const h = 140;
+                          const topPad = 20;
+                          const bottomPad = 16;
+                          const usableH = Math.max(16, h - topPad - bottomPad);
+                          const rowStep = usableH / rowsCount;
+                          return (
+                            <div className="mt-3 rounded border border-emerald-700/40 bg-gray-900/60 p-2">
+                              <svg viewBox={`0 0 ${w} ${h}`} className="h-[140px] w-full rounded bg-gray-950/80">
+                                <rect x="0" y="0" width={w} height={h} fill="transparent" stroke="rgba(75,85,99,0.55)" />
+                                {Array.from({ length: rowsCount }).map((_, idx) => {
+                                  const y = topPad + rowStep * (idx + 0.5);
+                                  return (
+                                    <g key={`row-${idx}`}>
+                                      <line
+                                        x1="16"
+                                        y1={y}
+                                        x2={w - 16}
+                                        y2={y}
+                                        stroke="rgba(148,163,184,0.7)"
+                                        strokeDasharray="4 4"
+                                        strokeWidth="1"
+                                      />
+                                      <text x="20" y={y - 4} fill="rgba(203,213,225,0.9)" fontSize="8">
+                                        {`Ряд ${idx + 1}`}
+                                      </text>
+                                      <text x={w / 2 - 18} y={y + 3} fill="rgba(148,163,184,0.8)" fontSize="7">
+                                        Нет данных
+                                      </text>
+                                    </g>
+                                  );
+                                })}
+                              </svg>
+                            </div>
+                          );
+                        }
                         return (
                           <div className="mt-3 rounded border border-gray-700/70 bg-gray-900/50 px-3 py-2 text-xs text-gray-400">
                             Схема участка от VineyardApp пока не содержит координат рядов для этой миссии.
