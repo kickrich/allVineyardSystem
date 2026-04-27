@@ -35,6 +35,8 @@ import {
   fetchActiveMissionsForDrone,
   fetchMissionsFromBackend,
   fetchMissionAiResultFromBackend,
+  deleteMissionAiResultInBackend,
+  deleteAllMissionAiResultsInBackend,
   postTelemetryToBackend,
   multipartInitForVideo,
   multipartPresignPart,
@@ -1644,6 +1646,54 @@ function App() {
     setSidebarTab('bushes');
     setSidebarOpen(true);
     setParkingOpen(false);
+  }, []);
+
+  const deleteAiResultForMission = useCallback(async (missionId) => {
+    if (missionId == null) return;
+    const ok = window.confirm(`Удалить результат миссии #${missionId}?`);
+    if (!ok) return;
+    try {
+      await deleteMissionAiResultInBackend(missionId);
+      const key = String(missionId);
+      setAiResultsByMissionId((prev) => {
+        if (!(key in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      setAiPendingByMissionId((prev) => {
+        if (!(key in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+      trackedMissionIdsRef.current.delete(Number(missionId));
+      seenAiResultKeysRef.current.forEach((k) => {
+        if (String(k).startsWith(`${missionId}:`)) {
+          seenAiResultKeysRef.current.delete(k);
+        }
+      });
+      if (Number(aiCloudNotice?.missionId) === Number(missionId)) {
+        setAiCloudNotice(null);
+      }
+    } catch (e) {
+      window.alert(`Не удалось удалить результат миссии #${missionId}: ${String(e?.message ?? e)}`);
+    }
+  }, [aiCloudNotice]);
+
+  const deleteAllAiResults = useCallback(async () => {
+    const ok = window.confirm('Удалить результаты всех миссий?');
+    if (!ok) return;
+    try {
+      await deleteAllMissionAiResultsInBackend();
+      setAiResultsByMissionId({});
+      setAiPendingByMissionId({});
+      setAiCloudNotice(null);
+      seenAiResultKeysRef.current.clear();
+      trackedMissionIdsRef.current.clear();
+    } catch (e) {
+      window.alert(`Не удалось удалить все результаты: ${String(e?.message ?? e)}`);
+    }
   }, []);
 
   useEffect(() => {
@@ -3368,6 +3418,8 @@ function App() {
                   onSelectDrone={setSelectedDroneForSidebar}
                   missionLog={globalMissionLog}
                   aiResults={aiResultsForSidebar}
+                onDeleteAiMissionResult={deleteAiResultForMission}
+                onDeleteAllAiMissionResults={deleteAllAiResults}
                   initialTab={sidebarTab}
                   onTabChange={setSidebarTab}
                   onOpenAiMission={openBushesPanelForMission}

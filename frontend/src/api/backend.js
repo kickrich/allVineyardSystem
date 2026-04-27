@@ -47,6 +47,37 @@ function writeMissionAiResultToSessionCache(missionIdKey, data) {
   }
 }
 
+function clearMissionAiResultCacheById(missionIdKey) {
+  missionAiResultInFlight.delete(missionIdKey);
+  missionAiResultCache.delete(missionIdKey);
+  if (typeof window !== 'undefined') {
+    try {
+      sessionStorage.removeItem(`${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`);
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
+function clearAllMissionAiResultCache() {
+  missionAiResultInFlight.clear();
+  missionAiResultCache.clear();
+  if (typeof window !== 'undefined') {
+    try {
+      const keysToDelete = [];
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const key = sessionStorage.key(i);
+        if (typeof key === 'string' && key.startsWith(AI_RESULT_SESSION_CACHE_PREFIX)) {
+          keysToDelete.push(key);
+        }
+      }
+      keysToDelete.forEach((key) => sessionStorage.removeItem(key));
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
 async function login(email, password) {
   const result = await apiPost('/api/v1/auth/login', { email, password });
   const data = extractData(result);
@@ -362,6 +393,17 @@ export async function fetchMissionAiResultFromBackend(missionId) {
 
   missionAiResultInFlight.set(key, requestPromise);
   return requestPromise;
+}
+
+export async function deleteMissionAiResultInBackend(missionId) {
+  if (missionId == null) return;
+  await apiDelete(`/api/v1/missions/${encodeURIComponent(missionId)}/ai_result`);
+  clearMissionAiResultCacheById(String(missionId));
+}
+
+export async function deleteAllMissionAiResultsInBackend() {
+  await apiDelete('/api/v1/missions/ai_results');
+  clearAllMissionAiResultCache();
 }
 
 export async function multipartInitForVideo({

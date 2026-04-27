@@ -15,6 +15,10 @@ Rails.application.routes.draw do
           post :start
           post :complete
           get :ai_result
+          delete :ai_result, action: :destroy_ai_result
+        end
+        collection do
+          delete :ai_results, action: :destroy_all_ai_results
         end
       end
 

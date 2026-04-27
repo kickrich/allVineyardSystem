@@ -15,6 +15,18 @@ module Api
           return
         end
 
+        unless mission.completed?
+          Rails.logger.info("[vineyard_app/results] skip mission_id=#{mission.id} status=#{mission.status}")
+          render_data(
+            {
+              success: true,
+              ignored: true,
+              message: "Результат принят, но будет сохранён только после завершения миссии"
+            }
+          )
+          return
+        end
+
         # Сохраняем результаты AI анализа
         ai_result = mission.ai_result || mission.build_ai_result
         stats_param = params[:statistics]

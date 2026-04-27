@@ -86,6 +86,26 @@ module Api
         )
       end
 
+      # DELETE /api/v1/missions/:id/ai_result
+      def destroy_ai_result
+        mission = @current_user.missions.find(params[:id])
+        result = mission.ai_result
+        if result.nil?
+          render_errors("AI-результат для миссии не найден", status: :not_found)
+          return
+        end
+
+        result.destroy!
+        render_data({ mission_id: mission.id, deleted: true })
+      end
+
+      # DELETE /api/v1/missions/ai_results
+      def destroy_all_ai_results
+        mission_ids = @current_user.missions.select(:id)
+        deleted_count = AiResult.where(mission_id: mission_ids).delete_all
+        render_data({ deleted_count: deleted_count })
+      end
+
       private
 
       # Поиск миссии в базе данных

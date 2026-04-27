@@ -29,6 +29,8 @@ export const Sidebar = ({
   workZoneReady = false,
   instructionTourActive = false,
   aiResults = [],
+  onDeleteAiMissionResult,
+  onDeleteAllAiMissionResults,
   initialTab = 'control',
   onOpenAiMission,
   onTabChange,
@@ -196,7 +198,7 @@ export const Sidebar = ({
           )}
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className={`flex-1 p-4 ${activeTab === 'control' ? 'overflow-y-auto' : 'min-h-0 overflow-hidden'}`}>
         {activeTab === 'control' && (
           <div className="space-y-4">
             {listForPicker.length === 0 && (
@@ -440,7 +442,7 @@ export const Sidebar = ({
         )}
 
         {activeTab === 'logs' && (
-          <div className="space-y-4">
+          <div className="h-full min-h-0 flex flex-col gap-4">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-white">Журнал событий</h3>
               {missionLog.length > 0 && (
@@ -454,12 +456,12 @@ export const Sidebar = ({
             </div>
 
             {missionLog.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
                 <div className="text-4xl mb-2">📝</div>
                 <p>Журнал событий пуст</p>
               </div>
             ) : (
-              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
+              <div className="flex-1 min-h-0 space-y-2 overflow-y-auto pr-2">
                 {missionLog.map((log, index) => (
                   <div
                     key={`${log.id}-${index}`}
@@ -493,19 +495,35 @@ export const Sidebar = ({
         )}
 
         {activeTab === 'bushes' && (
-          <div className="space-y-4">
+          <div className="h-full min-h-0 flex flex-col gap-4">
             <div className="flex justify-between items-center mb-1">
               <h3 className="text-lg font-semibold text-white">Результаты по кустам</h3>
-              <span className="text-xs text-gray-400">миссий: {aiResults.length}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">миссий: {aiResults.length}</span>
+                <button
+                  type="button"
+                  onClick={() => onDeleteAllAiMissionResults?.()}
+                  disabled={!aiResults.length}
+                  aria-label="Удалить результаты всех миссий"
+                  className={`rounded px-2 py-1 text-xs transition-colors ${
+                    aiResults.length
+                      ? 'bg-red-700/80 text-red-100 hover:bg-red-600'
+                      : 'cursor-not-allowed bg-gray-700/70 text-gray-400'
+                  }`}
+                  title={aiResults.length ? 'Удалить результаты всех миссий' : 'Нет результатов для удаления'}
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             {aiResults.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
                 <div className="text-4xl mb-2">☁️</div>
                 <p>Пока нет результатов анализа</p>
               </div>
             ) : (
-              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
+              <div className="flex-1 min-h-0 space-y-2 overflow-y-auto pr-2">
                 {aiResults.map((result) => (
                   <div
                     key={`${result.missionId}-${result.updatedAt ?? result.createdAt ?? 'unknown'}`}
@@ -520,6 +538,15 @@ export const Sidebar = ({
                           {result.droneName ? `Дрон: ${result.droneName}` : 'Дрон не определён'}
                         </p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteAiMissionResult?.(result.missionId)}
+                        aria-label={`Удалить результат миссии #${result.missionId}`}
+                        className="rounded px-2 py-1 text-xs bg-red-700/80 text-red-100 hover:bg-red-600 transition-colors"
+                        title={`Удалить результат миссии #${result.missionId}`}
+                      >
+                        ✕
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 text-center">
