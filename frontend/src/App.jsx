@@ -2636,11 +2636,12 @@ function App() {
 
   const handleDeleteActiveZone = useCallback(async () => {
     if (activeZoneId == null) return;
-    const usageCount = Number(templateUsageByZoneId[String(activeZoneId)] || 0);
+    const zoneIdToDelete = activeZoneId;
+    const usageCount = Number(templateUsageByZoneId[String(zoneIdToDelete)] || 0);
     if (usageCount > 0) {
-      const zoneName = backendZones.find((z) => z.id === activeZoneId)?.name ?? `ID ${activeZoneId}`;
+      const zoneName = backendZones.find((z) => z.id === zoneIdToDelete)?.name ?? `ID ${zoneIdToDelete}`;
       addToZoneLog('⛔ Нельзя удалить зону: она используется в шаблонах', {
-        zoneId: activeZoneId,
+        zoneId: zoneIdToDelete,
         zoneName,
         templates: usageCount,
       });
@@ -2656,12 +2657,12 @@ function App() {
 
     setRectZoneBusy(true);
     try {
-      await deleteZoneInBackend(activeZoneId);
+      await deleteZoneInBackend(zoneIdToDelete);
       const zones = await fetchZonesFromBackend();
       setBackendZones(zones);
       addToZoneLog('🗑️ Зона удалена', {
-        zoneId: activeZoneId,
-        zoneName: targetZone?.name ?? `ID ${activeZoneId}`,
+        zoneId: zoneIdToDelete,
+        zoneName: targetZone?.name ?? `ID ${zoneIdToDelete}`,
       });
 
       const nextActiveZoneId = zones.length > 0 ? zones[0].id : null;
@@ -2679,6 +2680,59 @@ function App() {
       setRectZoneBusy(false);
     }
   }, [activeZoneId, backendZones, addToZoneLog, templateUsageByZoneId]);
+
+  const handleDeleteZoneFromMenu = useCallback(async (zoneId) => {
+    const zoneIdToDelete = Number(zoneId);
+    if (!Number.isFinite(zoneIdToDelete)) return;
+    const usageCount = Number(templateUsageByZoneId[String(zoneIdToDelete)] || 0);
+    if (usageCount > 0) {
+      const zoneName = backendZones.find((z) => z.id === zoneIdToDelete)?.name ?? `ID ${zoneIdToDelete}`;
+      addToZoneLog('⛔ Нельзя удалить зону: она используется в шаблонах', {
+        zoneId: zoneIdToDelete,
+        zoneName,
+        templates: usageCount,
+      });
+      window.alert(
+        `Нельзя удалить зону «${zoneName}»: она используется в ${usageCount} шаблон(ах).\nУдаляйте/переносите шаблоны только в Shablone_screen.`
+      );
+      return;
+    }
+    const targetZone = backendZones.find((z) => z.id === zoneIdToDelete);
+    const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${zoneIdToDelete}`;
+    const confirmed = window.confirm(`Удалить зону ${title}? Это действие нельзя отменить.`);
+    if (!confirmed) return;
+
+    setRectZoneBusy(true);
+    try {
+      await deleteZoneInBackend(zoneIdToDelete);
+      const zones = await fetchZonesFromBackend();
+      setBackendZones(zones);
+      addToZoneLog('🗑️ Зона удалена', {
+        zoneId: zoneIdToDelete,
+        zoneName: targetZone?.name ?? `ID ${zoneIdToDelete}`,
+      });
+
+      const currentActiveStillExists = zones.some((z) => z.id === activeZoneId);
+      const nextActiveZoneId =
+        zoneIdToDelete === activeZoneId || !currentActiveStillExists
+          ? (zones.length > 0 ? zones[0].id : null)
+          : activeZoneId;
+      setActiveZoneId(nextActiveZoneId);
+      const userId = backendContextRef.current.userId ?? null;
+      backendContextRef.current = { userId, zoneId: nextActiveZoneId };
+
+      if (editingZoneId != null && String(editingZoneId) === String(zoneIdToDelete)) {
+        setEditingZoneId(null);
+        setDrawRectZoneMode(false);
+        setDraftRectBoundary(null);
+      }
+    } catch (err) {
+      setZoneKmlMessage(String(err?.message ?? err));
+      setZoneKmlIsError(true);
+    } finally {
+      setRectZoneBusy(false);
+    }
+  }, [activeZoneId, editingZoneId, backendZones, addToZoneLog, templateUsageByZoneId]);
 
   const handleDeleteTemplateFromMenu = useCallback(async (templateId, mode = 'route_only') => {
     const template = missionTemplates.find((t) => t.id === templateId);
@@ -3323,6 +3377,9 @@ function App() {
                   zones={backendZones}
                   activeZoneId={activeZoneId}
                   onSelectZone={applyActiveZoneId}
+                  onDeleteZone={handleDeleteZoneFromMenu}
+                  zoneTemplateUsageById={templateUsageByZoneId}
+                  deleteBusy={rectZoneBusy || zoneKmlBusy}
                   showEmptyMenuDuringTour={workspaceTourOpen && backendZones.length === 0}
                 />
                 {placementMode && droneToPlace && (

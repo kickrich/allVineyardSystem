@@ -499,7 +499,6 @@ export const Sidebar = ({
             <div className="flex justify-between items-center mb-1">
               <h3 className="text-lg font-semibold text-white">Результаты по кустам</h3>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-400">миссий: {aiResults.length}</span>
                 <button
                   type="button"
                   onClick={() => onDeleteAllAiMissionResults?.()}

@@ -4,6 +4,9 @@ export function ZoneMapMenu({
   zones,
   activeZoneId,
   onSelectZone,
+  onDeleteZone,
+  zoneTemplateUsageById = {},
+  deleteBusy = false,
   className = '',
   showEmptyMenuDuringTour = false,
 }) {
@@ -79,22 +82,48 @@ export function ZoneMapMenu({
           <ul className="flex flex-col gap-1">
             {zones.map((z) => {
               const active = z.id === activeZoneId;
+              const usageCount = Number(zoneTemplateUsageById[String(z.id)] || 0);
+              const deleteBlockedByTemplates = usageCount > 0;
+              const deleteDisabled = deleteBusy || deleteBlockedByTemplates;
               return (
                 <li key={z.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelectZone(z.id);
-                      setOpen(false);
-                    }}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                      active
-                        ? 'bg-emerald-700/50 text-white ring-1 ring-emerald-400/60'
-                        : 'text-gray-100 hover:bg-gray-800'
+                  <div
+                    className={`flex items-center gap-1 rounded-lg p-1 ${
+                      active ? 'bg-emerald-700/40 ring-1 ring-emerald-400/50' : 'hover:bg-gray-800/80'
                     }`}
                   >
-                    <span className="truncate">{z.name || `Зона ${z.id}`}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSelectZone(z.id);
+                        setOpen(false);
+                      }}
+                      className="flex-1 rounded-md px-2 py-1.5 text-left text-sm text-gray-100"
+                    >
+                      <span className="truncate">{z.name || `Зона ${z.id}`}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteZone?.(z.id);
+                      }}
+                      disabled={deleteDisabled}
+                      aria-label={`Удалить зону ${z.name || `ID ${z.id}`}`}
+                      title={
+                        deleteBlockedByTemplates
+                          ? 'Зона связана с шаблонами: удаляйте через Shablone_screen'
+                          : 'Удалить зону'
+                      }
+                      className={`h-8 w-8 shrink-0 rounded-md text-sm transition-colors ${
+                        deleteDisabled
+                          ? 'cursor-not-allowed bg-gray-700/70 text-gray-400'
+                          : 'bg-red-700/80 text-red-100 hover:bg-red-600'
+                      }`}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </li>
               );
             })}
