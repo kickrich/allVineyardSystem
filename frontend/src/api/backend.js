@@ -13,6 +13,39 @@ function extractData(payload) {
 // - cache: после первого успешного ответа с ai_result повторно сеть не дёргаем
 const missionAiResultInFlight = new Map();
 const missionAiResultCache = new Map();
+const AI_RESULT_SESSION_CACHE_PREFIX = 'ai_result_cache:';
+const AI_RESULT_SESSION_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function readMissionAiResultFromSessionCache(missionIdKey) {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(`${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.data?.ai_result) return null;
+    const ts = Number(parsed.ts);
+    if (!Number.isFinite(ts) || Date.now() - ts > AI_RESULT_SESSION_CACHE_TTL_MS) {
+      sessionStorage.removeItem(`${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeMissionAiResultToSessionCache(missionIdKey, data) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(
+      `${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`,
+      JSON.stringify({ ts: Date.now(), data })
+    );
+  } catch {
+    // ignore storage quota / serialization issues
+  }
+}
 
 async function login(email, password) {
   const result = await apiPost('/api/v1/auth/login', { email, password });
@@ -306,6 +339,11 @@ export async function fetchMissionAiResultFromBackend(missionId) {
   if (missionAiResultCache.has(key)) {
     return missionAiResultCache.get(key);
   }
+  const sessionCached = readMissionAiResultFromSessionCache(key);
+  if (sessionCached) {
+    missionAiResultCache.set(key, sessionCached);
+    return sessionCached;
+  }
   if (missionAiResultInFlight.has(key)) {
     return missionAiResultInFlight.get(key);
   }
@@ -315,6 +353,7 @@ export async function fetchMissionAiResultFromBackend(missionId) {
     const data = extractData(response);
     if (data?.ai_result) {
       missionAiResultCache.set(key, data);
+      writeMissionAiResultToSessionCache(key, data);
     }
     return data;
   })().finally(() => {
