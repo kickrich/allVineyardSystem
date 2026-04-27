@@ -205,7 +205,7 @@ export const Sidebar = ({
             }`}
           onClick={() => setActiveTab('bushes')}
         >
-          Кусты
+          Результаты
           {aiResults.length > 0 && (
             <span className="ml-2 bg-emerald-600 text-white text-xs px-2 py-1 rounded-full">
               {aiResults.length}
@@ -220,9 +220,6 @@ export const Sidebar = ({
               <div className="text-center py-10 text-gray-400">
                 <div className="text-4xl mb-3">🛸</div>
                 <p className="text-base">Нет дронов на карте</p>
-                <p className="text-sm mt-1">
-                  Разместите дрон со стоянки, чтобы управлять им из панели.
-                </p>
               </div>
             )}
             {listForPicker.length > 0 && (
@@ -477,7 +474,6 @@ export const Sidebar = ({
               <div className="text-center py-8 text-gray-500">
                 <div className="text-4xl mb-2">📝</div>
                 <p>Журнал событий пуст</p>
-                <p className="text-sm mt-1">Запустите полеты для отслеживания событий</p>
               </div>
             ) : (
               <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
@@ -524,7 +520,6 @@ export const Sidebar = ({
               <div className="text-center py-8 text-gray-500">
                 <div className="text-4xl mb-2">☁️</div>
                 <p>Пока нет результатов анализа</p>
-                <p className="text-sm mt-1">Когда CV вернёт данные, они появятся тут</p>
               </div>
             ) : (
               <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
