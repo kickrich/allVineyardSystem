@@ -1,0 +1,44 @@
+<h1>Тестовая загрузка видео</h1>
+
+<%= form_with url: api_videos_path,
+              local: true,
+              multipart: true,
+              data: { turbo: false } do |f| %>
+  <div>
+    <%= f.label :video, "Выберите видео:" %><br>
+    <%= f.file_field :video %>
+  </div>
+
+  <div>
+    <%= f.submit "Загрузить видео" %>
+  </div>
+<% end %>
+
+<div id="result" style="margin-top: 20px;"></div>
+
+<script>
+  document.querySelector('form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const formData = new FormData(this);
+
+    const response = await fetch(this.action, {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await response.json();
+    const resultDiv = document.getElementById('result');
+
+    if (data.error) {
+      resultDiv.innerHTML = `<strong style="color:red">${data.error}</strong>`;
+    } else {
+      resultDiv.innerHTML = `
+        <strong>Видео загружено!</strong><br>
+        ID: ${data.id}<br>
+        Статус: ${data.status}<br>
+        Дата записи: ${data.recorded_at || "не найдена"}
+      `;
+    }
+  });
+</script>
