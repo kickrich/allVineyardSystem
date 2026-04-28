@@ -11,7 +11,7 @@ module Api
         missions = missions.for_drone(params[:drone_id]) if params[:drone_id].present?
         missions = missions.where(zone_id: params[:zone_id]) if params[:zone_id].present?
         missions = missions.active if truthy_param?(params[:active])
-        render json: missions
+        render json: missions.includes(:routes).map { |mission| mission.as_json(include: :routes) }
       end
 
       # Показать миссию GET /api/v1/missions/:id

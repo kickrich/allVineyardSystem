@@ -65,7 +65,18 @@ module Api
 
       # Параметры дрона
       def drone_params
-        params.require(:drone).permit(:name, :model, :status, :battery)
+        permitted = params.require(:drone).permit(:name, :model, :status, :battery, :latitude, :longitude, :is_visible)
+        # route_path приходит как массив пар [lat, lng]; strong params с nested-array здесь
+        # может отбрасывать содержимое, поэтому берём его явно и валидируем в модели.
+        if params[:drone].key?(:route_path)
+          raw_path = params[:drone][:route_path]
+          permitted[:route_path] = raw_path if raw_path.is_a?(Array)
+        end
+        if params[:drone].key?(:shift_segment_indices)
+          raw_indices = params[:drone][:shift_segment_indices]
+          permitted[:shift_segment_indices] = raw_indices if raw_indices.is_a?(Array)
+        end
+        permitted
       end
     end
   end

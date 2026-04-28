@@ -364,6 +364,31 @@ export async function fetchMissionsFromBackend() {
   return Array.isArray(missions) ? missions : [];
 }
 
+export async function fetchDroneLogsFromBackend({ limit = 100, droneId = null } = {}) {
+  const query = new URLSearchParams();
+  if (Number.isFinite(Number(limit)) && Number(limit) > 0) {
+    query.set('limit', String(Math.min(500, Math.max(1, Number(limit)))));
+  }
+  if (droneId != null) query.set('drone_id', String(droneId));
+  const response = await apiGet(`/api/v1/drone_logs?${query.toString()}`);
+  const logs = extractData(response);
+  return Array.isArray(logs) ? logs : [];
+}
+
+export async function createDroneLogInBackend({ droneId = null, message, data = {}, loggedAt = null } = {}) {
+  if (!message || !String(message).trim()) return null;
+  const payload = {
+    drone_log: {
+      message: String(message).trim(),
+      data: data && typeof data === 'object' ? data : {},
+      logged_at: loggedAt ?? new Date().toISOString(),
+    },
+  };
+  if (droneId != null) payload.drone_log.drone_id = droneId;
+  const response = await apiPost('/api/v1/drone_logs', payload);
+  return extractData(response);
+}
+
 export async function fetchMissionAiResultFromBackend(missionId) {
   if (missionId == null) return null;
   const key = String(missionId);

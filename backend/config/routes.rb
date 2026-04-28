@@ -9,6 +9,7 @@ Rails.application.routes.draw do
       post "auth/login", to: "auth#login"
 
       resources :drones
+      resources :drone_logs, only: [:index, :create]
       
       resources :missions do
         member do

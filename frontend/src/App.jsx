@@ -34,6 +34,8 @@ import {
   cancelMissionInBackend,
   fetchActiveMissionsForDrone,
   fetchMissionsFromBackend,
+  fetchDroneLogsFromBackend,
+  createDroneLogInBackend,
   fetchMissionAiResultFromBackend,
   deleteMissionAiResultInBackend,
   deleteAllMissionAiResultsInBackend,
@@ -87,11 +89,13 @@ function getStoredApiUser() {
 }
 
 function withRuntimeState(drone) {
+  const path = normalizeRoutePath(drone?.path);
+  const hasPosition = Number.isFinite(Number(drone?.position?.lat)) && Number.isFinite(Number(drone?.position?.lng));
   return {
     ...drone,
-    position: null,
-    path: [],
-    isVisible: false,
+    position: hasPosition ? { lat: Number(drone.position.lat), lng: Number(drone.position.lng) } : null,
+    path,
+    isVisible: Boolean(drone?.isVisible),
     battery: drone.battery ?? 100,
     status: 'на земле',
     flightStatus: flightStatus.IDLE,
@@ -112,6 +116,22 @@ function withRuntimeState(drone) {
   };
 }
 
+function normalizeRoutePath(path) {
+  if (!Array.isArray(path)) return [];
+  return path
+    .filter((point) => Array.isArray(point) && point.length >= 2)
+    .map((point) => [Number(point[0]), Number(point[1])])
+    .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+}
+
+function normalizeShiftSegmentIndices(raw) {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw
+    .map((i) => Number(i))
+    .filter((i) => Number.isInteger(i) && i >= 0))]
+    .sort((a, b) => a - b);
+}
+
 function createLocalDrones() {
   return dronesData.map((drone) => withRuntimeState({ ...drone }));
 }
@@ -119,13 +139,22 @@ function createLocalDrones() {
 function mapBackendDroneToFrontend(drone, index) {
   const fallback = dronesData[index % dronesData.length] ?? {};
   const batteryValue = Number(drone?.battery);
+  const lat = Number(drone?.latitude);
+  const lng = Number(drone?.longitude);
+  const isVisible = Boolean(drone?.is_visible);
+  const routePath = normalizeRoutePath(drone?.route_path);
+  const shiftSegmentIndices = normalizeShiftSegmentIndices(drone?.shift_segment_indices);
   return withRuntimeState({
     ...fallback,
     id: drone?.id ?? fallback.id ?? index + 1,
     name: drone?.name ?? fallback.name ?? `Дрон-${index + 1}`,
     model: drone?.model ?? fallback.model ?? 'Generic',
     battery: Number.isFinite(batteryValue) ? batteryValue : (fallback.battery ?? 100),
-    backendStatus: drone?.status ?? 'idle'
+    backendStatus: drone?.status ?? 'idle',
+    isVisible,
+    position: Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null,
+    path: routePath,
+    shiftSegmentIndices,
   });
 }
 
@@ -521,6 +550,7 @@ function App() {
   const [aiCloudNotice, setAiCloudNotice] = useState(null);
   const [aiCloudNoticeUi, setAiCloudNoticeUi] = useState({ notice: null, visible: false, exiting: false });
   const [sidebarTab, setSidebarTab] = useState('control');
+  const [routeShiftSegmentsByDroneId, setRouteShiftSegmentsByDroneId] = useState({});
   const authUser = useMemo(() => getStoredApiUser(), [authReady]);
   const authUserLabel = useMemo(() => {
     if (authUser?.name && String(authUser.name).trim()) return String(authUser.name).trim();
@@ -533,6 +563,8 @@ function App() {
   const missionDroneByMissionIdRef = useRef(new Map());
   const trackedMissionIdsRef = useRef(new Set());
   const seenAiResultKeysRef = useRef(new Set());
+  const persistedDroneMapStateRef = useRef(new Map());
+  const hasHydratedDronesRef = useRef(false);
 
   const [backendZones, setBackendZones] = useState([]);
   const [activeZoneId, setActiveZoneId] = useState(null);
@@ -682,6 +714,39 @@ function App() {
   }, [drones]);
 
   useEffect(() => {
+    if (!authReady) return;
+    if (!hasHydratedDronesRef.current) return;
+    drones.forEach((drone) => {
+      if (drone?.id == null) return;
+      const position = drone?.position && Number.isFinite(Number(drone.position.lat)) && Number.isFinite(Number(drone.position.lng))
+        ? { lat: Number(drone.position.lat), lng: Number(drone.position.lng) }
+        : null;
+      const payload = {
+        latitude: position?.lat ?? null,
+        longitude: position?.lng ?? null,
+        is_visible: Boolean(drone?.isVisible),
+        route_path: normalizeRoutePath(drone?.path),
+        shift_segment_indices: normalizeShiftSegmentIndices(
+          routeShiftSegmentsByDroneId[String(drone.id)]
+        ),
+      };
+      const signature = JSON.stringify(payload);
+      const key = String(drone.id);
+      if (persistedDroneMapStateRef.current.get(key) === signature) return;
+      persistedDroneMapStateRef.current.set(key, signature);
+      void syncDroneStateToBackend(drone.id, payload).catch((e) =>
+        console.warn('PATCH drone (map state):', e?.message ?? e)
+      );
+    });
+  }, [drones, authReady, routeShiftSegmentsByDroneId]);
+
+  useEffect(() => {
+    if (authReady) return;
+    persistedDroneMapStateRef.current = new Map();
+    hasHydratedDronesRef.current = false;
+  }, [authReady]);
+
+  useEffect(() => {
     if (!authReady) {
       return;
     }
@@ -730,6 +795,16 @@ function App() {
 
         if (backendDrones.length > 0) {
           setDrones(backendDrones.map(mapBackendDroneToFrontend));
+          setRouteShiftSegmentsByDroneId(() => {
+            const next = {};
+            backendDrones.forEach((drone) => {
+              const did = drone?.id;
+              if (did == null) return;
+              const normalized = normalizeShiftSegmentIndices(drone?.shift_segment_indices);
+              if (normalized.length > 0) next[String(did)] = normalized;
+            });
+            return next;
+          });
           setBackendSync({
             status: 'connected',
             message: ''
@@ -740,6 +815,7 @@ function App() {
             message: ''
           });
         }
+        hasHydratedDronesRef.current = true;
 
         try {
           const missions = await fetchMissionsFromBackend();
@@ -754,6 +830,7 @@ function App() {
             };
 
             const activeMissionIds = [];
+            const latestActiveMissionByDroneId = new Map();
             recentMissions.forEach((mission) => {
               const missionId = Number(mission?.id);
               if (!Number.isFinite(missionId)) return;
@@ -763,8 +840,54 @@ function App() {
               }
               if (isMissionActiveForPolling(mission)) {
                 activeMissionIds.push(missionId);
+                if (Number.isFinite(droneId)) {
+                  const prev = latestActiveMissionByDroneId.get(droneId);
+                  if (!prev || Number(mission?.id ?? 0) > Number(prev?.id ?? 0)) {
+                    latestActiveMissionByDroneId.set(droneId, mission);
+                  }
+                }
               }
             });
+
+            if (latestActiveMissionByDroneId.size > 0) {
+              setDrones((prev) =>
+                prev.map((drone) => {
+                  const mission = latestActiveMissionByDroneId.get(Number(drone?.id));
+                  if (!mission) return drone;
+                  const missionId = Number(mission?.id);
+                  if (Number.isFinite(missionId)) {
+                    backendMissionIdsRef.current.set(drone.id, missionId);
+                  }
+                  const routePath = Array.isArray(mission?.routes)
+                    ? [...mission.routes]
+                      .sort((a, b) => Number(a?.sequence_number ?? 0) - Number(b?.sequence_number ?? 0))
+                      .map((route) => [Number(route?.latitude), Number(route?.longitude)])
+                      .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng))
+                    : normalizeRoutePath(drone?.path);
+                  const persistedDronePath = normalizeRoutePath(drone?.path);
+                  // Не подменяем основной маршрут дрона временным "подлетом к 1-й точке".
+                  // Если в drone.route_path уже есть валидный маршрут, оставляем его.
+                  const routePathForDrone =
+                    persistedDronePath.length >= 2 ? persistedDronePath : routePath;
+                  const missionStatus = String(mission?.status ?? '').toLowerCase();
+                  return {
+                    ...drone,
+                    path: routePathForDrone,
+                    isVisible: drone?.isVisible || routePathForDrone.length > 0,
+                    currentMission: {
+                      id: mission?.id,
+                      status: missionStatus,
+                      backendRestored: true,
+                      flightPath: routePath,
+                      startTime: mission?.created_at ?? null,
+                      completed: missionStatus === 'completed',
+                    },
+                    status: missionStatus === 'in_progress' ? 'на задании' : drone.status,
+                    backendStatus: missionStatus === 'in_progress' ? 'in_mission' : (drone.backendStatus ?? 'idle'),
+                  };
+                })
+              );
+            }
 
             const restoredResults = {};
             // После F5 восстанавливаем ai_result для последних миссий (включая завершённые),
@@ -813,8 +936,43 @@ function App() {
         } catch (e) {
           console.warn('Restore ai panels failed:', e?.message ?? e);
         }
+
+        try {
+          const logs = await fetchDroneLogsFromBackend({ limit: 150 });
+          if (!cancelled && Array.isArray(logs) && logs.length > 0) {
+            setGlobalMissionLog(
+              logs.map((log, idx) => ({
+                id: Number(log?.id) || Date.now() + idx,
+                droneId: log?.drone_id ?? null,
+                droneName: log?.drone_name || 'Неизвестный дрон',
+                timestamp: log?.logged_at || new Date().toISOString(),
+                message: String(log?.message ?? ''),
+                data: log?.data && typeof log.data === 'object' ? log.data : {},
+              }))
+            );
+
+            setDrones((prev) =>
+              prev.map((drone) => {
+                const perDrone = logs
+                  .filter((log) => Number(log?.drone_id) === Number(drone.id))
+                  .slice(0, 20)
+                  .map((log, idx) => ({
+                    id: Number(log?.id) || Date.now() + idx,
+                    timestamp: log?.logged_at || new Date().toISOString(),
+                    message: String(log?.message ?? ''),
+                    data: log?.data && typeof log.data === 'object' ? log.data : {},
+                  }));
+                if (!perDrone.length) return drone;
+                return { ...drone, flightLog: perDrone };
+              })
+            );
+          }
+        } catch (e) {
+          console.warn('Restore logs failed:', e?.message ?? e);
+        }
       } catch (error) {
         if (cancelled) return;
+        hasHydratedDronesRef.current = false;
         if (!localStorage.getItem('api_token')) {
           setAuthReady(false);
         }
@@ -1015,8 +1173,6 @@ function App() {
     if (!d?.path?.length) return [];
     return d.path;
   }, [drones, selectedDroneForSidebar]);
-
-  const [routeShiftSegmentsByDroneId, setRouteShiftSegmentsByDroneId] = useState({});
 
   const selectedRouteShiftSegments = useMemo(() => {
     if (selectedDroneForSidebar == null) return [];
@@ -1506,6 +1662,16 @@ function App() {
     };
 
     setGlobalMissionLog(prev => [globalLogEntry, ...prev].slice(0, 100));
+    if (authReady) {
+      void createDroneLogInBackend({
+        droneId: droneId ?? null,
+        message,
+        data: safeData,
+        loggedAt: globalLogEntry.timestamp,
+      }).catch((e) => {
+        console.warn('createDroneLogInBackend failed:', e?.message ?? e);
+      });
+    }
   };
 
   const addToZoneLog = useCallback((message, data = {}) => {
@@ -1595,6 +1761,23 @@ function App() {
       let ctx = backendContextRef.current;
       if (!ctx?.userId || !ctx?.zoneId) {
         ctx = await hydrateBackendContext();
+      }
+      // После перезагрузки у дрона уже может быть активная миссия в backend.
+      // В этом случае не создаём новую (чтобы не получать 422 "уже назначен"), а переиспользуем текущую.
+      try {
+        const active = await fetchActiveMissionsForDrone(drone.id);
+        if (Array.isArray(active) && active.length > 0) {
+          const latestActive = [...active].sort((a, b) => Number(b?.id ?? 0) - Number(a?.id ?? 0))[0];
+          const existingMissionId = Number(latestActive?.id);
+          if (Number.isFinite(existingMissionId)) {
+            backendMissionIdsRef.current.set(drone.id, existingMissionId);
+            missionDroneByMissionIdRef.current.set(existingMissionId, drone.id);
+            trackedMissionIdsRef.current.add(existingMissionId);
+            return existingMissionId;
+          }
+        }
+      } catch (existingErr) {
+        console.warn('fetch existing active mission failed:', existingErr?.message ?? existingErr);
       }
       const inferredZoneId = inferZoneIdForTemplatePath(routePath, backendZones);
       const missionZoneId = inferredZoneId ?? ctx.zoneId;
@@ -2546,6 +2729,7 @@ function App() {
     activeTimersRef.current.forEach((id) => clearInterval(id));
     activeTimersRef.current.clear();
     setDrones(createLocalDrones());
+    setRouteShiftSegmentsByDroneId({});
     setBackendSync({ status: 'idle', message: '' });
     setAiResultsByMissionId({});
     setAiPendingByMissionId({});
