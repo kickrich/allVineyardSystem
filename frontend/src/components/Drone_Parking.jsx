@@ -54,20 +54,20 @@ export const DroneParking = ({
   }, [onCreateDrone, newDroneName, createBusy]);
 
   const getStatusColor = (drone) => {
-    if (!drone.isVisible) return 'bg-gray-700';
+    if (!drone.isVisible) return 'bg-gray-900/45 border-gray-700/60';
 
     switch (drone.flightStatus) {
       case 'FLYING':
-        return 'bg-green-900/30 border-green-500';
+        return 'border-green-500 bg-green-900/20';
       case 'PAUSED':
-        return 'bg-yellow-900/30 border-yellow-500';
+        return 'border-yellow-500 bg-yellow-900/20';
       case 'TAKEOFF':
       case 'LANDING':
-        return 'bg-blue-900/30 border-blue-500';
+        return 'border-blue-500 bg-blue-900/20';
       case 'COMPLETED':
-        return 'bg-green-900/30 border-green-700';
+        return 'border-green-700 bg-green-900/20';
       default:
-        return 'bg-gray-900/30 border-gray-500';
+        return 'border-gray-500 bg-gray-900/20';
     }
   };
 
@@ -171,8 +171,8 @@ export const DroneParking = ({
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col lg:w-72">
-      <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg bg-gray-800 shadow-lg">
-        <div className="shrink-0 bg-gradient-to-r from-gray-700 to-gray-800 p-4">
+      <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl bg-gray-800/95 lg:bg-gray-800/85 border border-gray-700/70 backdrop-blur-sm shadow-2xl">
+        <div className="shrink-0 bg-gradient-to-r from-gray-800 to-gray-900 p-4 border-b border-gray-700/80">
           <div className="flex justify-between items-center gap-2">
             <h2 className="text-xl font-bold text-white leading-tight whitespace-nowrap min-w-0 truncate">
               Стоянка для дронов
@@ -205,7 +205,7 @@ export const DroneParking = ({
                 {placedDrones.map((drone) => (
                   <div
                     key={drone.id}
-                    className={`border ${getStatusColor(drone)} rounded-lg p-3 transition-all duration-200 hover:scale-[1.01]`}
+                    className={`border ${getStatusColor(drone)} rounded-lg p-3 transition-all duration-200 hover:bg-gray-800/60`}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex items-center gap-2">
@@ -258,7 +258,7 @@ export const DroneParking = ({
                 {availableDrones.map((drone, idx) => (
                   <div
                     key={drone.id}
-                    className="bg-gray-900/50 border border-gray-700 rounded-lg p-3 hover:bg-gray-800/50 transition-colors hover:border-gray-600"
+                    className="bg-gray-900/45 border border-gray-700/60 rounded-lg p-3 hover:bg-gray-800/60 transition-colors hover:border-gray-600"
                   >
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-3">
