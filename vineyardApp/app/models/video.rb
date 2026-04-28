@@ -65,6 +65,13 @@ class Video < ApplicationRecord
   end
 
   def aggregated_results
+    row_sequences = video_shards.order(:shard_index).map do |shard|
+      {
+        shard_index: shard.shard_index,
+        row_sequence: Array(shard.row_sequence)
+      }
+    end
+
     {
       video_id: id,
       mission_id: mission_id,
@@ -79,7 +86,8 @@ class Video < ApplicationRecord
         total_bushes: total_bushes_count,
         total_gaps: total_gaps_count,
         bushes_positions: all_bushes_positions,
-        gaps_positions: all_gaps_positions
+        gaps_positions: all_gaps_positions,
+        row_sequences: row_sequences
       },
       created_at: created_at,
       updated_at: updated_at

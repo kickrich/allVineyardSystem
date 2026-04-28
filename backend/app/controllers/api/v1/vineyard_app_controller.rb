@@ -34,6 +34,7 @@ module Api
         shards_count = params[:shards_count].presence || stats[:shards_count]
         bushes_positions = extract_positions(stats, top_level, :bushes_positions, :bushesPositions, :bushes_points, :bushesPoints)
         gaps_positions = extract_positions(stats, top_level, :gaps_positions, :gapsPositions, :gaps_points, :gapsPoints)
+        row_sequences = extract_row_sequences(stats, top_level)
 
         ai_result.assign_attributes(
           bushes_count: stats[:total_bushes].to_i,
@@ -42,6 +43,7 @@ module Api
             gaps_count: stats[:total_gaps].to_i,
             bushes_positions: bushes_positions,
             gaps_positions: gaps_positions,
+            row_sequences: row_sequences,
             processing_progress: params[:processing_progress],
             shards_count: shards_count,
             processed_shards: processed_shards
@@ -135,13 +137,60 @@ module Api
         lng = to_float(h[:lng] || h[:lon] || h[:longitude] || h[:x])
         lat = to_float(h[:lat] || h[:latitude] || h[:y])
         return nil if lng.nil? || lat.nil?
-        [lng, lat]
+        row_index = to_int(h[:row_index] || h[:row] || h[:row_idx] || h[:shard_index])
+        position_index = to_int(h[:position_index] || h[:position] || h[:pos] || h[:index])
+        if row_index || position_index
+          {
+            x: lng,
+            y: lat,
+            row_index: row_index,
+            position_index: position_index
+          }
+        else
+          [lng, lat]
+        end
       end
 
       def to_float(value)
         Float(value)
       rescue ArgumentError, TypeError
         nil
+      end
+
+      def to_int(value)
+        Integer(value)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def extract_row_sequences(stats, top_level)
+        raw = stats[:row_sequences] || stats[:rowSequences] || top_level[:row_sequences] || top_level[:rowSequences]
+        rows = case raw
+        when Array
+          raw
+        when ActionController::Parameters
+          raw.to_unsafe_h.values
+        when Hash
+          raw.values
+        else
+          []
+        end
+        rows.filter_map do |item|
+          h =
+            case item
+            when ActionController::Parameters then item.to_unsafe_h.with_indifferent_access
+            when Hash then item.with_indifferent_access
+            else nil
+            end
+          next nil unless h
+          shard_index = to_int(h[:shard_index] || h[:row_index] || h[:row] || h[:index])
+          row_sequence = Array(h[:row_sequence] || h[:rowSequence]).map(&:to_s).select { |v| v == 'bush' || v == 'gap' }
+          next nil if row_sequence.empty?
+          {
+            shard_index: shard_index,
+            row_sequence: row_sequence
+          }.compact
+        end
       end
     end
   end

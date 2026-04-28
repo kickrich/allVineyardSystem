@@ -132,7 +132,21 @@ export const Sidebar = ({
     if (value && typeof value === 'object') {
       const x = Number(value.x ?? value.lng ?? value.lon ?? value.longitude ?? value[0]);
       const y = Number(value.y ?? value.lat ?? value.latitude ?? value[1]);
-      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+      const rowIndexRaw = Number(
+        value.row_index ?? value.rowIndex ?? value.row ?? value.shard_index ?? value.shardIndex
+      );
+      const positionIndexRaw = Number(
+        value.position_index ?? value.positionIndex ?? value.pos ?? value.position ?? value.index
+      );
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        return {
+          x,
+          y,
+          rowIndex: Number.isInteger(rowIndexRaw) && rowIndexRaw > 0 ? rowIndexRaw : null,
+          positionIndex:
+            Number.isInteger(positionIndexRaw) && positionIndexRaw > 0 ? positionIndexRaw : null,
+        };
+      }
     }
     return null;
   };
@@ -145,6 +159,79 @@ export const Sidebar = ({
       ? result.gapsPositions.map(parsePointXY).filter(Boolean)
       : [];
     return { bushes, gaps };
+  };
+
+  const buildRowsForScheme = (points, rowsCount) => {
+    const rows = Array.from({ length: rowsCount }, () => []);
+    if (!points.length) return rows;
+    const hasExplicitRows = points.some((p) => Number.isInteger(p.rowIndex) && p.rowIndex > 0);
+    if (hasExplicitRows) {
+      points.forEach((point) => {
+        const idx = Number.isInteger(point.rowIndex) && point.rowIndex > 0
+          ? Math.min(rowsCount - 1, Math.max(0, point.rowIndex - 1))
+          : 0;
+        rows[idx].push(point);
+      });
+      return rows.map((row) =>
+        row.sort((a, b) => {
+          if (Number.isInteger(a.positionIndex) && Number.isInteger(b.positionIndex)) {
+            return a.positionIndex - b.positionIndex;
+          }
+          return a.x - b.x;
+        })
+      );
+    }
+
+    const minY = Math.min(...points.map((p) => p.y));
+    const maxY = Math.max(...points.map((p) => p.y));
+    const spanY = Math.max(1e-9, maxY - minY);
+    points.forEach((point) => {
+      const rowIdx = Math.min(
+        rowsCount - 1,
+        Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
+      );
+      rows[rowIdx].push(point);
+    });
+    return rows.map((row) => row.sort((a, b) => a.x - b.x));
+  };
+
+  const buildRenderedPointsFromRowSequences = (rowSequences, startX, startY, rowHeight) => {
+    if (!Array.isArray(rowSequences) || !rowSequences.length) return null;
+    const normalizedRows = rowSequences
+      .map((item, idx) => {
+        const seq = Array.isArray(item?.row_sequence)
+          ? item.row_sequence
+          : Array.isArray(item?.rowSequence)
+            ? item.rowSequence
+            : [];
+        const safeSeq = seq.map((v) => String(v)).filter((v) => v === 'bush' || v === 'gap');
+        if (!safeSeq.length) return null;
+        const shardIndexRaw = Number(item?.shard_index ?? item?.shardIndex);
+        const rowNumber = Number.isInteger(shardIndexRaw) && shardIndexRaw > 0 ? shardIndexRaw : idx + 1;
+        return { rowNumber, seq: safeSeq };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.rowNumber - b.rowNumber);
+    if (!normalizedRows.length) return null;
+
+    const maxRowLength = Math.max(1, ...normalizedRows.map((r) => r.seq.length));
+    const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
+    const renderedPoints = [];
+    normalizedRows.forEach((row, rowIdx) => {
+      row.seq.forEach((kind, pointIdx) => {
+        renderedPoints.push({
+          x: startX + pointIdx * bushSpacing,
+          y: startY + rowIdx * rowHeight + 5,
+          kind,
+          row: row.rowNumber,
+          pos: pointIdx + 1,
+        });
+      });
+    });
+    return {
+      rowsCount: normalizedRows.length,
+      renderedPoints,
+    };
   };
 
   const expandedSchemeResult = useMemo(
@@ -694,7 +781,8 @@ export const Sidebar = ({
                           </div>
                         );
                       }
-                      const rowsCount = Math.max(1, Number(result.rowsCount || 0) || 1);
+                      const rowsFromSequence = buildRenderedPointsFromRowSequences(result.rowSequences, 80, 50, 70);
+                      const rowsCount = rowsFromSequence?.rowsCount ?? Math.max(1, Number(result.rowsCount || 0) || 1);
                       const rowHeight = 70;
                       const startY = 50;
                       const startX = 80;
@@ -704,32 +792,22 @@ export const Sidebar = ({
                         ...bushes.map((p) => ({ ...p, kind: 'bush' })),
                         ...gaps.map((p) => ({ ...p, kind: 'gap' })),
                       ];
-                      let rows = Array.from({ length: rowsCount }, () => []);
-                      if (points.length) {
-                        const minY = Math.min(...points.map((p) => p.y));
-                        const maxY = Math.max(...points.map((p) => p.y));
-                        const spanY = Math.max(1e-9, maxY - minY);
-                        points.forEach((point) => {
-                          const rowIdx = Math.min(
-                            rowsCount - 1,
-                            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
-                          );
-                          rows[rowIdx].push(point);
-                        });
-                      }
-                      rows = rows.map((row) => row.sort((a, b) => a.x - b.x));
-                      const maxRowLength = Math.max(1, ...rows.map((r) => r.length));
-                      const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
-                      const renderedPoints = [];
-                      rows.forEach((row, rowIdx) => {
-                        row.forEach((point, pointIdx) => {
-                          renderedPoints.push({
-                            x: startX + pointIdx * bushSpacing,
-                            y: startY + rowIdx * rowHeight + 5,
-                            kind: point.kind,
+                      let renderedPoints = rowsFromSequence?.renderedPoints ?? null;
+                      if (!renderedPoints) {
+                        const rows = buildRowsForScheme(points, rowsCount);
+                        const maxRowLength = Math.max(1, ...rows.map((r) => r.length));
+                        const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
+                        renderedPoints = [];
+                        rows.forEach((row, rowIdx) => {
+                          row.forEach((point, pointIdx) => {
+                            renderedPoints.push({
+                              x: startX + pointIdx * bushSpacing,
+                              y: startY + rowIdx * rowHeight + 5,
+                              kind: point.kind,
+                            });
                           });
                         });
-                      });
+                      }
                       const pointCount = renderedPoints.length;
                       const pointRadius = pointCount > 2500 ? 3.2 : pointCount > 1200 ? 3.6 : 4.2;
                       return (
@@ -812,43 +890,32 @@ export const Sidebar = ({
         ...bushes.map((p) => ({ ...p, kind: 'bush' })),
         ...gaps.map((p) => ({ ...p, kind: 'gap' })),
       ];
-      const rowsCount = Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
+      const rowsFromSequence = buildRenderedPointsFromRowSequences(expandedSchemeResult.rowSequences, 80, 50, 70);
+      const rowsCount = rowsFromSequence?.rowsCount ?? Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
       const rowHeight = 70;
       const startY = 50;
       const startX = 80;
       const mapWidth = 1000;
       const mapHeight = Math.max(600, startY + rowsCount * rowHeight + 40);
 
-      let renderedRows = Array.from({ length: rowsCount }, () => []);
-      if (all.length) {
-        const minY = Math.min(...all.map((p) => p.y));
-        const maxY = Math.max(...all.map((p) => p.y));
-        const spanY = Math.max(1e-9, maxY - minY);
-        all.forEach((point) => {
-          const rowIdx = Math.min(
-            rowsCount - 1,
-            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
-          );
-          renderedRows[rowIdx].push(point);
-        });
-      }
-
-      renderedRows = renderedRows.map((row) => row.sort((a, b) => a.x - b.x));
-      const maxRowLength = Math.max(1, ...renderedRows.map((r) => r.length));
-      const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
-
-      const renderedPoints = [];
-      renderedRows.forEach((row, rowIdx) => {
-        row.forEach((point, pointIdx) => {
-          renderedPoints.push({
-            x: startX + pointIdx * bushSpacing,
-            y: startY + rowIdx * rowHeight + 5,
-            kind: point.kind,
-            row: rowIdx + 1,
-            pos: pointIdx + 1,
+      let renderedPoints = rowsFromSequence?.renderedPoints ?? null;
+      if (!renderedPoints) {
+        const renderedRows = buildRowsForScheme(all, rowsCount);
+        const maxRowLength = Math.max(1, ...renderedRows.map((r) => r.length));
+        const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
+        renderedPoints = [];
+        renderedRows.forEach((row, rowIdx) => {
+          row.forEach((point, pointIdx) => {
+            renderedPoints.push({
+              x: startX + pointIdx * bushSpacing,
+              y: startY + rowIdx * rowHeight + 5,
+              kind: point.kind,
+              row: rowIdx + 1,
+              pos: pointIdx + 1,
+            });
           });
         });
-      });
+      }
 
       const markerRadius = renderedPoints.length > 2500 ? 6 : renderedPoints.length > 1200 ? 8 : 10;
       const markerOpacity = renderedPoints.length > 2500 ? 0.7 : 0.85;

@@ -1517,6 +1517,7 @@ function App() {
           processedRows: Number(result?.processed_shards ?? 0),
           bushesPositions: Array.isArray(result?.bushes_positions) ? result.bushes_positions : [],
           gapsPositions: Array.isArray(result?.gaps_positions) ? result.gaps_positions : [],
+          rowSequences: Array.isArray(result?.row_sequences) ? result.row_sequences : [],
           updatedAt: result?.updated_at ?? null,
           createdAt: result?.created_at ?? null,
         };

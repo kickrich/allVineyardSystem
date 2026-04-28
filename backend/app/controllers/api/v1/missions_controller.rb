@@ -137,6 +137,7 @@ module Api
         bushes_count = attrs["bushes_count"] || Array(bushes_positions).size
         gaps_count = attrs["gaps_count"] || attrs.dig("result_json", "gaps_count") || Array(gaps_positions).size
         rows_count = attrs["rows_count"] || attrs.dig("result_json", "shards_count")
+        row_sequences = attrs.dig("result_json", "row_sequences")
 
         {
           id: result.id,
@@ -146,6 +147,7 @@ module Api
           rows_count: rows_count.to_i,
           bushes_positions: Array(bushes_positions),
           gaps_positions: Array(gaps_positions),
+          row_sequences: Array(row_sequences),
           processing_progress: attrs.dig("result_json", "processing_progress"),
           shards_count: attrs.dig("result_json", "shards_count"),
           processed_shards: attrs.dig("result_json", "processed_shards"),
