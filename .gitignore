@@ -1,0 +1,55 @@
+# --- Monorepo root: backend (Rails), frontend (Vite), vineyardApp (Rails), cvService (Python) ---
+
+
+
+# Ruby / Rails
+**/vendor/bundle/
+**/.bundle/
+**/log/*
+**/tmp/*
+**/storage/*
+**/public/assets
+**/config/*.key
+**/app/assets/builds/*
+!**/.keep
+!**/log/.keep
+!**/tmp/.keep
+!**/tmp/pids/.keep
+!**/storage/.keep
+!**/tmp/storage/.keep
+!**/app/assets/builds/.keep
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/dist-ssr/
+*.local
+
+# Python / cvService
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/*.egg-info/
+**/.pytest_cache/
+
+# Модели CV часто большие — при необходимости закоммить вручную с git add -f
+*.onnx
+
+# БД локально
+**/*.sqlite3
+**/*.sqlite3-*
+
+# IDE / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+*.swp
+*.swo
+Thumbs.db
+
+# Windows NTFS alternate data streams (часто как отдельные пути *:Zone.Identifier)
+*Zone.Identifier
+:Zone.Identifier
+**/:Zone.Identifier
