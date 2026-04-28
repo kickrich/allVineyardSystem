@@ -75,6 +75,16 @@ class Video < ApplicationRecord
       processing_progress: processing_progress,
       shards_count: video_shards.count,
       processed_shards: video_shards.where(status: :completed).count,
+      shards: video_shards.order(:shard_index).map do |shard|
+        {
+          id: shard.id,
+          shard_index: shard.shard_index,
+          status: shard.status,
+          bushes_count: shard.bushes_count,
+          gaps_count: shard.gaps_count,
+          row_sequence: shard.row_sequence
+        }
+      end,
       statistics: {
         total_bushes: total_bushes_count,
         total_gaps: total_gaps_count,

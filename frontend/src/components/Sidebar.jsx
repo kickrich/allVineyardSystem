@@ -148,6 +148,26 @@ export const Sidebar = ({
     return { bushes, gaps };
   };
 
+  const buildRowsFromRowSequences = (result) => {
+    const rawRows = Array.isArray(result?.rowSequences) ? result.rowSequences : [];
+    if (!rawRows.length) return null;
+
+    const normalized = rawRows
+      .map((row) => {
+        if (!row || typeof row !== 'object') return null;
+        const rowIndex = Number(row.row_index ?? row.rowIndex ?? row.shard_index ?? row.shardIndex);
+        const sequence = Array.isArray(row.row_sequence ?? row.rowSequence)
+          ? (row.row_sequence ?? row.rowSequence).map((v) => String(v)).filter((v) => v === 'bush' || v === 'gap')
+          : [];
+        if (!Number.isFinite(rowIndex) || rowIndex <= 0 || !sequence.length) return null;
+        return { rowIndex, sequence };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.rowIndex - b.rowIndex);
+
+    return normalized.length ? normalized : null;
+  };
+
   const expandedSchemeResult = useMemo(
     () => aiResults.find((item) => Number(item?.missionId) === Number(expandedSchemeMissionId)) || null,
     [aiResults, expandedSchemeMissionId]
@@ -708,30 +728,40 @@ export const Sidebar = ({
                           </div>
                         );
                       }
-                      const rowsCount = Math.max(1, Number(result.rowsCount || 0) || 1);
+                      const sequenceRows = buildRowsFromRowSequences(result);
+                      const rowsCount = sequenceRows?.length
+                        ? sequenceRows.length
+                        : Math.max(1, Number(result.rowsCount || 0) || 1);
                       const rowHeight = 70;
                       const startY = 50;
                       const startX = 80;
                       const mapWidth = 1000;
                       const mapHeight = Math.max(380, startY + rowsCount * rowHeight + 35);
-                      const points = [
-                        ...bushes.map((p) => ({ ...p, kind: 'bush' })),
-                        ...gaps.map((p) => ({ ...p, kind: 'gap' })),
-                      ];
-                      let rows = Array.from({ length: rowsCount }, () => []);
-                      if (points.length) {
-                        const minY = Math.min(...points.map((p) => p.y));
-                        const maxY = Math.max(...points.map((p) => p.y));
-                        const spanY = Math.max(1e-9, maxY - minY);
-                        points.forEach((point) => {
-                          const rowIdx = Math.min(
-                            rowsCount - 1,
-                            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
-                          );
-                          rows[rowIdx].push(point);
-                        });
+                      let rows = [];
+                      if (sequenceRows?.length) {
+                        rows = sequenceRows.map((row) =>
+                          row.sequence.map((kind) => ({ kind }))
+                        );
+                      } else {
+                        const points = [
+                          ...bushes.map((p) => ({ ...p, kind: 'bush' })),
+                          ...gaps.map((p) => ({ ...p, kind: 'gap' })),
+                        ];
+                        rows = Array.from({ length: rowsCount }, () => []);
+                        if (points.length) {
+                          const minY = Math.min(...points.map((p) => p.y));
+                          const maxY = Math.max(...points.map((p) => p.y));
+                          const spanY = Math.max(1e-9, maxY - minY);
+                          points.forEach((point) => {
+                            const rowIdx = Math.min(
+                              rowsCount - 1,
+                              Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
+                            );
+                            rows[rowIdx].push(point);
+                          });
+                        }
+                        rows = rows.map((row) => row.sort((a, b) => a.x - b.x));
                       }
-                      rows = rows.map((row) => row.sort((a, b) => a.x - b.x));
                       const maxRowLength = Math.max(1, ...rows.map((r) => r.length));
                       const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
                       const renderedPoints = [];
@@ -826,28 +856,35 @@ export const Sidebar = ({
         ...bushes.map((p) => ({ ...p, kind: 'bush' })),
         ...gaps.map((p) => ({ ...p, kind: 'gap' })),
       ];
-      const rowsCount = Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
+      const sequenceRows = buildRowsFromRowSequences(expandedSchemeResult);
+      const rowsCount = sequenceRows?.length
+        ? sequenceRows.length
+        : Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
       const rowHeight = 70;
       const startY = 50;
       const startX = 80;
       const mapWidth = 1000;
       const mapHeight = Math.max(600, startY + rowsCount * rowHeight + 40);
 
-      let renderedRows = Array.from({ length: rowsCount }, () => []);
-      if (all.length) {
-        const minY = Math.min(...all.map((p) => p.y));
-        const maxY = Math.max(...all.map((p) => p.y));
-        const spanY = Math.max(1e-9, maxY - minY);
-        all.forEach((point) => {
-          const rowIdx = Math.min(
-            rowsCount - 1,
-            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
-          );
-          renderedRows[rowIdx].push(point);
-        });
+      let renderedRows = [];
+      if (sequenceRows?.length) {
+        renderedRows = sequenceRows.map((row) => row.sequence.map((kind) => ({ kind })));
+      } else {
+        renderedRows = Array.from({ length: rowsCount }, () => []);
+        if (all.length) {
+          const minY = Math.min(...all.map((p) => p.y));
+          const maxY = Math.max(...all.map((p) => p.y));
+          const spanY = Math.max(1e-9, maxY - minY);
+          all.forEach((point) => {
+            const rowIdx = Math.min(
+              rowsCount - 1,
+              Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
+            );
+            renderedRows[rowIdx].push(point);
+          });
+        }
+        renderedRows = renderedRows.map((row) => row.sort((a, b) => a.x - b.x));
       }
-
-      renderedRows = renderedRows.map((row) => row.sort((a, b) => a.x - b.x));
       const maxRowLength = Math.max(1, ...renderedRows.map((r) => r.length));
       const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
 

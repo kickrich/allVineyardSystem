@@ -34,6 +34,7 @@ module Api
         shards_count = params[:shards_count].presence || stats[:shards_count]
         bushes_positions = extract_positions(stats, top_level, :bushes_positions, :bushesPositions, :bushes_points, :bushesPoints)
         gaps_positions = extract_positions(stats, top_level, :gaps_positions, :gapsPositions, :gaps_points, :gapsPoints)
+        row_sequences = extract_row_sequences(top_level[:shards] || top_level["shards"])
 
         ai_result.assign_attributes(
           bushes_count: stats[:total_bushes].to_i,
@@ -42,6 +43,7 @@ module Api
             gaps_count: stats[:total_gaps].to_i,
             bushes_positions: bushes_positions,
             gaps_positions: gaps_positions,
+            row_sequences: row_sequences,
             processing_progress: params[:processing_progress],
             shards_count: shards_count,
             processed_shards: processed_shards
@@ -111,6 +113,39 @@ module Api
             []
           end
         arr.filter_map { |item| normalize_position_item(item) }
+      end
+
+      def extract_row_sequences(shards_raw)
+        shards =
+          case shards_raw
+          when Array
+            shards_raw
+          when ActionController::Parameters
+            shards_raw.to_unsafe_h.values
+          when Hash
+            shards_raw.values
+          else
+            []
+          end
+
+        shards.filter_map do |item|
+          h =
+            case item
+            when ActionController::Parameters
+              item.to_unsafe_h.with_indifferent_access
+            when Hash
+              item.with_indifferent_access
+            else
+              nil
+            end
+          next nil if h.nil?
+
+          shard_index = (h[:shard_index] || h[:row_index]).to_i
+          row_sequence = Array(h[:row_sequence]).map(&:to_s).select { |v| v == "bush" || v == "gap" }
+          next nil if shard_index <= 0 || row_sequence.empty?
+
+          { "row_index" => shard_index, "row_sequence" => row_sequence }
+        end.sort_by { |row| row["row_index"] }
       end
 
       def normalize_position_item(item)
