@@ -233,19 +233,23 @@ export const Sidebar = ({
     <div className="w-full lg:w-80 bg-gray-800/95 lg:bg-gray-800/85 border border-gray-700/70 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full">
       <div className="bg-gradient-to-r from-gray-800 to-gray-900 p-4 border-b border-gray-700/80">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-xl font-bold text-white">Панель управления</h2>
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Закрыть"
-              className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-gray-700"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
+          <div className="flex-1 flex justify-center items-center relative">
+            <h2 className="text-xl font-bold text-white mx-auto">Панель управления</h2>
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Закрыть"
+                className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 absolute right-0"
+                style={{ top: 0, bottom: 0 }}
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+     
         </div>
       </div>
       <div className="flex border-b border-gray-700">
