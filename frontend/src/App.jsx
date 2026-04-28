@@ -938,7 +938,7 @@ function App() {
         }
 
         try {
-          const logs = await fetchDroneLogsFromBackend({ limit: 150 });
+          const logs = await fetchDroneLogsFromBackend();
           if (!cancelled && Array.isArray(logs) && logs.length > 0) {
             setGlobalMissionLog(
               logs.map((log, idx) => ({
@@ -955,7 +955,6 @@ function App() {
               prev.map((drone) => {
                 const perDrone = logs
                   .filter((log) => Number(log?.drone_id) === Number(drone.id))
-                  .slice(0, 20)
                   .map((log, idx) => ({
                     id: Number(log?.id) || Date.now() + idx,
                     timestamp: log?.logged_at || new Date().toISOString(),
@@ -1270,7 +1269,15 @@ function App() {
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
       // Плавная анимация фокуса делается внутри YandexMap (как у выбора зон).
-      const targetZoom = mapZoom < 16 ? 16 : mapZoom;
+      const DRONE_FOCUS_MIN_ZOOM = 18;
+      const DRONE_FOCUS_MAX_ZOOM = 19;
+      const targetZoom = Math.min(
+        DRONE_FOCUS_MAX_ZOOM,
+        Math.max(
+          DRONE_FOCUS_MIN_ZOOM,
+          Number.isFinite(mapZoom) ? mapZoom : DRONE_FOCUS_MIN_ZOOM
+        )
+      );
       setDroneFocusRequest({
         center: [lat, lng],
         zoom: targetZoom,
@@ -1625,7 +1632,7 @@ function App() {
         if (d.id !== droneId) return d;
         return {
           ...d,
-          flightLog: [logEntry, ...d.flightLog].slice(0, 20)
+          flightLog: [logEntry, ...d.flightLog]
         };
       })
     );
@@ -1661,7 +1668,7 @@ function App() {
       data: safeData
     };
 
-    setGlobalMissionLog(prev => [globalLogEntry, ...prev].slice(0, 100));
+    setGlobalMissionLog(prev => [globalLogEntry, ...prev]);
     if (authReady) {
       void createDroneLogInBackend({
         droneId: droneId ?? null,
@@ -1691,7 +1698,7 @@ function App() {
       message,
       data: safeData,
     };
-    setGlobalMissionLog((prev) => [zoneLogEntry, ...prev].slice(0, 100));
+    setGlobalMissionLog((prev) => [zoneLogEntry, ...prev]);
   }, []);
 
   const aiResultsForSidebar = useMemo(() => {

@@ -4,11 +4,8 @@ module Api
       def index
         logs = @current_user.drone_logs.includes(:drone).recent_first
         logs = logs.where(drone_id: params[:drone_id]) if params[:drone_id].present?
-        limit = params[:limit].to_i
-        limit = 100 if limit <= 0
-        limit = [limit, 500].min
 
-        render_data(logs.limit(limit).map { |log| serialize_log(log) })
+        render_data(logs.map { |log| serialize_log(log) })
       end
 
       def create

@@ -364,10 +364,10 @@ export async function fetchMissionsFromBackend() {
   return Array.isArray(missions) ? missions : [];
 }
 
-export async function fetchDroneLogsFromBackend({ limit = 100, droneId = null } = {}) {
+export async function fetchDroneLogsFromBackend({ limit = null, droneId = null } = {}) {
   const query = new URLSearchParams();
   if (Number.isFinite(Number(limit)) && Number(limit) > 0) {
-    query.set('limit', String(Math.min(500, Math.max(1, Number(limit)))));
+    query.set('limit', String(Math.max(1, Number(limit))));
   }
   if (droneId != null) query.set('drone_id', String(droneId));
   const response = await apiGet(`/api/v1/drone_logs?${query.toString()}`);
