@@ -11,6 +11,7 @@ export function ZoneMapMenu({
   showEmptyMenuDuringTour = false,
 }) {
   const [open, setOpen] = useState(false);
+  const [confirmDeleteZoneId, setConfirmDeleteZoneId] = useState(null);
   const rootRef = useRef(null);
   const hasZones = Array.isArray(zones) && zones.length > 0;
   const showEmptyPlaceholder = !hasZones && showEmptyMenuDuringTour;
@@ -27,7 +28,21 @@ export function ZoneMapMenu({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
+  useEffect(() => {
+    if (!confirmDeleteZoneId) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setConfirmDeleteZoneId(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [confirmDeleteZoneId]);
+
   if (!hasZones && !showEmptyMenuDuringTour) return null;
+
+  const zoneForConfirmDelete =
+    confirmDeleteZoneId != null
+      ? zones?.find((z) => String(z?.id) === String(confirmDeleteZoneId)) ?? null
+      : null;
 
   return (
     <div ref={rootRef} data-onboarding="zone-map-menu" className={`absolute top-2 left-2 z-[125] ${className}`}>
@@ -106,7 +121,7 @@ export function ZoneMapMenu({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDeleteZone?.(z.id);
+                        setConfirmDeleteZoneId(z.id);
                       }}
                       disabled={deleteDisabled}
                       aria-label={`Удалить зону ${z.name || `ID ${z.id}`}`}
@@ -130,6 +145,59 @@ export function ZoneMapMenu({
           </ul>
         )}
       </div>
+      {confirmDeleteZoneId != null && (
+        <div
+          className="fixed inset-0 z-[1300] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Подтверждение удаления зоны"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setConfirmDeleteZoneId(null);
+          }}
+        >
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px]" />
+          <div className="relative w-full max-w-md rounded-2xl border border-gray-600 bg-gray-950/95 p-4 text-white shadow-2xl">
+            <h3 className="text-lg font-semibold">Удалить зону?</h3>
+            <p className="mt-2 text-sm text-gray-300">
+              Вы действительно хотите удалить{' '}
+              <span className="font-semibold text-white">
+                {zoneForConfirmDelete?.name || `зону ID ${confirmDeleteZoneId}`}
+              </span>
+              ?
+            </p>
+            <div className="mt-3 rounded-xl border border-red-500/40 bg-red-950/25 px-3 py-2 text-xs text-red-100">
+              Это действие нельзя отменить. Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены
+              автоматически.
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteZoneId(null)}
+                className="h-10 rounded-lg bg-gray-800 px-4 text-sm font-medium text-gray-100 hover:bg-gray-700"
+              >
+                Нет
+              </button>
+              <button
+                type="button"
+                disabled={deleteBusy}
+                onClick={() => {
+                  const zid = confirmDeleteZoneId;
+                  setConfirmDeleteZoneId(null);
+                  setOpen(false);
+                  onDeleteZone?.(zid);
+                }}
+                className={`h-10 rounded-lg px-4 text-sm font-semibold ${
+                  deleteBusy
+                    ? 'cursor-not-allowed bg-red-900/60 text-red-200 opacity-70'
+                    : 'bg-red-700 text-red-50 hover:bg-red-600'
+                }`}
+              >
+                Да, удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

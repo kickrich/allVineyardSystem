@@ -22,6 +22,9 @@ const DRONE_HOVER_PERIOD_MS = 2000;
 const DRONE_MOTION_THRESHOLD_M = 0.35;
 const DRONE_MOTION_HOVER_RESUME_MS = 550;
 
+const OSM_OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const BUILDINGS_REFRESH_DEBOUNCE_MS = 450;
+
 function easeOutCubic(t) {
   return 1 - (1 - t) ** 3;
 }
@@ -101,6 +104,191 @@ function rectCornersToBoundary(cornerA, cornerB) {
     [minLng, maxLat],
     [minLng, minLat],
   ];
+}
+
+function computeBoundaryBbox(boundary) {
+  if (!Array.isArray(boundary) || boundary.length < 4) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  boundary.forEach(([lng, lat]) => {
+    const la = Number(lat);
+    const ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+    minLat = Math.min(minLat, la);
+    maxLat = Math.max(maxLat, la);
+    minLng = Math.min(minLng, ln);
+    maxLng = Math.max(maxLng, ln);
+  });
+  if (![minLat, maxLat, minLng, maxLng].every(Number.isFinite)) return null;
+  if (minLat === maxLat || minLng === maxLng) return null;
+  return { south: minLat, west: minLng, north: maxLat, east: maxLng };
+}
+
+function metersToLat(m) {
+  return m / 111_320;
+}
+
+function metersToLng(m, atLatDeg) {
+  const latRad = (Number(atLatDeg) * Math.PI) / 180;
+  const cosLat = Math.cos(latRad) || 1e-6;
+  return m / (111_320 * cosLat);
+}
+
+function inflateBbox(bbox, padM = 40) {
+  if (!bbox) return null;
+  const latMid = (bbox.south + bbox.north) / 2;
+  const dLat = metersToLat(padM);
+  const dLng = metersToLng(padM, latMid);
+  return {
+    south: bbox.south - dLat,
+    west: bbox.west - dLng,
+    north: bbox.north + dLat,
+    east: bbox.east + dLng,
+  };
+}
+
+function pointInRing(point, ring) {
+  if (!point || !Array.isArray(ring) || ring.length < 3) return false;
+  const x = Number(point.lng);
+  const y = Number(point.lat);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const yi = Number(ring[i]?.[0]);
+    const xi = Number(ring[i]?.[1]);
+    const yj = Number(ring[j]?.[0]);
+    const xj = Number(ring[j]?.[1]);
+    if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+    const intersect =
+      (yi > y) !== (yj > y) &&
+      x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function orientation(ax, ay, bx, by, cx, cy) {
+  const v = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
+  if (Math.abs(v) < 1e-12) return 0;
+  return v > 0 ? 1 : 2;
+}
+
+function onSegment(ax, ay, bx, by, cx, cy) {
+  return (
+    Math.min(ax, bx) - 1e-12 <= cx &&
+    cx <= Math.max(ax, bx) + 1e-12 &&
+    Math.min(ay, by) - 1e-12 <= cy &&
+    cy <= Math.max(ay, by) + 1e-12
+  );
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const o1 = orientation(a.x, a.y, b.x, b.y, c.x, c.y);
+  const o2 = orientation(a.x, a.y, b.x, b.y, d.x, d.y);
+  const o3 = orientation(c.x, c.y, d.x, d.y, a.x, a.y);
+  const o4 = orientation(c.x, c.y, d.x, d.y, b.x, b.y);
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(a.x, a.y, b.x, b.y, c.x, c.y)) return true;
+  if (o2 === 0 && onSegment(a.x, a.y, b.x, b.y, d.x, d.y)) return true;
+  if (o3 === 0 && onSegment(c.x, c.y, d.x, d.y, a.x, a.y)) return true;
+  if (o4 === 0 && onSegment(c.x, c.y, d.x, d.y, b.x, b.y)) return true;
+  return false;
+}
+
+function segmentIntersectsRing(pointA, pointB, ring) {
+  if (!pointA || !pointB || !Array.isArray(ring) || ring.length < 3) return false;
+  const a = { x: Number(pointA.lng), y: Number(pointA.lat) };
+  const b = { x: Number(pointB.lng), y: Number(pointB.lat) };
+  if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return false;
+
+  if (pointInRing(pointA, ring) || pointInRing(pointB, ring)) return true;
+
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const p0 = ring[i];
+    const p1 = ring[i + 1];
+    const c = { x: Number(p0?.[1]), y: Number(p0?.[0]) };
+    const d = { x: Number(p1?.[1]), y: Number(p1?.[0]) };
+    if (![c.x, c.y, d.x, d.y].every(Number.isFinite)) continue;
+    if (segmentsIntersect(a, b, c, d)) return true;
+  }
+  return false;
+}
+
+function bboxReject(point, bbox) {
+  if (!point || !bbox) return true;
+  const lat = Number(point.lat);
+  const lng = Number(point.lng);
+  if (![lat, lng].every(Number.isFinite)) return true;
+  return lat < bbox.south || lat > bbox.north || lng < bbox.west || lng > bbox.east;
+}
+
+function ringBbox(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  ring.forEach(([lat, lng]) => {
+    const la = Number(lat);
+    const ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+    minLat = Math.min(minLat, la);
+    maxLat = Math.max(maxLat, la);
+    minLng = Math.min(minLng, ln);
+    maxLng = Math.max(maxLng, ln);
+  });
+  if (![minLat, maxLat, minLng, maxLng].every(Number.isFinite)) return null;
+  return { south: minLat, west: minLng, north: maxLat, east: maxLng };
+}
+
+async function fetchBuildingsFromOverpass(bbox, signal) {
+  const query = `
+[out:json][timeout:25];
+(
+  way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+);
+out body;
+>;
+out skel qt;
+`.trim();
+
+  const res = await fetch(OSM_OVERPASS_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: `data=${encodeURIComponent(query)}`,
+    signal,
+  });
+  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+  const data = await res.json();
+  const elements = Array.isArray(data?.elements) ? data.elements : [];
+  const nodes = new Map();
+  const ways = [];
+  elements.forEach((el) => {
+    if (el?.type === 'node' && el?.id != null) {
+      const lat = Number(el.lat);
+      const lon = Number(el.lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) nodes.set(el.id, [lat, lon]);
+    } else if (el?.type === 'way' && Array.isArray(el?.nodes)) {
+      ways.push(el);
+    }
+  });
+  const polygons = [];
+  ways.forEach((w) => {
+    const pts = w.nodes.map((nid) => nodes.get(nid)).filter(Boolean);
+    if (pts.length < 4) return;
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    const closed = first && last && first[0] === last[0] && first[1] === last[1];
+    const ring = closed ? pts : [...pts, [...pts[0]]];
+    if (ring.length < 4) return;
+    const bbox = ringBbox(ring);
+    if (!bbox) return;
+    polygons.push({ ring, bbox });
+  });
+  return polygons;
 }
 
 function scaleRingAroundCenter(ring, factor = 1.01) {
@@ -429,6 +617,10 @@ export function YandexMap({
   const mapInstanceRef = useRef(null);
   const mapSizeRafRef = useRef(null);
   const lastMapSizeRef = useRef({ w: 0, h: 0 });
+  const [buildings, setBuildings] = useState([]);
+  const buildingsAbortRef = useRef(null);
+  const buildingsDebounceRef = useRef(null);
+  const [buildingsNotice, setBuildingsNotice] = useState(null);
   const droneMarkersRef = useRef({});
   const dronePlaceAnimRafRef = useRef({});
   const dronePlaceAnimActiveRef = useRef(new Set());
@@ -541,6 +733,51 @@ export function YandexMap({
 
     document.head.appendChild(script);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (buildingsDebounceRef.current) {
+      clearTimeout(buildingsDebounceRef.current);
+      buildingsDebounceRef.current = null;
+    }
+    if (buildingsAbortRef.current) {
+      try { buildingsAbortRef.current.abort(); } catch {}
+      buildingsAbortRef.current = null;
+    }
+
+    const bboxRaw = computeBoundaryBbox(activeBoundary);
+    if (!bboxRaw) {
+      setBuildings([]);
+      return;
+    }
+    const bbox = inflateBbox(bboxRaw, 40);
+
+    buildingsDebounceRef.current = setTimeout(() => {
+      const ac = new AbortController();
+      buildingsAbortRef.current = ac;
+      fetchBuildingsFromOverpass(bbox, ac.signal)
+        .then((polys) => setBuildings(Array.isArray(polys) ? polys : []))
+        .catch((e) => {
+          if (String(e?.name) === 'AbortError') return;
+          console.warn('Overpass buildings fetch failed:', e?.message ?? e);
+          setBuildings([]);
+        })
+        .finally(() => {
+          buildingsAbortRef.current = null;
+        });
+    }, BUILDINGS_REFRESH_DEBOUNCE_MS);
+
+    return () => {
+      if (buildingsDebounceRef.current) {
+        clearTimeout(buildingsDebounceRef.current);
+        buildingsDebounceRef.current = null;
+      }
+      if (buildingsAbortRef.current) {
+        try { buildingsAbortRef.current.abort(); } catch {}
+        buildingsAbortRef.current = null;
+      }
+    };
+  }, [activeBoundary]);
 
   const cancelDroneMarkerAnim = (droneId) => {
     const id = String(droneId);
@@ -1854,6 +2091,44 @@ export function YandexMap({
       const coords = e.get('coords');
       if (!Array.isArray(coords) || coords.length < 2) return;
       const clickPoint = { lat: coords[0], lng: coords[1] };
+
+      const rejectByBuildings = (prevPoint) => {
+        if (!Array.isArray(buildings) || buildings.length === 0) return false;
+        for (const b of buildings) {
+          if (!b?.ring || !b?.bbox) continue;
+          // point test (cheap bbox reject first)
+          if (!bboxReject(clickPoint, b.bbox) && pointInRing(clickPoint, b.ring)) return true;
+          if (prevPoint) {
+            // segment bbox reject
+            const minLat = Math.min(prevPoint.lat, clickPoint.lat);
+            const maxLat = Math.max(prevPoint.lat, clickPoint.lat);
+            const minLng = Math.min(prevPoint.lng, clickPoint.lng);
+            const maxLng = Math.max(prevPoint.lng, clickPoint.lng);
+            if (
+              maxLat < b.bbox.south ||
+              minLat > b.bbox.north ||
+              maxLng < b.bbox.west ||
+              minLng > b.bbox.east
+            ) {
+              continue;
+            }
+            if (segmentIntersectsRing(prevPoint, clickPoint, b.ring)) return true;
+          }
+        }
+        return false;
+      };
+
+      const showBuildingsNotice = (text) => {
+        setBuildingsNotice(text);
+        window.setTimeout(() => {
+          try {
+            setBuildingsNotice((prev) => (prev === text ? null : prev));
+          } catch {
+            /* ignore */
+          }
+        }, 1400);
+      };
+
       if (routeEditMode) {
         const path = Array.isArray(routeEditPathRef.current) ? routeEditPathRef.current : [];
         if (routeShiftSelectionMode && path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
@@ -1877,12 +2152,25 @@ export function YandexMap({
           }
           return;
         }
+        const last = path.length > 0 ? path[path.length - 1] : null;
+        const prev =
+          Array.isArray(last) && last.length >= 2
+            ? { lat: Number(last[0]), lng: Number(last[1]) }
+            : null;
+        if (rejectByBuildings(prev)) {
+          showBuildingsNotice('Нельзя прокладывать маршрут через здания (OSM).');
+          return;
+        }
         if (typeof onMapClick === 'function') {
           onMapClick(clickPoint);
         }
         return;
       }
       if (placementMode) {
+        if (rejectByBuildings(null)) {
+          showBuildingsNotice('Нельзя размещать дрона в здании (OSM).');
+          return;
+        }
         if (typeof onMapClick === 'function') {
           onMapClick(clickPoint);
         }
@@ -1956,6 +2244,7 @@ export function YandexMap({
     routeShiftSelectionMode,
     placementMode,
     onRouteShiftSegmentToggle,
+    buildings,
   ]);
 
   useEffect(() => {
@@ -2363,6 +2652,11 @@ export function YandexMap({
           cursor: cursorAddPoint ? 'crosshair' : 'grab',
         }}
       />
+      {buildingsNotice && (
+        <div className="pointer-events-none absolute top-3 left-1/2 z-[210] w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-500/60 bg-amber-950/90 px-3 py-2 text-sm text-amber-100 shadow-xl backdrop-blur-sm">
+          {buildingsNotice}
+        </div>
+      )}
       {showRouteShiftUi && (
         <>
           <div className="pointer-events-auto absolute bottom-24 right-3 z-[165] flex max-w-[min(92vw,360px)] items-center gap-2 sm:bottom-20">

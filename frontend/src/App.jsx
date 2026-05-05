@@ -70,6 +70,10 @@ const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
 const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024; // >= 1MB (минимум в backend)
 const AI_RESULTS_POLL_INTERVAL_MS = 5000;
 
+function normalizeConfirmText(v, fallback) {
+  return typeof v === 'string' && v.trim() ? v.trim() : fallback;
+}
+
 function hasStoredApiToken() {
   if (typeof window === 'undefined') return false;
   const t = localStorage.getItem('api_token');
@@ -431,6 +435,39 @@ function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [exitingToTemplates, setExitingToTemplates] = useState(false);
   const [missionTemplates, setMissionTemplates] = useState([]);
+
+  const [confirmUi, setConfirmUi] = useState(null);
+  const confirmResolveRef = useRef(null);
+  const requestConfirm = useCallback((opts) => {
+    return new Promise((resolve) => {
+      confirmResolveRef.current = resolve;
+      setConfirmUi({
+        title: normalizeConfirmText(opts?.title, 'Подтверждение'),
+        message: normalizeConfirmText(opts?.message, 'Вы уверены?'),
+        warning: typeof opts?.warning === 'string' && opts.warning.trim() ? opts.warning.trim() : null,
+        confirmText: normalizeConfirmText(opts?.confirmText, 'Да'),
+        cancelText: normalizeConfirmText(opts?.cancelText, 'Нет'),
+        tone: opts?.tone === 'danger' ? 'danger' : 'default',
+      });
+    });
+  }, []);
+
+  const resolveConfirm = useCallback((ok) => {
+    const resolve = confirmResolveRef.current;
+    confirmResolveRef.current = null;
+    setConfirmUi(null);
+    if (typeof resolve === 'function') resolve(Boolean(ok));
+  }, []);
+
+  useEffect(() => {
+    if (!confirmUi) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') resolveConfirm(false);
+      if (e.key === 'Enter') resolveConfirm(true);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [confirmUi, resolveConfirm]);
 
   const [templateEditMode, setTemplateEditMode] = useState(null);
   const [templateDraftPath, setTemplateDraftPath] = useState([]);
@@ -2012,7 +2049,13 @@ function App() {
 
   const deleteAiResultForMission = useCallback(async (missionId) => {
     if (missionId == null) return;
-    const ok = window.confirm(`Удалить результат миссии #${missionId}?`);
+    const ok = await requestConfirm({
+      title: 'Удаление результата миссии',
+      message: `Удалить результат миссии #${missionId}?`,
+      confirmText: 'Да, удалить',
+      cancelText: 'Нет',
+      tone: 'danger',
+    });
     if (!ok) return;
     try {
       await deleteMissionAiResultInBackend(missionId);
@@ -2041,10 +2084,16 @@ function App() {
     } catch (e) {
       window.alert(`Не удалось удалить результат миссии #${missionId}: ${String(e?.message ?? e)}`);
     }
-  }, [aiCloudNotice]);
+  }, [aiCloudNotice, requestConfirm]);
 
   const deleteAllAiResults = useCallback(async () => {
-    const ok = window.confirm('Удалить результаты всех миссий?');
+    const ok = await requestConfirm({
+      title: 'Удаление результатов',
+      message: 'Удалить результаты всех миссий?',
+      confirmText: 'Да, удалить',
+      cancelText: 'Нет',
+      tone: 'danger',
+    });
     if (!ok) return;
     try {
       await deleteAllMissionAiResultsInBackend();
@@ -2056,7 +2105,7 @@ function App() {
     } catch (e) {
       window.alert(`Не удалось удалить все результаты: ${String(e?.message ?? e)}`);
     }
-  }, []);
+  }, [requestConfirm]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -3039,10 +3088,15 @@ function App() {
     }
     const targetZone = backendZones.find((z) => z.id === activeZoneId);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${activeZoneId}`;
-    const confirmed = window.confirm(
-      `Удалить зону ${title}? Это действие нельзя отменить.\n` +
-      'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.'
-    );
+    const confirmed = await requestConfirm({
+      title: 'Удаление зоны',
+      message:
+        `Удалить зону ${title}? Это действие нельзя отменить.`,
+      warning: 'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.',
+      confirmText: 'Да, удалить',
+      cancelText: 'Нет',
+      tone: 'danger',
+    });
     if (!confirmed) return;
 
     setRectZoneBusy(true);
@@ -3094,7 +3148,7 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [activeZoneId, backendZones, addToZoneLog, templateUsageByZoneId]);
+  }, [activeZoneId, backendZones, addToZoneLog, templateUsageByZoneId, requestConfirm]);
 
   const handleDeleteZoneFromMenu = useCallback(async (zoneId) => {
     const zoneIdToDelete = Number(zoneId);
@@ -3114,10 +3168,15 @@ function App() {
     }
     const targetZone = backendZones.find((z) => z.id === zoneIdToDelete);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${zoneIdToDelete}`;
-    const confirmed = window.confirm(
-      `Удалить зону ${title}? Это действие нельзя отменить.\n` +
-      'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.'
-    );
+    const confirmed = await requestConfirm({
+      title: 'Удаление зоны',
+      message:
+        `Удалить зону ${title}? Это действие нельзя отменить.`,
+      warning: 'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.',
+      confirmText: 'Да, удалить',
+      cancelText: 'Нет',
+      tone: 'danger',
+    });
     if (!confirmed) return;
 
     setRectZoneBusy(true);
@@ -3175,7 +3234,7 @@ function App() {
     } finally {
       setRectZoneBusy(false);
     }
-  }, [activeZoneId, editingZoneId, backendZones, addToZoneLog, templateUsageByZoneId]);
+  }, [activeZoneId, editingZoneId, backendZones, addToZoneLog, templateUsageByZoneId, requestConfirm]);
 
   const handleDeleteTemplateFromMenu = useCallback(async (templateId, mode = 'route_only') => {
     const template = missionTemplates.find((t) => t.id === templateId);
@@ -3187,9 +3246,15 @@ function App() {
     const otherCount = Math.max(0, sameZoneTemplateIds.length - 1);
 
     if (mode === 'route_and_zone' && otherCount > 0) {
-      const cascadeOk = window.confirm(
-        `ВНИМАНИЕ: вместе с выбранным шаблоном будут удалены ещё ${otherCount} шаблон(а/ов), так как они находятся в той же зоне.\nПродолжить?`
-      );
+      const cascadeOk = await requestConfirm({
+        title: 'Внимание: каскадное удаление',
+        message:
+          `Вместе с выбранным шаблоном будут удалены ещё ${otherCount} шаблон(а/ов), ` +
+          'так как они находятся в той же зоне.\nПродолжить?',
+        confirmText: 'Да',
+        cancelText: 'Нет',
+        tone: 'danger',
+      });
       if (!cascadeOk) return;
     }
 
@@ -3197,11 +3262,16 @@ function App() {
       const zoneId = templateZoneId;
       const zone = backendZones.find((z) => String(z.id) === String(zoneId));
       const zoneTitle = zone?.name ? `«${zone.name}»` : `ID ${zoneId}`;
-      const ok = window.confirm(
-        otherCount > 0
-          ? `Удалить шаблон «${template.name || 'Без названия'}», связанную зону ${zoneTitle} и ещё ${otherCount} шаблон(а/ов) этой зоны?\nЭто действие нельзя отменить.`
-          : `Удалить шаблон «${template.name || 'Без названия'}» и связанную зону ${zoneTitle}?\nЭто действие нельзя отменить.`
-      );
+      const ok = await requestConfirm({
+        title: 'Удаление шаблона и зоны',
+        message:
+          otherCount > 0
+            ? `Удалить шаблон «${template.name || 'Без названия'}», связанную зону ${zoneTitle} и ещё ${otherCount} шаблон(а/ов) этой зоны?\nЭто действие нельзя отменить.`
+            : `Удалить шаблон «${template.name || 'Без названия'}» и связанную зону ${zoneTitle}?\nЭто действие нельзя отменить.`,
+        confirmText: 'Да, удалить',
+        cancelText: 'Нет',
+        tone: 'danger',
+      });
       if (!ok) return;
       try {
         await deleteZoneInBackend(zoneId);
@@ -3217,9 +3287,13 @@ function App() {
         return;
       }
     } else {
-      const ok = window.confirm(
-        `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`
-      );
+      const ok = await requestConfirm({
+        title: 'Удаление шаблона',
+        message: `Удалить только шаблон «${template.name || 'Без названия'}»?\nМаршрут будет удалён из шаблонов, зоны останутся.`,
+        confirmText: 'Да, удалить',
+        cancelText: 'Нет',
+        tone: 'danger',
+      });
       if (!ok) return;
     }
 
@@ -3234,7 +3308,7 @@ function App() {
       setZoneKmlMessage(String(err?.message ?? err));
       setZoneKmlIsError(true);
     }
-  }, [missionTemplates, backendZones, reloadMissionTemplates]);
+  }, [missionTemplates, backendZones, reloadMissionTemplates, requestConfirm]);
 
   const templateCascadeCountById = useMemo(() => {
     const map = {};
@@ -3502,6 +3576,48 @@ function App() {
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
           onClick={() => { setSidebarOpen(false); setParkingOpen(false); }}
         />
+      )}
+      {confirmUi && (
+        <div
+          className="fixed inset-0 z-[1400] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={confirmUi.title}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) resolveConfirm(false);
+          }}
+        >
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px]" />
+          <div className="relative w-full max-w-md rounded-2xl border border-gray-600 bg-gray-950/95 p-4 text-white shadow-2xl">
+            <h3 className="text-lg font-semibold">{confirmUi.title}</h3>
+            <p className="mt-2 whitespace-pre-line text-sm text-gray-300">{confirmUi.message}</p>
+            {confirmUi.warning && (
+              <div className="mt-3 rounded-xl border border-red-500/40 bg-red-950/25 px-3 py-2 text-xs text-red-100">
+                {confirmUi.warning}
+              </div>
+            )}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => resolveConfirm(false)}
+                className="h-10 rounded-lg bg-gray-800 px-4 text-sm font-medium text-gray-100 hover:bg-gray-700"
+              >
+                {confirmUi.cancelText}
+              </button>
+              <button
+                type="button"
+                onClick={() => resolveConfirm(true)}
+                className={`h-10 rounded-lg px-4 text-sm font-semibold ${
+                  confirmUi.tone === 'danger'
+                    ? 'bg-red-700 text-red-50 hover:bg-red-600'
+                    : 'bg-emerald-700 text-emerald-50 hover:bg-emerald-600'
+                }`}
+              >
+                {confirmUi.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {authUserLabel && !isTemplateCreationMode && (
         <div className="fixed top-2 right-2 sm:top-3 sm:right-3 z-[1200]">
