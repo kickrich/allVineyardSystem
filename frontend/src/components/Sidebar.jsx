@@ -118,9 +118,14 @@ export const Sidebar = ({
   const [selectedAiMissionId, setSelectedAiMissionId] = useState(null);
   const [expandedSchemeMissionId, setExpandedSchemeMissionId] = useState(null);
   const expandedSvgRef = useRef(null);
+  const expandedCanvasRef = useRef(null);
+  const expandedCanvasWrapRef = useRef(null);
   const [expandedViewBox, setExpandedViewBox] = useState({ x: 0, y: 0, width: 1000, height: 600 });
   const [isExpandedPanning, setIsExpandedPanning] = useState(false);
   const [expandedPanStart, setExpandedPanStart] = useState(null);
+  const expandedPanRafRef = useRef(null);
+  const expandedPanLatestRef = useRef(null);
+  const expandedDrawRafRef = useRef(null);
   const atMissionStart =
     typeof isDroneAtMissionStart === 'function' ? isDroneAtMissionStart(selectedDrone) : true;
 
@@ -173,6 +178,207 @@ export const Sidebar = ({
     [aiResults, expandedSchemeMissionId]
   );
 
+  const expandedSchemeLayout = useMemo(() => {
+    if (!expandedSchemeResult) return null;
+    const { bushes, gaps } = buildMissionSchemePoints(expandedSchemeResult);
+    const all = [
+      ...bushes.map((p) => ({ ...p, kind: 'bush' })),
+      ...gaps.map((p) => ({ ...p, kind: 'gap' })),
+    ];
+    const sequenceRows = buildRowsFromRowSequences(expandedSchemeResult);
+    const rowsCount = sequenceRows?.length
+      ? sequenceRows.length
+      : Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
+    const rowHeight = 70;
+    const startY = 50;
+    const startX = 80;
+    const mapWidth = 1000;
+    const mapHeight = Math.max(600, startY + rowsCount * rowHeight + 40);
+
+    let renderedRows = [];
+    if (sequenceRows?.length) {
+      renderedRows = sequenceRows.map((row) => row.sequence.map((kind) => ({ kind })));
+    } else {
+      renderedRows = Array.from({ length: rowsCount }, () => []);
+      if (all.length) {
+        const minY = Math.min(...all.map((p) => p.y));
+        const maxY = Math.max(...all.map((p) => p.y));
+        const spanY = Math.max(1e-9, maxY - minY);
+        all.forEach((point) => {
+          const rowIdx = Math.min(
+            rowsCount - 1,
+            Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
+          );
+          renderedRows[rowIdx].push(point);
+        });
+      }
+      renderedRows = renderedRows.map((row) => row.sort((a, b) => a.x - b.x));
+    }
+    const maxRowLength = Math.max(1, ...renderedRows.map((r) => r.length));
+    const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
+
+    const renderedPoints = [];
+    renderedRows.forEach((row, rowIdx) => {
+      row.forEach((point, pointIdx) => {
+        renderedPoints.push({
+          x: startX + pointIdx * bushSpacing,
+          y: startY + rowIdx * rowHeight + 5,
+          kind: point.kind,
+          row: rowIdx + 1,
+          pos: pointIdx + 1,
+        });
+      });
+    });
+
+    const markerRadius = renderedPoints.length > 2500 ? 6 : renderedPoints.length > 1200 ? 8 : 10;
+    const markerOpacity = renderedPoints.length > 2500 ? 0.7 : 0.85;
+
+    return {
+      rowsCount,
+      rowHeight,
+      startY,
+      startX,
+      mapWidth,
+      mapHeight,
+      renderedPoints,
+      markerRadius,
+      markerOpacity,
+    };
+  }, [expandedSchemeResult]);
+
+  useEffect(() => {
+    if (!expandedSchemeLayout) return;
+    if (!expandedSchemeMissionId) return;
+    if (!expandedCanvasRef.current || !expandedCanvasWrapRef.current) return;
+
+    const canvas = expandedCanvasRef.current;
+    const wrap = expandedCanvasWrapRef.current;
+
+    const draw = () => {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const cssW = Math.max(1, wrap.clientWidth || 1);
+      const cssH = Math.max(1, wrap.clientHeight || 1);
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+      const nextW = Math.floor(cssW * dpr);
+      const nextH = Math.floor(cssH * dpr);
+      if (canvas.width !== nextW) canvas.width = nextW;
+      if (canvas.height !== nextH) canvas.height = nextH;
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(dpr, dpr);
+
+      // Background
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      const vb = expandedViewBox;
+      const scaleX = cssW / vb.width;
+      const scaleY = cssH / vb.height;
+
+      const toScreen = (wx, wy) => ({
+        x: (wx - vb.x) * scaleX,
+        y: (wy - vb.y) * scaleY,
+      });
+
+      // Grid (world units: 10 + 50, anchored at 0)
+      const drawGrid = (step, color, lineWidth) => {
+        const startX = Math.floor(vb.x / step) * step;
+        const endX = vb.x + vb.width;
+        const startY = Math.floor(vb.y / step) * step;
+        const endY = vb.y + vb.height;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        for (let x = startX; x <= endX; x += step) {
+          const p1 = toScreen(x, vb.y);
+          const p2 = toScreen(x, vb.y + vb.height);
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+        }
+        for (let y = startY; y <= endY; y += step) {
+          const p1 = toScreen(vb.x, y);
+          const p2 = toScreen(vb.x + vb.width, y);
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+        }
+        ctx.stroke();
+      };
+
+      drawGrid(10, '#e2e8f0', 0.5);
+      drawGrid(50, '#cbd5e1', 1);
+
+      // Rows (dashed)
+      ctx.save();
+      ctx.strokeStyle = '#9ca3af';
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([6, 4]);
+      for (let idx = 0; idx < expandedSchemeLayout.rowsCount; idx += 1) {
+        const y = expandedSchemeLayout.startY + idx * expandedSchemeLayout.rowHeight + 5;
+        const a = toScreen(70, y);
+        const b = toScreen(960, y);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Points (only those in current viewBox)
+      const { renderedPoints, markerRadius, markerOpacity } = expandedSchemeLayout;
+      const r = markerRadius;
+
+      // Quick cull bounds in world coords
+      const minX = vb.x - r;
+      const maxX = vb.x + vb.width + r;
+      const minY = vb.y - r;
+      const maxY = vb.y + vb.height + r;
+
+      for (let i = 0; i < renderedPoints.length; i += 1) {
+        const p = renderedPoints[i];
+        if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) continue;
+        const s = toScreen(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r * Math.min(scaleX, scaleY), 0, Math.PI * 2);
+        if (p.kind === 'bush') {
+          ctx.fillStyle = `rgba(16,185,129,${markerOpacity})`;
+          ctx.strokeStyle = '#059669';
+        } else {
+          ctx.fillStyle = `rgba(254,202,202,${Math.min(1, markerOpacity + 0.1)})`;
+          ctx.strokeStyle = '#ef4444';
+        }
+        ctx.lineWidth = 2;
+        ctx.fill();
+        ctx.stroke();
+      }
+    };
+
+    const schedule = () => {
+      if (expandedDrawRafRef.current != null) return;
+      expandedDrawRafRef.current = requestAnimationFrame(() => {
+        expandedDrawRafRef.current = null;
+        draw();
+      });
+    };
+
+    schedule();
+    const ro = new ResizeObserver(() => schedule());
+    ro.observe(wrap);
+
+    return () => {
+      ro.disconnect();
+      if (expandedDrawRafRef.current != null) {
+        cancelAnimationFrame(expandedDrawRafRef.current);
+        expandedDrawRafRef.current = null;
+      }
+    };
+  }, [expandedSchemeLayout, expandedSchemeMissionId, expandedViewBox]);
+
   const applyExpandedZoom = (factor) => {
     setExpandedViewBox((prev) => {
       const cx = prev.x + prev.width / 2;
@@ -195,12 +401,26 @@ export const Sidebar = ({
     setExpandedViewBox({ x: 0, y: 0, width: 1000, height: 600 });
     setIsExpandedPanning(false);
     setExpandedPanStart(null);
+    expandedPanLatestRef.current = null;
+    if (expandedPanRafRef.current != null) {
+      cancelAnimationFrame(expandedPanRafRef.current);
+      expandedPanRafRef.current = null;
+    }
+    if (expandedDrawRafRef.current != null) {
+      cancelAnimationFrame(expandedDrawRafRef.current);
+      expandedDrawRafRef.current = null;
+    }
   };
   const openExpandedScheme = (missionId) => {
     setExpandedSchemeMissionId(missionId);
     setExpandedViewBox({ x: 0, y: 0, width: 1000, height: 600 });
     setIsExpandedPanning(false);
     setExpandedPanStart(null);
+    expandedPanLatestRef.current = null;
+    if (expandedPanRafRef.current != null) {
+      cancelAnimationFrame(expandedPanRafRef.current);
+      expandedPanRafRef.current = null;
+    }
   };
 
   const canEnableRouteMode = Boolean(
@@ -855,58 +1075,9 @@ export const Sidebar = ({
       </div>
     </div>
     {expandedSchemeResult && (() => {
-      const { bushes, gaps } = buildMissionSchemePoints(expandedSchemeResult);
-      const all = [
-        ...bushes.map((p) => ({ ...p, kind: 'bush' })),
-        ...gaps.map((p) => ({ ...p, kind: 'gap' })),
-      ];
-      const sequenceRows = buildRowsFromRowSequences(expandedSchemeResult);
-      const rowsCount = sequenceRows?.length
-        ? sequenceRows.length
-        : Math.max(1, Number(expandedSchemeResult.rowsCount || 0) || 1);
-      const rowHeight = 70;
-      const startY = 50;
-      const startX = 80;
-      const mapWidth = 1000;
-      const mapHeight = Math.max(600, startY + rowsCount * rowHeight + 40);
-
-      let renderedRows = [];
-      if (sequenceRows?.length) {
-        renderedRows = sequenceRows.map((row) => row.sequence.map((kind) => ({ kind })));
-      } else {
-        renderedRows = Array.from({ length: rowsCount }, () => []);
-        if (all.length) {
-          const minY = Math.min(...all.map((p) => p.y));
-          const maxY = Math.max(...all.map((p) => p.y));
-          const spanY = Math.max(1e-9, maxY - minY);
-          all.forEach((point) => {
-            const rowIdx = Math.min(
-              rowsCount - 1,
-              Math.max(0, Math.floor(((point.y - minY) / spanY) * rowsCount))
-            );
-            renderedRows[rowIdx].push(point);
-          });
-        }
-        renderedRows = renderedRows.map((row) => row.sort((a, b) => a.x - b.x));
-      }
-      const maxRowLength = Math.max(1, ...renderedRows.map((r) => r.length));
-      const bushSpacing = Math.min(60, Math.max(25, 900 / maxRowLength));
-
-      const renderedPoints = [];
-      renderedRows.forEach((row, rowIdx) => {
-        row.forEach((point, pointIdx) => {
-          renderedPoints.push({
-            x: startX + pointIdx * bushSpacing,
-            y: startY + rowIdx * rowHeight + 5,
-            kind: point.kind,
-            row: rowIdx + 1,
-            pos: pointIdx + 1,
-          });
-        });
-      });
-
-      const markerRadius = renderedPoints.length > 2500 ? 6 : renderedPoints.length > 1200 ? 8 : 10;
-      const markerOpacity = renderedPoints.length > 2500 ? 0.7 : 0.85;
+      const layout = expandedSchemeLayout;
+      if (!layout) return null;
+      const { rowsCount, rowHeight, startY, renderedPoints, markerRadius, markerOpacity } = layout;
       const zoomPercent = Math.round((1000 / expandedViewBox.width) * 100);
 
       const onExpandedMouseDown = (e) => {
@@ -915,20 +1086,35 @@ export const Sidebar = ({
       };
       const onExpandedMouseMove = (e) => {
         if (!isExpandedPanning || !expandedPanStart) return;
-        const dx = e.clientX - expandedPanStart.x;
-        const dy = e.clientY - expandedPanStart.y;
-        const scaleX = expandedPanStart.vb.width / 1000;
-        const scaleY = expandedPanStart.vb.height / 600;
-        setExpandedViewBox({
-          x: expandedPanStart.vb.x - dx * scaleX,
-          y: expandedPanStart.vb.y - dy * scaleY,
-          width: expandedPanStart.vb.width,
-          height: expandedPanStart.vb.height,
+        expandedPanLatestRef.current = { x: e.clientX, y: e.clientY };
+        if (expandedPanRafRef.current != null) return;
+        expandedPanRafRef.current = requestAnimationFrame(() => {
+          expandedPanRafRef.current = null;
+          const latest = expandedPanLatestRef.current;
+          if (!latest) return;
+          setExpandedViewBox((prev) => {
+            const base = expandedPanStart?.vb ?? prev;
+            const dx = latest.x - expandedPanStart.x;
+            const dy = latest.y - expandedPanStart.y;
+            const scaleX = base.width / 1000;
+            const scaleY = base.height / 600;
+            return {
+              x: base.x - dx * scaleX,
+              y: base.y - dy * scaleY,
+              width: base.width,
+              height: base.height,
+            };
+          });
         });
       };
       const onExpandedMouseUp = () => {
         setIsExpandedPanning(false);
         setExpandedPanStart(null);
+        expandedPanLatestRef.current = null;
+        if (expandedPanRafRef.current != null) {
+          cancelAnimationFrame(expandedPanRafRef.current);
+          expandedPanRafRef.current = null;
+        }
       };
       const onExpandedWheel = (e) => {
         e.preventDefault();
@@ -968,9 +1154,8 @@ export const Sidebar = ({
                   Нет координат рядов для отображения.
                 </div>
               ) : (
-                <svg
-                  ref={expandedSvgRef}
-                  viewBox={`${expandedViewBox.x} ${expandedViewBox.y} ${expandedViewBox.width} ${expandedViewBox.height}`}
+                <div
+                  ref={expandedCanvasWrapRef}
                   className="h-full w-full bg-gray-50"
                   onMouseDown={onExpandedMouseDown}
                   onMouseMove={onExpandedMouseMove}
@@ -979,53 +1164,8 @@ export const Sidebar = ({
                   onWheel={onExpandedWheel}
                   style={{ cursor: isExpandedPanning ? 'grabbing' : 'grab' }}
                 >
-                  <defs>
-                    <pattern id="fullGridMain" patternUnits="userSpaceOnUse" width="50" height="50">
-                      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#cbd5e1" strokeWidth="1" />
-                    </pattern>
-                    <pattern id="fullGridFine" patternUnits="userSpaceOnUse" width="10" height="10">
-                      <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#e2e8f0" strokeWidth="0.5" />
-                    </pattern>
-                  </defs>
-                  <rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#fullGridFine)" />
-                  <rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#fullGridMain)" />
-
-                  {Array.from({ length: rowsCount }).map((_, idx) => {
-                    const y = startY + idx * rowHeight + 5;
-                    return (
-                      <g key={`full-row-${idx}`}>
-                        <text x="25" y={y + 7} fill="#374151" fontSize="13" fontWeight="bold">{`Ряд ${idx + 1}`}</text>
-                        <line x1="70" y1={y} x2="960" y2={y} stroke="#9ca3af" strokeWidth="1.5" strokeDasharray="6 4" />
-                      </g>
-                    );
-                  })}
-
-                  {renderedPoints.map((point, idx) =>
-                    point.kind === 'bush' ? (
-                      <circle
-                        key={`full-b-${idx}`}
-                        cx={point.x}
-                        cy={point.y}
-                        r={markerRadius}
-                        fill="#10b981"
-                        fillOpacity={markerOpacity}
-                        stroke="#059669"
-                        strokeWidth="2"
-                      />
-                    ) : (
-                      <circle
-                        key={`full-g-${idx}`}
-                        cx={point.x}
-                        cy={point.y}
-                        r={markerRadius}
-                        fill="#fecaca"
-                        fillOpacity={markerOpacity}
-                        stroke="#ef4444"
-                        strokeWidth="2"
-                      />
-                    )
-                  )}
-                </svg>
+                  <canvas ref={expandedCanvasRef} className="block h-full w-full" />
+                </div>
               )}
             </div>
         </div>

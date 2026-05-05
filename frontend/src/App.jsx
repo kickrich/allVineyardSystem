@@ -124,6 +124,67 @@ function normalizeRoutePath(path) {
     .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
 }
 
+function inferRouteProgressFromPosition(path, position) {
+  if (!Array.isArray(path) || path.length < 2 || !position) return null;
+  const lat = Number(position.lat);
+  const lng = Number(position.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const segments = path.length - 1;
+  let best = null;
+  let bestDist = Infinity;
+
+  for (let i = 0; i < segments; i += 1) {
+    const a = path[i];
+    const b = path[i + 1];
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) continue;
+    const aLat = Number(a[0]);
+    const aLng = Number(a[1]);
+    const bLat = Number(b[0]);
+    const bLng = Number(b[1]);
+    if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
+
+    // Локальная проекция в метры вокруг точки A (достаточно точно для малых расстояний).
+    const latRad = (aLat * Math.PI) / 180;
+    const cosLat = Math.cos(latRad) || 1e-6;
+    const mPerLat = 111_320;
+    const mPerLng = 111_320 * cosLat;
+
+    const ax = 0;
+    const ay = 0;
+    const bx = (bLng - aLng) * mPerLng;
+    const by = (bLat - aLat) * mPerLat;
+    const px = (lng - aLng) * mPerLng;
+    const py = (lat - aLat) * mPerLat;
+
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = 0;
+    if (len2 > 1e-9) {
+      t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    }
+    t = Math.max(0, Math.min(1, t));
+
+    const cx = ax + dx * t;
+    const cy = ay + dy * t;
+    const dist = Math.hypot(px - cx, py - cy);
+
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = { segmentIndex: i, t };
+    }
+  }
+
+  if (!best) return null;
+  const progress = ((best.segmentIndex + best.t) / segments) * 100;
+  return {
+    segmentIndex: best.segmentIndex,
+    segmentT: best.t,
+    progress: Math.max(0, Math.min(100, progress)),
+  };
+}
+
 function normalizeShiftSegmentIndices(raw) {
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw
@@ -870,6 +931,43 @@ function App() {
                   const routePathForDrone =
                     persistedDronePath.length >= 2 ? persistedDronePath : routePath;
                   const missionStatus = String(mission?.status ?? '').toLowerCase();
+
+                  let inferredFlightState = null;
+                  if (missionStatus === 'in_progress' && routePathForDrone.length >= 2 && drone?.position) {
+                    const missionParams = computeMissionParamsFromPath(
+                      routePathForDrone,
+                      drone?.maxSpeed,
+                      drone?.battery
+                    );
+                    const inferred = inferRouteProgressFromPosition(routePathForDrone, drone.position);
+                    if (missionParams && inferred) {
+                      const elapsedMs = Math.max(
+                        0,
+                        Math.min(
+                          Number(missionParams.totalTime ?? 0),
+                          (Number(missionParams.totalTime ?? 0) * (inferred.progress / 100))
+                        )
+                      );
+                      inferredFlightState = {
+                        flightStatus: flightStatus.PAUSED,
+                        isFlying: true,
+                        missionParameters: missionParams,
+                        missionElapsedTime: elapsedMs,
+                        missionStartTime: Date.now() - elapsedMs,
+                        currentWaypointIndex: inferred.segmentIndex,
+                        flightProgress: inferred.progress,
+                        speed: Number(missionParams.optimalSpeed ?? 0) / 3.6,
+                        altitude: 100,
+                        heading: calculateBearing(
+                          routePathForDrone[inferred.segmentIndex][0],
+                          routePathForDrone[inferred.segmentIndex][1],
+                          routePathForDrone[Math.min(inferred.segmentIndex + 1, routePathForDrone.length - 1)][0],
+                          routePathForDrone[Math.min(inferred.segmentIndex + 1, routePathForDrone.length - 1)][1]
+                        ),
+                      };
+                    }
+                  }
+
                   return {
                     ...drone,
                     path: routePathForDrone,
@@ -881,9 +979,20 @@ function App() {
                       flightPath: routePath,
                       startTime: mission?.created_at ?? null,
                       completed: missionStatus === 'completed',
+                      ...(inferredFlightState?.missionParameters
+                        ? {
+                            totalWaypoints: routePathForDrone.length,
+                            totalDistance: inferredFlightState.missionParameters.totalDistance,
+                            estimatedTime: inferredFlightState.missionParameters.estimatedTime,
+                            missionParams: inferredFlightState.missionParameters,
+                            // В симуляции движение идёт по основному path.
+                            flightPath: routePathForDrone,
+                          }
+                        : null),
                     },
                     status: missionStatus === 'in_progress' ? 'на задании' : drone.status,
                     backendStatus: missionStatus === 'in_progress' ? 'in_mission' : (drone.backendStatus ?? 'idle'),
+                    ...(inferredFlightState ? inferredFlightState : null),
                   };
                 })
               );

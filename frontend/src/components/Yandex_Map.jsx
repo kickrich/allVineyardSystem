@@ -427,6 +427,8 @@ export function YandexMap({
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const mapSizeRafRef = useRef(null);
+  const lastMapSizeRef = useRef({ w: 0, h: 0 });
   const droneMarkersRef = useRef({});
   const dronePlaceAnimRafRef = useRef({});
   const dronePlaceAnimActiveRef = useRef(new Set());
@@ -2074,63 +2076,83 @@ export function YandexMap({
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !mapContainerRef.current) return;
 
-    const updateMapSize = () => {
-      if (mapInstanceRef.current && mapContainerRef.current) {
+    const scheduleMapResize = (nextW = null, nextH = null) => {
+      // Скролл/анимации могут вызывать частые resize/RO callbacks.
+      // Сжимаем вызовы в 1 апдейт на кадр и только при реальном изменении размера.
+      if (!mapInstanceRef.current || !mapContainerRef.current) return;
+
+      const container = mapContainerRef.current;
+      const w = Number.isFinite(nextW) ? nextW : container.offsetWidth;
+      const h = Number.isFinite(nextH) ? nextH : container.offsetHeight;
+      if (!(w > 0 && h > 0)) return;
+
+      const prev = lastMapSizeRef.current;
+      if (prev.w === w && prev.h === h) return;
+      lastMapSizeRef.current = { w, h };
+
+      if (mapSizeRafRef.current != null) return;
+      mapSizeRafRef.current = requestAnimationFrame(() => {
+        mapSizeRafRef.current = null;
+        const map = mapInstanceRef.current;
+        const c = mapContainerRef.current;
+        if (!map || !c) return;
+
+        const width = c.offsetWidth;
+        const height = c.offsetHeight;
+        if (!(width > 0 && height > 0)) return;
+
         try {
-          const map = mapInstanceRef.current;
-          const container = mapContainerRef.current;
-          const width = container.offsetWidth;
-          const height = container.offsetHeight;
-          
-          if (width > 0 && height > 0) {
-            map.container.fitToViewport();
-          }
+          map.container.fitToViewport();
         } catch (error) {
           try {
-            const map = mapInstanceRef.current;
-            const container = mapContainerRef.current;
-            if (map && container) {
-              const width = container.offsetWidth;
-              const height = container.offsetHeight;
-              
-              if (width > 0 && height > 0) {
-                map.container.setSize([width, height]);
-              }
-            }
+            map.container.setSize([width, height]);
           } catch (e) {
             console.warn('Не удалось обновить размер карты:', e);
           }
         }
-      }
+      });
     };
-    window.addEventListener('resize', updateMapSize);
+
+    const handleWindowResize = () => scheduleMapResize();
+    window.addEventListener('resize', handleWindowResize, { passive: true });
     let resizeObserver = null;
     if (mapContainerRef.current && window.ResizeObserver) {
-      resizeObserver = new ResizeObserver(() => {
-        // Небольшая задержка для завершения CSS-анимаций
-        setTimeout(updateMapSize, 100);
+      resizeObserver = new ResizeObserver((entries) => {
+        const entry = Array.isArray(entries) ? entries[0] : null;
+        const cr = entry?.contentRect;
+        const w = cr ? Math.round(cr.width) : null;
+        const h = cr ? Math.round(cr.height) : null;
+        scheduleMapResize(w, h);
       });
       resizeObserver.observe(mapContainerRef.current);
     } else {
       const intervalId = setInterval(() => {
         if (mapContainerRef.current && mapInstanceRef.current) {
-          updateMapSize();
+          scheduleMapResize();
         }
       }, 500);
       
       return () => {
         clearInterval(intervalId);
-        window.removeEventListener('resize', updateMapSize);
+        window.removeEventListener('resize', handleWindowResize);
         if (resizeObserver) {
           resizeObserver.disconnect();
+        }
+        if (mapSizeRafRef.current != null) {
+          cancelAnimationFrame(mapSizeRafRef.current);
+          mapSizeRafRef.current = null;
         }
       };
     }
 
     return () => {
-      window.removeEventListener('resize', updateMapSize);
+      window.removeEventListener('resize', handleWindowResize);
       if (resizeObserver) {
         resizeObserver.disconnect();
+      }
+      if (mapSizeRafRef.current != null) {
+        cancelAnimationFrame(mapSizeRafRef.current);
+        mapSizeRafRef.current = null;
       }
     };
   }, [mapLoaded]);

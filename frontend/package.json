@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.17",
-    "leaflet-control-geocoder": "^3.3.1",
     "lodash.debounce": "^4.0.8",
     "react": "^19.0.0-rc.1",
     "react-dom": "^19.0.0-rc.1",
