@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { TemplatesOnboarding } from './Templates_Onboarding';
 
 export function ShabloneScreen({
   onStart,
@@ -10,13 +11,28 @@ export function ShabloneScreen({
   templateCascadeMetaById = {}
 }) {
   const [deleteDialog, setDeleteDialog] = useState(null);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStepId, setTourStepId] = useState(null);
+
+  const demoTemplates = [
+    { id: '__demo_1__', name: 'Облёт периметра (пример)', path: Array.from({ length: 6 }, (_, i) => [i, i]) },
+    { id: '__demo_2__', name: 'Патруль рядов (пример)', path: Array.from({ length: 10 }, (_, i) => [i, i]) },
+  ];
+  const shouldShowDemoTemplatesNow =
+    Boolean(tourOpen) &&
+    (tourStepId === 'tpl-list' ||
+      tourStepId === 'tpl-use' ||
+      tourStepId === 'tpl-edit' ||
+      tourStepId === 'tpl-delete');
+  const isDemoMode = (!Array.isArray(templates) || templates.length === 0) && shouldShowDemoTemplatesNow;
+  const displayTemplates = isDemoMode ? demoTemplates : templates;
 
   const handleDelete = (id, mode) => {
     onDeleteTemplate(id, mode);
     setDeleteDialog(null);
   };
   const templateForDelete = deleteDialog?.id
-    ? templates.find((x) => x.id === deleteDialog.id) ?? null
+    ? displayTemplates.find((x) => x.id === deleteDialog.id) ?? null
     : null;
   const cascadeCount =
     templateForDelete != null
@@ -34,23 +50,22 @@ export function ShabloneScreen({
     <div className="w-full max-w-6xl mx-auto">
       <div className="w-full max-w-2xl mx-auto bg-gray-800/85 border border-gray-700/70 rounded-2xl shadow-2xl backdrop-blur-sm overflow-hidden">
         <div className="px-6 py-5 border-b border-gray-700/80 bg-gradient-to-r from-gray-800 to-gray-900">
-          <h2 className="text-2xl font-bold text-white">Шаблоны маршрутов патрулирования</h2>
-          <p className="text-gray-400 text-sm mt-1">
-            Создайте маршрут по карте, сохраните его как шаблон и используйте для дронов.
-          </p>
+          <h2 className="text-2xl font-bold text-white text-center">Шаблоны миссий</h2>
         </div>
-        <div className="px-6 py-4 flex flex-wrap gap-3 justify-between items-center bg-gray-800/70">
-          <div className="flex gap-2">
+        <div className="px-6 py-4 flex flex-wrap gap-3 justify-center items-center bg-gray-800/70">
+          <div className="flex gap-2" data-onboarding="tpl-actions">
             <button
               type="button"
               onClick={onStartCreateTemplate}
+              data-onboarding="tpl-create"
               className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg font-medium transition-all shadow-sm ring-1 ring-blue-400/40"
             >
-              + Создать шаблон
+            Создать шаблон
             </button>
             <button
               type="button"
               onClick={() => onStart()}
+              data-onboarding="tpl-start"
               className="group relative overflow-hidden px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg font-medium transition-all duration-300 ease-out border border-gray-600/80 shadow-sm ring-1 ring-gray-500/30 hover:ring-green-400/40 hover:shadow-md"
             >
               <span
@@ -63,14 +78,16 @@ export function ShabloneScreen({
         </div>
 
         <div className="px-6 py-5">
-          <h3 className="text-lg font-semibold text-white mb-3">Сохранённые шаблоны ({templates.length})</h3>
-          {templates.length === 0 ? (
+          <h3 className="text-lg font-semibold text-white mb-3 " data-onboarding="tpl-list">
+            Сохранённые шаблоны ({displayTemplates.length})
+          </h3>
+          {displayTemplates.length === 0 ? (
             <p className="text-gray-500 py-6 text-center">
-              Нет шаблонов. Нажмите «Создать шаблон», чтобы нарисовать маршрут на карте и сохранить его.
+              Нет шаблонов. Нажмите «Создать шаблон», чтобы нанести маршрут на карту и сохранить.
             </p>
           ) : (
             <ul className="space-y-2">
-              {templates.map((t) => (
+              {displayTemplates.map((t) => (
                 <li
                   key={t.id}
                   className="flex flex-wrap items-center justify-between gap-2 py-3 px-4 bg-gray-700/40 rounded-lg border border-gray-600/80 hover:border-blue-500/50 hover:bg-gray-700/70 transition-all"
@@ -84,7 +101,11 @@ export function ShabloneScreen({
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
                       type="button"
-                      onClick={() => onEditTemplateRoute(t.id)}
+                      onClick={() => {
+                        if (isDemoMode) return;
+                        onEditTemplateRoute(t.id);
+                      }}
+                      data-onboarding="tpl-edit"
                       className="h-8 px-2 sm:px-3 bg-gray-600 hover:bg-gray-500 text-white rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
                       title="Редактировать маршрут на карте"
                     >
@@ -92,7 +113,11 @@ export function ShabloneScreen({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onStart(t.id)}
+                      onClick={() => {
+                        if (isDemoMode) return;
+                        onStart(t.id);
+                      }}
+                      data-onboarding="tpl-use"
                       className="h-8 px-2 sm:px-3 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
                       title="Начать работу и применить шаблон к дрону"
                     >
@@ -100,7 +125,12 @@ export function ShabloneScreen({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDeleteDialog({ id: t.id, mode: null })}
+                      onClick={() => {
+                        if (isDemoMode) return;
+                        setDeleteDialog({ id: t.id, mode: null });
+                      }}
+                      data-onboarding="tpl-delete"
+                      disabled={isDemoMode}
                       className="h-8 px-2 sm:px-3 bg-red-900/70 hover:bg-red-800 text-red-200 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
                       title="Удалить"
                     >
@@ -113,6 +143,14 @@ export function ShabloneScreen({
           )}
         </div>
       </div>
+      <TemplatesOnboarding
+        enabled
+        onTourOpenChange={(open) => {
+          setTourOpen(Boolean(open));
+          if (!open) setTourStepId(null);
+        }}
+        onStepChange={(stepId) => setTourStepId(stepId)}
+      />
       {deleteDialog && templateForDelete && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4">
           <div className="w-full max-w-md rounded-2xl border border-gray-600 bg-gray-900 text-white shadow-2xl p-4">

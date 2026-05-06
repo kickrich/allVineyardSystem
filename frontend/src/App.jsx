@@ -69,9 +69,30 @@ const VIDEO_BACKEND_CONTENT_TYPE = 'video/webm';
 const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
 const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024; // >= 1MB (минимум в backend)
 const AI_RESULTS_POLL_INTERVAL_MS = 5000;
+const LOGS_CLEARED_AT_KEY = 'ui_logs_cleared_at_ms_v1';
 
 function normalizeConfirmText(v, fallback) {
   return typeof v === 'string' && v.trim() ? v.trim() : fallback;
+}
+
+function readLogsClearedAtMs() {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const raw = localStorage.getItem(LOGS_CLEARED_AT_KEY);
+    const ms = Number(raw);
+    return Number.isFinite(ms) && ms > 0 ? ms : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeLogsClearedAtMs(ms) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LOGS_CLEARED_AT_KEY, String(Number(ms) || Date.now()));
+  } catch {
+    /* ignore */
+  }
 }
 
 function hasStoredApiToken() {
@@ -1086,8 +1107,16 @@ function App() {
         try {
           const logs = await fetchDroneLogsFromBackend();
           if (!cancelled && Array.isArray(logs) && logs.length > 0) {
+            const clearedAtMs = readLogsClearedAtMs();
+            const filtered = clearedAtMs
+              ? logs.filter((log) => {
+                  const ts = Date.parse(log?.logged_at || '');
+                  return !Number.isFinite(ts) ? true : ts > clearedAtMs;
+                })
+              : logs;
+
             setGlobalMissionLog(
-              logs.map((log, idx) => ({
+              filtered.map((log, idx) => ({
                 id: Number(log?.id) || Date.now() + idx,
                 droneId: log?.drone_id ?? null,
                 droneName: log?.drone_name || 'Неизвестный дрон',
@@ -1099,7 +1128,7 @@ function App() {
 
             setDrones((prev) =>
               prev.map((drone) => {
-                const perDrone = logs
+                const perDrone = filtered
                   .filter((log) => Number(log?.drone_id) === Number(drone.id))
                   .map((log, idx) => ({
                     id: Number(log?.id) || Date.now() + idx,
@@ -1111,6 +1140,10 @@ function App() {
                 return { ...drone, flightLog: perDrone };
               })
             );
+          } else if (!cancelled) {
+            // Если на сервере пусто — уважаем "очистить" и не показываем старое.
+            setGlobalMissionLog([]);
+            setDrones((prev) => prev.map((d) => (d.flightLog?.length ? { ...d, flightLog: [] } : d)));
           }
         } catch (e) {
           console.warn('Restore logs failed:', e?.message ?? e);
@@ -3465,6 +3498,15 @@ function App() {
     setSelectedDroneForModal(drone);
   };
 
+  const clearLogs = useCallback(() => {
+    const now = Date.now();
+    writeLogsClearedAtMs(now);
+    setGlobalMissionLog([]);
+    setDrones((prev) =>
+      prev.map((d) => (d.flightLog?.length ? { ...d, flightLog: [] } : d))
+    );
+  }, []);
+
   const [zoneMapMessageUi, setZoneMapMessageUi] = useState({
     message: null,
     isError: false,
@@ -3728,6 +3770,7 @@ function App() {
                   onPlaceDrone={startDronePlacement}
                   onRemoveDrone={removeDroneFromMap}
                   onCreateDrone={createDroneFromParking}
+                  onDroneClick={handleDroneClick}
                   onBackToTemplates={() => {
                     setExitingToTemplates(true);
                     setParkingOpen(false);
@@ -4212,7 +4255,7 @@ function App() {
                   onAddRoutePoint={addRoutePoint}
                   onUndoLastPoint={undoLastPoint}
                   onClearRoute={clearRoute}
-                  onClearLogs={() => setGlobalMissionLog([])}
+                  onClearLogs={clearLogs}
                   onDroneClick={handleDroneClick}
                   isRouteEditMode={isRouteEditMode}
                   onToggleRouteMode={handleToggleRouteMode}

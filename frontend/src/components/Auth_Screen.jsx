@@ -78,7 +78,7 @@ export function AuthScreen({ onLoggedIn }) {
     <div className="min-h-screen min-h-dvh flex items-center justify-center text-white px-4 py-8">
       <div className="w-full max-w-md bg-gray-800/85 border border-gray-700/70 rounded-2xl shadow-2xl backdrop-blur-sm overflow-hidden">
         <div className="px-6 py-5 border-b border-gray-700/80 bg-gradient-to-r from-gray-800 to-gray-900">
-          <h1 className="text-2xl font-bold text-white text-center">Drones</h1>
+          <h1 className="text-2xl font-bold text-white text-center">Drones Control Center</h1>
           <p className="text-gray-400 text-sm text-center mt-1">
             {mode === 'login' ? 'Вход в систему' : 'Регистрация'}
           </p>
@@ -104,7 +104,7 @@ export function AuthScreen({ onLoggedIn }) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-500 focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                placeholder="you@example.com"
+                placeholder="email"
               />
             </div>
             <div>

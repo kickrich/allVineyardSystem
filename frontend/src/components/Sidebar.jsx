@@ -516,7 +516,6 @@ export const Sidebar = ({
           <div className="space-y-4">
             {listForPicker.length === 0 && (
               <div className="text-center py-10 text-gray-400">
-                <div className="text-4xl mb-3">🛸</div>
                 <p className="text-base">Нет дронов на карте</p>
               </div>
             )}
@@ -627,13 +626,6 @@ export const Sidebar = ({
                           }`}
                         >
                           {isRouteEditMode ? 'Закончить маршрут' : 'Построить маршрут'}
-                        </button>
-                        <button
-                          onClick={() => onDroneClick(selectedDrone)}
-                          className="px-4 py-2 min-h-[44px] bg-purple-600 hover:bg-purple-700 rounded transition-colors"
-                          title="Подробности"
-                        >
-                          ℹ️
                         </button>
                       </div>
 
