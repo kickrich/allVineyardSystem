@@ -2138,7 +2138,25 @@ export function YandexMap({
         }, 1400);
       };
 
+      const ensureBuildingsReady = () => {
+        // Здания грузятся по bbox активной зоны. Если зоны нет — не блокируем.
+        if (!activeBoundary) return true;
+        if (buildingsStatus === 'ready') return true;
+        if (buildingsStatus === 'loading') {
+          showBuildingsNotice('Загружаю здания (OSM)… подождите.');
+          return false;
+        }
+        if (buildingsStatus === 'error') {
+          showBuildingsNotice('Не удалось загрузить здания (OSM). Попробуйте ещё раз через пару секунд.');
+          return false;
+        }
+        // idle / unknown
+        showBuildingsNotice('Загружаю здания (OSM)…');
+        return false;
+      };
+
       if (routeEditMode) {
+        if (!ensureBuildingsReady()) return;
         const path = Array.isArray(routeEditPathRef.current) ? routeEditPathRef.current : [];
         if (routeShiftSelectionMode && path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
           const nearestPointM = findNearestRoutePointDistanceMeters(path, clickPoint.lat, clickPoint.lng);
@@ -2176,6 +2194,7 @@ export function YandexMap({
         return;
       }
       if (placementMode) {
+        if (!ensureBuildingsReady()) return;
         if (rejectByBuildings(null)) {
           showBuildingsNotice('Нельзя размещать дрона в здании (OSM).');
           return;

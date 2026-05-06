@@ -812,7 +812,6 @@ export const Sidebar = ({
 
         {activeTab === 'bushes' && (
           <div className="h-full min-h-0 flex flex-col gap-4">
-            <div className="min-h-[32px]" />
             {aiResults.length === 0 ? (
               <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
                 <p>Пока нет результатов анализа</p>
@@ -919,7 +918,7 @@ export const Sidebar = ({
                         }
                         return (
                           <div className="mt-3 rounded border border-gray-700/70 bg-gray-900/50 px-3 py-2 text-xs text-gray-400">
-                            Схема участка от VineyardApp пока не содержит координат рядов для этой миссии.
+                            Схема участка пока не содержит координат рядов для этой миссии.
                           </div>
                         );
                       }

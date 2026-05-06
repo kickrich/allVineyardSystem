@@ -101,13 +101,13 @@ module Api
       # DELETE /api/v1/missions/:id/ai_result
       def destroy_ai_result
         mission = @current_user.missions.find(params[:id])
-        result = mission.ai_result
-        if result.nil?
+        results = mission.ai_results.order(created_at: :desc).to_a
+        if results.empty?
           render_errors("AI-результат для миссии не найден", status: :not_found)
           return
         end
 
-        result.destroy!
+        results.each(&:destroy!)
         render_data({ mission_id: mission.id, deleted: true })
       end
 

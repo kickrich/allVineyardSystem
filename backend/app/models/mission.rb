@@ -19,7 +19,17 @@ class Mission < ApplicationRecord
   has_many :routes, dependent: :destroy
   has_many :telemetries, dependent: :destroy
   has_many :media_uploads, dependent: :destroy
-  has_one  :ai_result, dependent: :destroy
+  has_many :ai_results, dependent: :destroy
+
+  # Backward-compatible: historically mission had a single ai_result.
+  # Keep read access returning the latest record to avoid breaking callers.
+  def ai_result
+    ai_results.order(created_at: :desc).first
+  end
+
+  def build_ai_result(attributes = {})
+    ai_results.build(attributes)
+  end
 
   # Интеграция с VineyardApp
   attribute :vineyard_app_callback_token, :string, default: -> { SecureRandom.hex(32) }
