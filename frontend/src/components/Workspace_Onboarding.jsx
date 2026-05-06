@@ -43,7 +43,7 @@ const STEPS = [
     target: 'route-shift-segments',
     title: 'Шаг 6. Смещения между рядами',
     text:
-      'Карта приблизится к примеру: внутри полупрозрачного контура зоны (как у вашей будущей зоны) — три отрезка оранжевой пунктирной линией, средний подсвечен фиолетовым: это «смещение» между рядами. Так в будущем нейросеть сможет резать видео: примерно один ряд — один файл. Если у вас уже есть сохранённая зона на карте, показывается только маршрут-пример поверх неё. Кнопка «Смещения» внизу справа открывает пояснение; свой маршрут вы потом построите в режиме «Построить маршрут» и отметите отрезки кликом по линии между точками.',
+      'Внутри полупрозрачного контура зоны (как у вашей будущей зоны) — три отрезка оранжевой пунктирной линией, средний подсвечен фиолетовым: это «смещение» между рядами. Так в будущем нейросеть сможет резать видео: примерно один ряд — один файл. Если у вас уже есть сохранённая зона на карте, показывается только маршрут-пример поверх неё. Кнопка «Смещения» внизу справа открывает пояснение; свой маршрут вы потом построите в режиме «Построить маршрут» и отметите отрезки кликом по линии между точками.',
   },
 ];
 
@@ -178,12 +178,12 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
     const halfH = hasTarget ? rect.height / 2 : 0;
     const isRouteShiftOnboardingStep = step.id === 'route-shift-segments';
     let tipTop =
-      cy > vh * 0.55 ? Math.max(72, cy - 240) : Math.min(vh - 120, cy + halfH + 16);
+      cy > vh * 0.55 ? Math.max(72, cy - 240) : Math.min(vh - 130, cy + halfH + 16);
     const estCardPx = Math.min(400, vh * 0.52);
     const bottomGap = isRouteShiftOnboardingStep ? 40 : 12;
     tipTop = Math.max(12, Math.min(tipTop, vh - estCardPx - bottomGap));
     if (isRouteShiftOnboardingStep) {
-      tipTop = Math.max(12, tipTop - 72);
+      tipTop = Math.max(12, tipTop - 150);
     }
     const targetMissing = !queryTarget(step.target);
     const usePanelAdjacentCard =
@@ -379,9 +379,14 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
   const introModal =
     introOpen && typeof document !== 'undefined'
       ? createPortal(
-          <div className="fixed inset-0 z-[1500] flex items-center justify-center p-4 bg-black/60" role="dialog">
+          <div className="fixed inset-0 z-[1500] flex items-center justify-center p-4 bg-black/60" 
+          role="dialog"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setIntroOpen(false);
+          }}
+          >
             <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-600 bg-gray-900 p-6 text-white shadow-2xl">
-              <h2 className="text-xl font-bold text-white mb-2">Тур для новых пользователей</h2>
+              <h2 className="text-xl font-bold text-white mb-2">Показать тур для работы с дронами?</h2>
               <p className="text-sm text-gray-200 leading-relaxed">
                 Тур подсветит кнопки и покажет, в каком порядке: рисовать зону, размещать дрона, строить маршрут и использовать шаблоны.
               </p>
@@ -394,14 +399,7 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
                   }}
                   className="rounded-lg border border-gray-500 px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-800"
                 >
-                  Понятно, скрыть подсказку
-                </button>
-                <button
-                  type="button"
-                  onClick={startTour}
-                  className="rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-gray-900 hover:bg-amber-400"
-                >
-                  Начать тур
+                  Скрыть подсказку
                 </button>
                 <button
                   type="button"
@@ -409,6 +407,13 @@ export function WorkspaceOnboarding({ enabled, onBeforeStep, onTourOpenChange, l
                   className="rounded-lg bg-gray-700 px-4 py-2.5 text-sm text-white hover:bg-gray-600"
                 >
                   Закрыть
+                </button>
+                <button
+                  type="button"
+                  onClick={startTour}
+                  className="rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-gray-900 hover:bg-amber-400"
+                >
+                  Начать тур
                 </button>
               </div>
             </div>

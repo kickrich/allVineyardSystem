@@ -10,7 +10,7 @@ import { DroneParking } from './components/Drone_Parking';
 import { WeatherWidget } from './components/Weather_Widget';
 import { AuthScreen } from './components/Auth_Screen';
 import { dronesData, initialMapCenter, flightStatus } from './constants/drones_data';
-import { resetWorkspaceOnboardingForLogin } from './constants/onboarding';
+import { resetTemplatesOnboardingForLogin, resetWorkspaceOnboardingForLogin } from './constants/onboarding';
 import {
   fetchDronesFromBackend,
   fetchUsersFromBackend,
@@ -3604,6 +3604,7 @@ function App() {
       <AuthScreen
         onLoggedIn={() => {
           resetWorkspaceOnboardingForLogin();
+          resetTemplatesOnboardingForLogin();
           setAuthReady(true);
         }}
       />

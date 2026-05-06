@@ -484,7 +484,7 @@ export const Sidebar = ({
         </button>
         <button
           className={`flex-1 py-3 min-h-[44px] text-center font-medium transition-colors ${activeTab === 'logs'
-            ? 'bg-gray-700/90 text-blue-300 border-b-2 border-blue-400'
+            ? 'bg-gray-700/90 text--300 border-b-2 border-white-400'
             : 'bg-gray-800/70 text-gray-400 hover:bg-gray-700/80 hover:text-gray-200'
             }`}
           onClick={() => setActiveTab('logs')}
@@ -513,9 +513,10 @@ export const Sidebar = ({
       </div>
       <div className={`flex-1 p-4 ${activeTab === 'control' ? 'overflow-y-auto' : 'min-h-0 overflow-hidden'}`}>
         {activeTab === 'control' && (
-          <div className="space-y-4">
+          <div className="h-full min-h-0 flex flex-col gap-4">
+            <div className="min-h-[32px]" />
             {listForPicker.length === 0 && (
-              <div className="text-center py-10 text-gray-400">
+              <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
                 <p className="text-base">Нет дронов на карте</p>
               </div>
             )}
@@ -676,7 +677,7 @@ export const Sidebar = ({
                       }`}
                     title={selectedDrone.isFlying ? 'Дождитесь окончания полёта' : 'Перелететь к первой точке миссии и остановиться'}
                   >
-                    📍 К первой точке миссии
+                    К первой точке миссии
                   </button>
                   {!flightAllowedByWeather && weatherFlightReasons.length > 0 && !tourUiPreview && (
                     <div className="mt-2 px-3 py-2 rounded-lg bg-amber-900/40 border border-amber-600 text-amber-200 text-xs">
@@ -704,7 +705,7 @@ export const Sidebar = ({
                                 : 'cursor-not-allowed bg-gray-600 opacity-50'
                             }`}
                           >
-                            🚀 Начать миссию
+                           Начать миссию
                           </button>
                         </>
                       )}
@@ -737,7 +738,7 @@ export const Sidebar = ({
                           disabled
                           className="col-span-2 bg-gray-600 py-2 rounded cursor-not-allowed opacity-50 flex items-center justify-center gap-2"
                         >
-                          ⏳ {selectedDroneStatus === flightStatus.TAKEOFF ? 'Взлетает...' : 'Садится...'}
+                          {selectedDroneStatus === flightStatus.TAKEOFF ? 'Взлетает' : 'Садится'}
                         </button>
                       )}
                       {selectedDroneStatus === flightStatus.COMPLETED && (
@@ -760,8 +761,7 @@ export const Sidebar = ({
 
         {activeTab === 'logs' && (
           <div className="h-full min-h-0 flex flex-col gap-4">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-white">Журнал событий</h3>
+            <div className="min-h-[32px] flex justify-between items-center">
               {missionLog.length > 0 && (
                 <button
                   onClick={onClearLogs}
@@ -774,7 +774,6 @@ export const Sidebar = ({
 
             {missionLog.length === 0 ? (
               <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">📝</div>
                 <p>Журнал событий пуст</p>
               </div>
             ) : (
@@ -813,29 +812,9 @@ export const Sidebar = ({
 
         {activeTab === 'bushes' && (
           <div className="h-full min-h-0 flex flex-col gap-4">
-            <div className="flex justify-between items-center mb-1">
-              <h3 className="text-lg font-semibold text-white">Результаты Миссий</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => onDeleteAllAiMissionResults?.()}
-                  disabled={!aiResults.length}
-                  aria-label="Удалить результаты всех миссий"
-                  className={`rounded px-2 py-1 text-xs transition-colors ${
-                    aiResults.length
-                      ? 'bg-red-700/80 text-red-100 hover:bg-red-600'
-                      : 'cursor-not-allowed bg-gray-700/70 text-gray-400'
-                  }`}
-                  title={aiResults.length ? 'Удалить результаты всех миссий' : 'Нет результатов для удаления'}
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
+            <div className="min-h-[32px]" />
             {aiResults.length === 0 ? (
               <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">☁️</div>
                 <p>Пока нет результатов анализа</p>
               </div>
             ) : (

@@ -77,7 +77,7 @@ export function ShabloneScreen({
           </div>
         </div>
 
-        <div className="px-6 py-5">
+        <div className="px-6 py-5 relative">
           <h3 className="text-lg font-semibold text-white mb-3 " data-onboarding="tpl-list">
             Сохранённые шаблоны ({displayTemplates.length})
           </h3>
@@ -141,16 +141,17 @@ export function ShabloneScreen({
               ))}
             </ul>
           )}
+
+          <TemplatesOnboarding
+            enabled
+            onTourOpenChange={(open) => {
+              setTourOpen(Boolean(open));
+              if (!open) setTourStepId(null);
+            }}
+            onStepChange={(stepId) => setTourStepId(stepId)}
+          />
         </div>
       </div>
-      <TemplatesOnboarding
-        enabled
-        onTourOpenChange={(open) => {
-          setTourOpen(Boolean(open));
-          if (!open) setTourStepId(null);
-        }}
-        onStepChange={(stepId) => setTourStepId(stepId)}
-      />
       {deleteDialog && templateForDelete && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4">
           <div className="w-full max-w-md rounded-2xl border border-gray-600 bg-gray-900 text-white shadow-2xl p-4">

@@ -177,22 +177,15 @@ export function TemplatesOnboarding({ enabled, onTourOpenChange, onStepChange })
     introOpen && typeof document !== 'undefined'
       ? createPortal(
           <div className="fixed inset-0 z-[2400] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px]" aria-hidden />
-            <div className="relative w-full max-w-md rounded-2xl border border-amber-500/40 bg-gray-900/95 p-4 text-white shadow-2xl">
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-[2px]" 
+            aria-hidden
+            onMouseDown={()=> setIntroOpen(false)}
+            />
+            <div className="relative w-full max-w-md rounded-2xl border border-amber-500/40 bg-gray-900/95 p-4 text-white shadow-2xl"
+            onMouseDown={()=> stopPropagation(false)}
+            >
               <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-300/90">Подсказка</p>
-                  <h2 className="mt-1 text-lg font-bold text-white">Показать тур по шаблонам?</h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIntroOpen(false)}
-                  className="rounded-lg px-2 py-1 text-sm text-gray-400 hover:bg-gray-800 hover:text-white min-h-[40px] min-w-[40px]"
-                  aria-label="Закрыть"
-                  title="Закрыть"
-                >
-                  ✕
-                </button>
+                <h2 className="mt-1 text-lg font-bold text-white">Показать тур по шаблонам?</h2>
               </div>
               <p className="mt-2 text-sm leading-relaxed text-gray-200">
                 Тур подсветит кнопки и покажет, в каком порядке: создавать, редактировать и использовать шаблоны.
@@ -206,7 +199,7 @@ export function TemplatesOnboarding({ enabled, onTourOpenChange, onStepChange })
                   }}
                   className="rounded-lg border border-gray-600 px-3 py-2.5 min-h-[44px] text-sm text-gray-200 hover:bg-gray-800"
                 >
-                  Не показывать
+                  Скрыть подсказку
                 </button>
                 <div className="flex gap-2">
                   <button
@@ -221,7 +214,7 @@ export function TemplatesOnboarding({ enabled, onTourOpenChange, onStepChange })
                     onClick={startTour}
                     className="rounded-lg bg-amber-500 px-4 py-2.5 min-h-[44px] text-sm font-semibold text-gray-900 hover:bg-amber-400"
                   >
-                    Начать
+                    Начать тур
                   </button>
                 </div>
               </div>
@@ -374,8 +367,7 @@ export function TemplatesOnboarding({ enabled, onTourOpenChange, onStepChange })
   const fab = showFab ? (
     <button
       type="button"
-      className="absolute bottom-[5.5rem] left-4 z-[1400] flex h-14 w-14 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-500 text-2xl font-black text-gray-900 shadow-lg shadow-amber-900/40 animate-pulse hover:animate-none hover:bg-amber-400 lg:bottom-8"
-      style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      className="absolute bottom-4 left-4 z-[1400] flex h-14 w-14 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-500 text-2xl font-black text-gray-900 shadow-lg shadow-amber-900/40 animate-pulse hover:animate-none hover:bg-amber-400"
       title="Подсказка по шаблонам"
       aria-label="Открыть подсказку по шаблонам"
       onClick={() => setIntroOpen(true)}

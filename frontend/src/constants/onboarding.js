@@ -1,4 +1,5 @@
 export const WORKSPACE_ONBOARDING_KEY = 'vineyard_workspace_onboarding_v1';
+export const TEMPLATES_ONBOARDING_KEY = 'vineyard_templates_onboarding_v1';
 
 export function readWorkspaceOnboarding() {
   if (typeof window === 'undefined') {
@@ -27,6 +28,14 @@ export function resetWorkspaceOnboardingForLogin() {
   if (typeof window === 'undefined') return;
   localStorage.setItem(
     WORKSPACE_ONBOARDING_KEY,
+    JSON.stringify({ hideFab: false, tourDone: false })
+  );
+}
+
+export function resetTemplatesOnboardingForLogin() {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(
+    TEMPLATES_ONBOARDING_KEY,
     JSON.stringify({ hideFab: false, tourDone: false })
   );
 }
