@@ -72,7 +72,7 @@ export function ShabloneScreen({
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0 bg-gradient-to-r from-green-600 to-emerald-600 opacity-0 transition-opacity duration-300 ease-out group-hover:opacity-100"
               />
-              <span className="relative z-10">Начать работу</span>
+              <span className="relative z-10"> {'--->'} </span>
             </button>
           </div>
         </div>

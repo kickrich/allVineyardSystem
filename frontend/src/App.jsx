@@ -453,7 +453,7 @@ function mapBackendTemplateToFrontend(template) {
 }
 
 function App() {
-  const [hasStarted, setHasStarted] = useState(false);
+  const [hasStarted, setHasStarted] = useState(hasStoredApiToken);
   const [exitingToTemplates, setExitingToTemplates] = useState(false);
   const [missionTemplates, setMissionTemplates] = useState([]);
 
@@ -3606,6 +3606,8 @@ function App() {
           resetWorkspaceOnboardingForLogin();
           resetTemplatesOnboardingForLogin();
           setAuthReady(true);
+          setExitingToTemplates(false);
+          setHasStarted(true);
         }}
       />
     );
@@ -4047,19 +4049,14 @@ function App() {
                   </div>
                 )}
                 <div className="absolute top-2 right-2 z-[100] flex justify-end">
-                  <div className="relative flex flex-col items-end gap-2">
-                    <WeatherWidget
-                      latitude={mapCenter[0]}
-                      longitude={mapCenter[1]}
-                      onFlightConditionsChange={handleWeatherFlightConditions}
-                    />
+                  <div className="relative flex items-start gap-2">
                     <button
                       type="button"
                       data-onboarding="zone-draw"
                       onClick={toggleDrawRectZoneMode}
                       title={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
                       aria-label={drawRectZoneMode ? 'Отменить создание зоны' : 'Создать зону'}
-                      className={`w-11 h-11 rounded-lg text-white text-xl leading-none flex items-center justify-center border ${
+                      className={`shrink-0 w-11 h-11 rounded-lg text-white text-xl leading-none flex items-center justify-center border ${
                         drawRectZoneMode
                           ? 'bg-amber-900 border-amber-500 ring-2 ring-amber-400/70'
                           : 'bg-amber-950/90 border-amber-800 hover:bg-amber-900'
@@ -4067,6 +4064,12 @@ function App() {
                     >
                       {drawRectZoneMode ? '×' : '▭'}
                     </button>
+                    <WeatherWidget
+                      className="shrink-0"
+                      latitude={mapCenter[0]}
+                      longitude={mapCenter[1]}
+                      onFlightConditionsChange={handleWeatherFlightConditions}
+                    />
                   </div>
                 </div>
                 <YandexMap
