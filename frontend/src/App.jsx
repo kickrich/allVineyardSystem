@@ -3150,7 +3150,7 @@ function App() {
     }
   }, [activeZoneId, backendZones, addToZoneLog, templateUsageByZoneId, requestConfirm]);
 
-  const handleDeleteZoneFromMenu = useCallback(async (zoneId) => {
+  const handleDeleteZoneFromMenu = useCallback(async (zoneId, options = null) => {
     const zoneIdToDelete = Number(zoneId);
     if (!Number.isFinite(zoneIdToDelete)) return;
     const usageCount = Number(templateUsageByZoneId[String(zoneIdToDelete)] || 0);
@@ -3168,16 +3168,18 @@ function App() {
     }
     const targetZone = backendZones.find((z) => z.id === zoneIdToDelete);
     const title = targetZone?.name ? `«${targetZone.name}»` : `ID ${zoneIdToDelete}`;
-    const confirmed = await requestConfirm({
-      title: 'Удаление зоны',
-      message:
-        `Удалить зону ${title}? Это действие нельзя отменить.`,
-      warning: 'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.',
-      confirmText: 'Да, удалить',
-      cancelText: 'Нет',
-      tone: 'danger',
-    });
-    if (!confirmed) return;
+    const skipConfirm = Boolean(options?.skipConfirm);
+    if (!skipConfirm) {
+      const confirmed = await requestConfirm({
+        title: 'Удаление зоны',
+        message: `Удалить зону ${title}? Это действие нельзя отменить.`,
+        warning: 'Обычные маршруты миссий внутри этой зоны (не шаблоны) будут удалены автоматически.',
+        confirmText: 'Да, удалить',
+        cancelText: 'Нет',
+        tone: 'danger',
+      });
+      if (!confirmed) return;
+    }
 
     setRectZoneBusy(true);
     try {

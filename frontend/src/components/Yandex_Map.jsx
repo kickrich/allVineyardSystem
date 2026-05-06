@@ -618,6 +618,7 @@ export function YandexMap({
   const mapSizeRafRef = useRef(null);
   const lastMapSizeRef = useRef({ w: 0, h: 0 });
   const [buildings, setBuildings] = useState([]);
+  const [buildingsStatus, setBuildingsStatus] = useState('idle');
   const buildingsAbortRef = useRef(null);
   const buildingsDebounceRef = useRef(null);
   const [buildingsNotice, setBuildingsNotice] = useState(null);
@@ -748,19 +749,26 @@ export function YandexMap({
     const bboxRaw = computeBoundaryBbox(activeBoundary);
     if (!bboxRaw) {
       setBuildings([]);
+      setBuildingsStatus('idle');
       return;
     }
     const bbox = inflateBbox(bboxRaw, 40);
+    setBuildingsStatus('loading');
+    setBuildings([]);
 
     buildingsDebounceRef.current = setTimeout(() => {
       const ac = new AbortController();
       buildingsAbortRef.current = ac;
       fetchBuildingsFromOverpass(bbox, ac.signal)
-        .then((polys) => setBuildings(Array.isArray(polys) ? polys : []))
+        .then((polys) => {
+          setBuildings(Array.isArray(polys) ? polys : []);
+          setBuildingsStatus('ready');
+        })
         .catch((e) => {
           if (String(e?.name) === 'AbortError') return;
           console.warn('Overpass buildings fetch failed:', e?.message ?? e);
           setBuildings([]);
+          setBuildingsStatus('error');
         })
         .finally(() => {
           buildingsAbortRef.current = null;
@@ -2093,6 +2101,7 @@ export function YandexMap({
       const clickPoint = { lat: coords[0], lng: coords[1] };
 
       const rejectByBuildings = (prevPoint) => {
+        if (buildingsStatus !== 'ready') return false;
         if (!Array.isArray(buildings) || buildings.length === 0) return false;
         for (const b of buildings) {
           if (!b?.ring || !b?.bbox) continue;
@@ -2245,6 +2254,7 @@ export function YandexMap({
     placementMode,
     onRouteShiftSegmentToggle,
     buildings,
+    buildingsStatus,
   ]);
 
   useEffect(() => {

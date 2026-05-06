@@ -184,7 +184,7 @@ export function ZoneMapMenu({
                   const zid = confirmDeleteZoneId;
                   setConfirmDeleteZoneId(null);
                   setOpen(false);
-                  onDeleteZone?.(zid);
+                    onDeleteZone?.(zid, { skipConfirm: true });
                 }}
                 className={`h-10 rounded-lg px-4 text-sm font-semibold ${
                   deleteBusy
