@@ -50,6 +50,23 @@ async function registerDevUser(email, password, name) {
 }
 
 export async function ensureApiSession() {
+  // Не перетираем текущий токен: иначе можно "перепрыгнуть" на dev-пользователя
+  // и потерять доступ к уже созданной миссии другого пользователя.
+  if (typeof window !== 'undefined') {
+    const existingToken = localStorage.getItem('api_token');
+    if (typeof existingToken === 'string' && existingToken.trim().length > 0) {
+      const rawUser = localStorage.getItem('api_user');
+      if (rawUser) {
+        try {
+          return JSON.parse(rawUser);
+        } catch {
+          return { token: existingToken };
+        }
+      }
+      return { token: existingToken };
+    }
+  }
+
   const email = DEFAULT_DEV_EMAIL;
   const password = DEFAULT_DEV_PASSWORD;
   const name = DEFAULT_DEV_NAME;

@@ -222,23 +222,15 @@
     <div class="bg-white rounded-lg shadow-md p-6 mb-8">
       <h2 class="text-xl font-semibold text-gray-700 mb-6">Результаты анализа</h2>
       
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div class="bg-green-50 rounded-lg p-6 text-center">
+      <div class="flex items-stretch gap-6 mb-8">
+        <div class="flex-1 bg-green-50 rounded-lg p-6 text-center">
           <p class="text-sm text-green-600 mb-2">Всего кустов</p>
           <p class="text-4xl font-bold text-green-700" id="total_bushes"><%= @video.total_bushes_count %></p>
         </div>
         
-        <div class="bg-red-50 rounded-lg p-6 text-center">
+        <div class="flex-1 bg-red-50 rounded-lg p-6 text-center">
           <p class="text-sm text-red-600 mb-2">Всего пробелов</p>
           <p class="text-4xl font-bold text-red-700" id="total_gaps"><%= @video.total_gaps_count %></p>
-        </div>
-        
-        <div class="bg-purple-50 rounded-lg p-6 text-center">
-          <p class="text-sm text-purple-600 mb-2">Среднее расстояние между кустами</p>
-          <p class="text-4xl font-bold text-purple-700" id="avg_spacing">
-            <%= number_with_precision(@video.avg_bush_spacing, precision: 2) %>
-            <span class="text-sm">px</span>
-          </p>
         </div>
       </div>
     </div>
@@ -254,7 +246,6 @@
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Статус</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Кусты</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Пробелы</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Среднее расстояние</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Прогресс</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Действия</th>
             </tr>
@@ -273,9 +264,6 @@
                 </td>
                 <td class="px-4 py-2 text-sm text-gray-900"><%= shard.bushes_count || '-' %></td>
                 <td class="px-4 py-2 text-sm text-gray-900"><%= shard.gaps_count || '-' %></td>
-                <td class="px-4 py-2 text-sm text-gray-900">
-                  <%= number_with_precision(shard.bush_spacing_avg, precision: 2) if shard.bush_spacing_avg %>
-                </td>
                 <td class="px-4 py-2">
                   <% if shard.status == 'processing' && shard.job_id.present? %>
                     <div class="w-32 bg-gray-200 rounded-full h-1.5">
@@ -318,12 +306,6 @@
     <div class="bg-white rounded-lg shadow-md p-6">
       <div class="flex justify-between items-center mb-4">
         <h2 class="text-xl font-semibold text-gray-700">Схема участка</h2>
-        <div class="flex gap-2">
-          <button id="zoomInBtn" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors text-lg font-bold" title="Приблизить">+</button>
-          <button id="zoomOutBtn" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors text-lg font-bold" title="Отдалить">-</button>
-          <button id="resetViewBtn" class="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors" title="Сбросить вид">Сброс</button>
-          <button id="fitViewBtn" class="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors" title="Показать всё">Показать всё</button>
-        </div>
       </div>
       
       <div class="border border-gray-200 rounded-lg p-4 bg-gray-50" style="height: 600px; position: relative; overflow: hidden;">
@@ -609,7 +591,6 @@
             
             document.getElementById('total_bushes').textContent = data.statistics.total_bushes;
             document.getElementById('total_gaps').textContent = data.statistics.total_gaps;
-            document.getElementById('avg_spacing').innerHTML = data.statistics.avg_spacing.toFixed(2) + '<span class="text-sm">px</span>';
             document.getElementById('shards_count').textContent = data.statistics.shards_count;
             document.getElementById('processed_shards').textContent = `${data.statistics.processed_shards} / ${data.statistics.shards_count}`;
             document.getElementById('progress_percent').textContent = data.statistics.progress + '%';
@@ -617,7 +598,7 @@
             
             const tbody = document.getElementById('shards-table-body');
             if (tbody.children.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">Нет загруженных рядов</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">Нет загруженных рядов</td></tr>';
             }
             
             showToast(`Ряд ${shardIndex} удален`, 'success');
