@@ -15,6 +15,9 @@ const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
 const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024;
 const AI_RESULTS_POLL_INTERVAL_MS = 5000;
 const LOGS_CLEARED_AT_KEY = 'ui_logs_cleared_at_ms_v1';
+/** Минимальный и максимальный зум Яндекс.Карт (колёсико / программный setZoom). */
+const MAP_MIN_ZOOM = 2;
+const MAP_MAX_ZOOM = 21;
 
 export {
 VIEW_TRANSITION_MS,
@@ -33,4 +36,6 @@ VIDEO_RECORDER_MIME_CANDIDATES,
 VIDEO_MULTIPART_CHUNK_SIZE_BYTES,
 AI_RESULTS_POLL_INTERVAL_MS,
 LOGS_CLEARED_AT_KEY,
+MAP_MIN_ZOOM,
+MAP_MAX_ZOOM,
 };

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flightStatus } from '../constants/drones_data';
+import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '../constants/app';
 import { RouteShiftSegmentsPopup } from './Route_Shift_Segments_Popup';
 
 if (typeof window !== 'undefined') {
@@ -18,6 +19,28 @@ const OSM_OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const BUILDINGS_REFRESH_DEBOUNCE_MS = 450;
 /** Крупные полигоны OSM (кварталы/зоны) не считаем отдельным зданием для проверки маршрута. */
 const MAX_BUILDING_FOOTPRINT_AREA_M2 = 25_000;
+
+const YANDEX_MAP_TYPE_SATELLITE = 'yandex#satellite';
+const YANDEX_MAP_TYPE_SCHEME = 'yandex#map';
+
+function applyYandexZoomRangeForType(map, mapType, center) {
+  if (!map || typeof window.ymaps?.getZoomRange !== 'function') return;
+  const coords = Array.isArray(center) && center.length >= 2 ? center : null;
+  if (!coords) return;
+  window.ymaps
+    .getZoomRange(mapType, coords)
+    .then((range) => {
+      if (!map) return;
+      const minZ = Number(range?.[0]);
+      const maxZ = Number(range?.[1]);
+      if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) return;
+      map.options.set({
+        minZoom: Math.max(MAP_MIN_ZOOM, minZ),
+        maxZoom: Math.min(MAP_MAX_ZOOM, maxZ),
+      });
+    })
+    .catch(() => {});
+}
 
 function easeOutCubic(t) {
   return 1 - (1 - t) ** 3;
@@ -651,6 +674,7 @@ export function YandexMap({
   const rectDrawStateRef = useRef({ active: false, start: null, last: null });
   const lastZoneFitNonceRef = useRef(zoneFitNonce);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [mapType, setMapType] = useState(YANDEX_MAP_TYPE_SATELLITE);
   const [error, setError] = useState(null);
   const [routeShiftPanelOpen, setRouteShiftPanelOpen] = useState(false);
   const [routeShiftSelectionMode, setRouteShiftSelectionMode] = useState(false);
@@ -859,11 +883,23 @@ export function YandexMap({
     if (!mapContainerRef.current || !window.ymaps) return;
     if (mapInstanceRef.current) return;
 
-    const map = new window.ymaps.Map(mapContainerRef.current, {
-      center: mapCenter || [55.751244, 37.618423],
-      zoom: mapZoom,
-      controls: [],
-    });
+    const map = new window.ymaps.Map(
+      mapContainerRef.current,
+      {
+        center: mapCenter || [55.751244, 37.618423],
+        zoom: mapZoom,
+        type: YANDEX_MAP_TYPE_SATELLITE,
+        controls: [],
+      },
+      {
+        minZoom: MAP_MIN_ZOOM,
+        maxZoom: MAP_MAX_ZOOM,
+        avoidFractionalZoom: false,
+      }
+    );
+
+    const center = mapCenter || [55.751244, 37.618423];
+    applyYandexZoomRangeForType(map, YANDEX_MAP_TYPE_SATELLITE, center);
 
     mapInstanceRef.current = map;
     lastMapCenterRef.current = mapCenter;
@@ -1949,6 +1985,24 @@ export function YandexMap({
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    try {
+      map.setType(mapType);
+    } catch {
+      /* ignore */
+    }
+    let center = mapCenter;
+    try {
+      const c = typeof map.getCenter === 'function' ? map.getCenter() : null;
+      if (Array.isArray(c) && c.length >= 2) center = c;
+    } catch {
+      /* ignore */
+    }
+    applyYandexZoomRangeForType(map, mapType, center);
+  }, [mapType, mapLoaded, mapCenter]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current) return;
     if (!focusRequest || typeof focusRequest !== 'object') return;
     const nonce = focusRequest.nonce;
     const center = focusRequest.center;
@@ -2562,6 +2616,14 @@ export function YandexMap({
     (onboardingRouteShiftStep ||
       (routeEditMode && Array.isArray(routeEditPath) && routeEditPath.length >= 2));
 
+  const isSatelliteMap = mapType === YANDEX_MAP_TYPE_SATELLITE;
+
+  const toggleMapType = () => {
+    setMapType((prev) =>
+      prev === YANDEX_MAP_TYPE_SATELLITE ? YANDEX_MAP_TYPE_SCHEME : YANDEX_MAP_TYPE_SATELLITE
+    );
+  };
+
   return (
     <div
       className={`relative h-full w-full overflow-hidden rounded bg-gray-900 ${cursorAddPoint ? 'cursor-route-edit' : ''}`}
@@ -2575,6 +2637,25 @@ export function YandexMap({
           cursor: cursorAddPoint ? 'crosshair' : 'grab',
         }}
       />
+      {mapLoaded && (
+        <div className="pointer-events-auto absolute bottom-3 right-3 z-[200]">
+          <button
+            type="button"
+            onClick={toggleMapType}
+            title={
+              isSatelliteMap
+                ? 'Переключить на схему (дороги и подписи)'
+                : 'Переключить на спутниковые снимки'
+            }
+            aria-label={
+              isSatelliteMap ? 'Показать схему карты' : 'Показать спутниковую карту'
+            }
+            className="rounded-xl border border-gray-500/70 bg-gray-900/90 px-3 py-2 min-h-[44px] text-sm font-medium text-gray-100 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800/95"
+          >
+            {isSatelliteMap ? 'Схема' : 'Спутник'}
+          </button>
+        </div>
+      )}
       {buildingsNotice && (
         <div className="pointer-events-none absolute top-3 left-1/2 z-[210] w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-500/60 bg-amber-950/90 px-3 py-2 text-sm text-amber-100 shadow-xl backdrop-blur-sm">
           {buildingsNotice}

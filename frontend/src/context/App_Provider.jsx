@@ -15,6 +15,7 @@ import {
   VIDEO_RECORDER_MIME_CANDIDATES,
   VIDEO_MULTIPART_CHUNK_SIZE_BYTES,
   AI_RESULTS_POLL_INTERVAL_MS,
+  MAP_MAX_ZOOM,
 } from '../constants/app';
 import {
   fetchDronesFromBackend,
@@ -1051,7 +1052,7 @@ export function AppProvider({ children }) {
       const lng = Number(drone.position.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const DRONE_FOCUS_MIN_ZOOM = 18;
-      const DRONE_FOCUS_MAX_ZOOM = 19;
+      const DRONE_FOCUS_MAX_ZOOM = MAP_MAX_ZOOM;
       const targetZoom = Math.min(
         DRONE_FOCUS_MAX_ZOOM,
         Math.max(

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { MAP_MAX_ZOOM } from '../constants/app';
 
 const SEARCH_HISTORY_KEY = 'search-history';
 const MAX_HISTORY = 10;
@@ -187,7 +188,7 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
             const kind = geoObject.properties.get('metaDataProperty')?.GeocoderMetaData?.kind;
             if (kind) {
                 switch (kind) {
-                    case 'house': zoom = 18; break;
+                    case 'house': zoom = Math.min(MAP_MAX_ZOOM, 20); break;
                     case 'street': zoom = 17; break;
                     case 'metro': zoom = 16; break;
                     case 'district': zoom = 15; break;
@@ -231,7 +232,7 @@ export function SearchBox({ setMapCenter, setMapZoom }) {
                 const coordinates = [parseFloat(pos[1]), parseFloat(pos[0])];
 
                 setMapCenter(coordinates);
-                setMapZoom(17);
+                setMapZoom(Math.min(MAP_MAX_ZOOM, 19));
                 saveToHistory(searchText);
             }
         } catch (error) {
