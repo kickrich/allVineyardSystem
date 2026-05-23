@@ -293,7 +293,53 @@ export function AppProvider({ children }) {
   const backendMissionIdsRef = useRef(new Map());
   const missionDroneByMissionIdRef = useRef(new Map());
   const trackedMissionIdsRef = useRef(new Set());
+  const aiResultsByMissionIdRef = useRef(aiResultsByMissionId);
+  useEffect(() => {
+    aiResultsByMissionIdRef.current = aiResultsByMissionId;
+  }, [aiResultsByMissionId]);
   const seenAiResultKeysRef = useRef(new Set());
+
+  const untrackMissionId = (missionId) => {
+    const numericId = Number(missionId);
+    if (!Number.isFinite(numericId)) return;
+    trackedMissionIdsRef.current.delete(numericId);
+  };
+
+  const trackMissionId = (missionId) => {
+    const numericId = Number(missionId);
+    if (!Number.isFinite(numericId)) return;
+    trackedMissionIdsRef.current.add(numericId);
+  };
+
+  const isMissionTracked = (missionId) => {
+    const numericId = Number(missionId);
+    return Number.isFinite(numericId) && trackedMissionIdsRef.current.has(numericId);
+  };
+
+  const clearAiTrackingForDroneExcept = (droneId, keepMissionId = null) => {
+    if (droneId == null) return;
+    const keepKey = keepMissionId != null ? String(keepMissionId) : null;
+    const missionIdsToClear = [];
+    missionDroneByMissionIdRef.current.forEach((mappedDroneId, missionId) => {
+      if (mappedDroneId !== droneId) return;
+      if (keepKey != null && String(missionId) === keepKey) return;
+      missionIdsToClear.push(missionId);
+    });
+    if (!missionIdsToClear.length) return;
+    missionIdsToClear.forEach((mId) => untrackMissionId(mId));
+    setAiPendingByMissionId((prev) => {
+      const copy = { ...prev };
+      let changed = false;
+      for (const mId of missionIdsToClear) {
+        const key = String(mId);
+        if (key in copy) {
+          delete copy[key];
+          changed = true;
+        }
+      }
+      return changed ? copy : prev;
+    });
+  };
   const persistedDroneMapStateRef = useRef(new Map());
   const hasHydratedDronesRef = useRef(false);
 
@@ -677,7 +723,7 @@ export function AppProvider({ children }) {
                   continue;
                 }
                 restoredResults[String(missionId)] = result;
-                trackedMissionIdsRef.current.delete(missionId);
+                untrackMissionId(missionId);
               } catch {
               }
             }
@@ -696,9 +742,9 @@ export function AppProvider({ children }) {
             }
             activeMissionIds.forEach((missionId) => {
               if (restoredResults[String(missionId)]) {
-                trackedMissionIdsRef.current.delete(missionId);
+                untrackMissionId(missionId);
               } else {
-                trackedMissionIdsRef.current.add(missionId);
+                trackMissionId(missionId);
               }
             });
           }
@@ -857,6 +903,8 @@ export function AppProvider({ children }) {
 
     videoUploadInProgressRef.current.set(droneId, true);
     try {
+      clearAiTrackingForDroneExcept(droneId, missionId);
+      missionDroneByMissionIdRef.current.set(missionId, droneId);
       const normalizedShiftSegments = Array.isArray(shiftSegmentIndices)
         ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
         : toNormalizedShiftSegmentsForDrone(droneId);
@@ -931,8 +979,7 @@ export function AppProvider({ children }) {
         parts,
       });
 
-      missionDroneByMissionIdRef.current.set(missionId, droneId);
-      trackedMissionIdsRef.current.add(missionId);
+      trackMissionId(missionId);
     } finally {
       videoUploadInProgressRef.current.delete(droneId);
     }
@@ -1523,7 +1570,7 @@ export function AppProvider({ children }) {
   const aiProcessingPendingForSidebar = useMemo(() => {
     const entries = Object.entries(aiPendingByMissionId);
     if (!entries.length) return [];
-    return entries
+    const items = entries
       .filter(([missionId]) => !(String(missionId) in aiResultsByMissionId))
       .map(([missionId, pendingRaw]) => {
         const pending = pendingRaw === true ? {} : (pendingRaw && typeof pendingRaw === 'object' ? pendingRaw : {});
@@ -1547,8 +1594,20 @@ export function AppProvider({ children }) {
           statusMessage: pending.statusMessage ?? null,
           updatedAt: pending.updatedAt ?? null,
         };
-      })
-      .sort((a, b) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0));
+      });
+
+    const latestByDrone = new Map();
+    for (const item of items) {
+      const groupKey = item.droneId != null ? String(item.droneId) : `mission-${item.missionId}`;
+      const prev = latestByDrone.get(groupKey);
+      if (!prev || item.missionId > prev.missionId) {
+        latestByDrone.set(groupKey, item);
+      }
+    }
+
+    return Array.from(latestByDrone.values()).sort(
+      (a, b) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0)
+    );
   }, [aiPendingByMissionId, aiResultsByMissionId, drones]);
 
   const hydrateBackendContext = useCallback(async () => {
@@ -1591,14 +1650,14 @@ export function AppProvider({ children }) {
       }
       try {
         const active = await fetchActiveMissionsForDrone(drone.id);
-        if (Array.isArray(active) && active.length > 0) {
-          const latestActive = [...active].sort((a, b) => Number(b?.id ?? 0) - Number(a?.id ?? 0))[0];
-          const existingMissionId = Number(latestActive?.id);
-          if (Number.isFinite(existingMissionId)) {
-            backendMissionIdsRef.current.set(drone.id, existingMissionId);
-            missionDroneByMissionIdRef.current.set(existingMissionId, drone.id);
-            trackedMissionIdsRef.current.add(existingMissionId);
-            return existingMissionId;
+        if (Array.isArray(active)) {
+          for (const m of active) {
+            if (m?.id == null) continue;
+            try {
+              await cancelMissionInBackend(m.id);
+            } catch (cancelErr) {
+              console.warn('cancel stale active mission failed:', cancelErr?.message ?? cancelErr);
+            }
           }
         }
       } catch (existingErr) {
@@ -1642,11 +1701,19 @@ export function AppProvider({ children }) {
       if (!missionId) {
         throw new Error('Backend не вернул id миссии');
       }
+      const speedMps = Math.max(0, Number(drone.maxSpeed ?? 0) / 3.6);
+      for (let i = 0; i < routePath.length; i += 1) {
+        await addRoutePointToMissionInBackend(missionId, routePath[i], i, speedMps);
+      }
+      await approveMissionInBackend(missionId);
+      await startMissionInBackend(missionId);
+
       try {
         const numericMissionId = Number(missionId);
         if (Number.isFinite(numericMissionId)) {
+          clearAiTrackingForDroneExcept(drone.id, numericMissionId);
           missionDroneByMissionIdRef.current.set(numericMissionId, drone.id);
-          trackedMissionIdsRef.current.add(numericMissionId);
+          trackMissionId(numericMissionId);
           setAiPendingByMissionId((prev) => ({
             ...prev,
             [String(numericMissionId)]: {
@@ -1658,12 +1725,6 @@ export function AppProvider({ children }) {
       } catch {
       }
 
-      const speedMps = Math.max(0, Number(drone.maxSpeed ?? 0) / 3.6);
-      for (let i = 0; i < routePath.length; i += 1) {
-        await addRoutePointToMissionInBackend(missionId, routePath[i], i, speedMps);
-      }
-      await approveMissionInBackend(missionId);
-      await startMissionInBackend(missionId);
       backendMissionIdsRef.current.set(drone.id, missionId);
       void syncDroneStateToBackend(drone.id, { battery: drone.battery }).catch((e) =>
         console.warn('PATCH drone (battery после start):', e?.message ?? e)
@@ -1695,7 +1756,7 @@ export function AppProvider({ children }) {
     try {
       await cancelMissionInBackend(missionId);
       backendMissionIdsRef.current.delete(droneId);
-      trackedMissionIdsRef.current.delete(missionId);
+      untrackMissionId(missionId);
       missionDroneByMissionIdRef.current.delete(missionId);
       setAiPendingByMissionId((prev) => {
         if (!(String(missionId) in prev)) return prev;
@@ -1743,7 +1804,7 @@ export function AppProvider({ children }) {
         delete copy[key];
         return copy;
       });
-      trackedMissionIdsRef.current.delete(Number(missionId));
+      untrackMissionId(missionId);
       seenAiResultKeysRef.current.forEach((k) => {
         if (String(k).startsWith(`${missionId}:`)) {
           seenAiResultKeysRef.current.delete(k);
@@ -1798,6 +1859,17 @@ export function AppProvider({ children }) {
         if (cancelled) return;
         const missionKey = String(missionId);
 
+        if (missionKey in aiResultsByMissionIdRef.current) {
+          untrackMissionId(missionId);
+          setAiPendingByMissionId((prev) => {
+            if (!(missionKey in prev)) return prev;
+            const copy = { ...prev };
+            delete copy[missionKey];
+            return copy;
+          });
+          continue;
+        }
+
         try {
           const statusPayload = await fetchMissionProcessingStatusFromBackend(missionId);
           if (statusPayload && !cancelled) {
@@ -1820,7 +1892,7 @@ export function AppProvider({ children }) {
             setAiPendingByMissionId((prev) => {
               const prevEntry = prev[missionKey];
               const prevObj = prevEntry === true ? {} : (prevEntry && typeof prevEntry === 'object' ? prevEntry : {});
-              if (!(missionKey in prev) && !trackedMissionIdsRef.current.has(missionId)) {
+              if (!(missionKey in prev) && !isMissionTracked(missionId)) {
                 return prev;
               }
               return {
@@ -1861,7 +1933,7 @@ export function AppProvider({ children }) {
             delete copy[missionKey];
             return copy;
           });
-          trackedMissionIdsRef.current.delete(missionId);
+          untrackMissionId(missionId);
 
           const versionKey = [
             missionId,
@@ -1872,6 +1944,7 @@ export function AppProvider({ children }) {
           if (!seenAiResultKeysRef.current.has(versionKey)) {
             seenAiResultKeysRef.current.add(versionKey);
             const droneId = missionDroneByMissionIdRef.current.get(Number(missionId));
+            clearAiTrackingForDroneExcept(droneId, missionId);
             const droneName = dronesRef.current.find((d) => d.id === droneId)?.name;
             setAiCloudNotice({
               missionId: Number(missionId),
@@ -2301,7 +2374,7 @@ export function AppProvider({ children }) {
       void syncDroneStateToBackend(droneId, { status: 'idle' }).catch((e) =>
         console.warn('PATCH drone (долёт до старта):', e?.message ?? e)
       );
-      void completeBackendMissionForDrone(droneId);
+      // Перелёт к первой точке не создаёт backend-миссию — не завершаем её здесь.
       return;
     }
 
@@ -2545,31 +2618,10 @@ export function AppProvider({ children }) {
         })
       );
       addToDroneLog(droneId, '🛫 Взлёт выполнен');
-      void (async () => {
-        const missionId = await createAndStartBackendMission(drone, flightPath);
-        if (!missionId) {
-          addToDroneLog(droneId, '⚠️ Перелёт отменён: backend миссия не создалась');
-          setDrones(prev =>
-            prev.map(d => {
-              if (d.id !== droneId) return d;
-              return {
-                ...d,
-                flightStatus: flightStatus.IDLE,
-                isFlying: false,
-                speed: 0,
-                altitude: 0,
-                missionElapsedTime: 0,
-                flightProgress: 0,
-                currentWaypointIndex: 0
-              };
-            })
-          );
-          return;
-        }
-        startFlightMovement(droneId);
-      })();
+      // Backend-миссия создаётся только при полноценном «Запустить миссию», не при долёте.
+      startFlightMovement(droneId);
     }, 2000);
-  }, [drones, addToDroneLog, createAndStartBackendMission]);
+  }, [drones, addToDroneLog]);
 
   const stopAllFlights = () => {
     drones.forEach(drone => {
