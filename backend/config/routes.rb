@@ -16,6 +16,7 @@ Rails.application.routes.draw do
           post :start
           post :complete
           get :ai_result
+          get :processing_status
           delete :ai_result, action: :destroy_ai_result
         end
         collection do

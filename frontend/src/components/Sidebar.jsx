@@ -28,6 +28,7 @@ export const Sidebar = ({
   workZoneReady = false,
   instructionTourActive = false,
   aiResults = [],
+  aiProcessingPending = [],
   onDeleteAiMissionResult,
   onDeleteAllAiMissionResults,
   suspendAutoSelectDrone = false,
@@ -502,9 +503,9 @@ export const Sidebar = ({
           onClick={() => setActiveTab('bushes')}
         >
           Результаты
-          {aiResults.length > 0 && (
+          {(aiResults.length > 0 || aiProcessingPending.length > 0) && (
             <span className="ml-2 bg-emerald-600 text-white text-xs px-2 py-1 rounded-full">
-              {aiResults.length}
+              {aiResults.length + aiProcessingPending.length}
             </span>
           )}
         </button>
@@ -805,12 +806,67 @@ export const Sidebar = ({
 
         {activeTab === 'bushes' && (
           <div className="h-full min-h-0 flex flex-col gap-4">
-            {aiResults.length === 0 ? (
+            {aiResults.length === 0 && aiProcessingPending.length === 0 ? (
               <div className="flex-1 flex items-center justify-center text-center py-8 text-gray-500">
                 <p>Пока нет результатов анализа</p>
               </div>
             ) : (
               <div className="flex-1 min-h-0 space-y-2 overflow-y-auto pr-2">
+                {aiProcessingPending.map((pending) => {
+                  const progress = pending.processingProgress;
+                  const hasProgress = Number.isFinite(progress);
+                  const shardLabel =
+                    pending.processedShards != null && pending.shardsCount != null
+                      ? `${pending.processedShards} / ${pending.shardsCount} рядов`
+                      : pending.rowsCount != null
+                        ? `Рядов: ${pending.rowsCount}`
+                        : null;
+                  let phaseLabel = 'Обработка видео…';
+                  if (pending.phase === 'mission') {
+                    phaseLabel = 'Миссия выполняется…';
+                  } else if (pending.statusMessage) {
+                    phaseLabel = pending.statusMessage;
+                  } else if (pending.videoStatus === 'uploading') {
+                    phaseLabel = 'Загрузка видео…';
+                  } else if (pending.videoStatus === 'processing') {
+                    phaseLabel = 'Анализ видео…';
+                  } else if (pending.videoStatus === 'completed') {
+                    phaseLabel = 'Синхронизация результатов…';
+                  } else if (pending.videoStatus === 'error') {
+                    phaseLabel = 'Ошибка обработки';
+                  }
+
+                  return (
+                    <div
+                      key={`pending-${pending.missionId}`}
+                      className="rounded-lg border border-amber-700/60 bg-amber-950/20 p-3"
+                    >
+                      <div className="mb-2">
+                        <p className="font-medium text-amber-200">
+                          Миссия #{pending.missionId}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {pending.droneName ? `Дрон: ${pending.droneName}` : 'Дрон не определён'}
+                        </p>
+                        <p className="mt-1 text-xs text-amber-200/90">{phaseLabel}</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="h-2 overflow-hidden rounded-full bg-gray-800">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              hasProgress ? 'bg-amber-400' : 'bg-amber-400/40 animate-pulse'
+                            }`}
+                            style={{ width: hasProgress ? `${progress}%` : '35%' }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-gray-400">
+                          <span>{hasProgress ? `${Math.round(progress)}%` : 'Прогресс…'}</span>
+                          {shardLabel ? <span>{shardLabel}</span> : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
                 {aiResults.map((result) => (
                   <div
                     key={`${result.missionId}-${result.updatedAt ?? result.createdAt ?? 'unknown'}`}

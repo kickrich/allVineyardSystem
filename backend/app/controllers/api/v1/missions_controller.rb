@@ -1,7 +1,7 @@
 module Api
   module V1
     class MissionsController < BaseController
-      before_action :set_mission, only: %i[show update destroy start complete ai_result]
+      before_action :set_mission, only: %i[show update destroy start complete ai_result processing_status]
 
       # GET /api/v1/missions
       # Параметры: status, drone_id, zone_id, active=1 (только planned/approved/in_progress)
@@ -59,6 +59,12 @@ module Api
         render json: @mission
       rescue StandardError => e
         render_errors(e.message, status: :unprocessable_entity)
+      end
+
+      # Прогресс обработки видео в VineyardApp GET /api/v1/missions/:id/processing_status
+      def processing_status
+        payload = FetchVineyardProcessingStatusService.new(@mission).call
+        render_data(payload)
       end
 
       # Получение AI-результата миссии GET /api/v1/missions/:id/ai_result

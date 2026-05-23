@@ -390,6 +390,14 @@ export async function createDroneLogInBackend({ droneId = null, message, data = 
   return extractData(response);
 }
 
+export async function fetchMissionProcessingStatusFromBackend(missionId) {
+  if (missionId == null) return null;
+  const response = await apiGet(
+    `/api/v1/missions/${encodeURIComponent(missionId)}/processing_status`
+  );
+  return extractData(response);
+}
+
 export async function fetchMissionAiResultFromBackend(missionId) {
   if (missionId == null) return null;
   const key = String(missionId);

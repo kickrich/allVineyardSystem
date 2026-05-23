@@ -16,7 +16,7 @@ const DRONE_PLACE_OFFSET_M = 72;
 const DRONE_PLACE_DURATION_MS = 400;
 
 const OSM_OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-const BUILDINGS_REFRESH_DEBOUNCE_MS = 450;
+const BUILDINGS_REFRESH_DEBOUNCE_MS = 200;
 /** Крупные полигоны OSM (кварталы/зоны) не считаем отдельным зданием для проверки маршрута. */
 const MAX_BUILDING_FOOTPRINT_AREA_M2 = 25_000;
 
@@ -765,7 +765,6 @@ export function YandexMap({
     }
     const bbox = inflateBbox(bboxRaw, 40);
     setBuildingsStatus('loading');
-    setBuildings([]);
 
     buildingsDebounceRef.current = setTimeout(() => {
       const ac = new AbortController();
@@ -778,8 +777,7 @@ export function YandexMap({
         .catch((e) => {
           if (String(e?.name) === 'AbortError') return;
           console.warn('Overpass buildings fetch failed:', e?.message ?? e);
-          setBuildings([]);
-          setBuildingsStatus('error');
+          setBuildingsStatus((prev) => (prev === 'ready' ? 'ready' : 'error'));
         })
         .finally(() => {
           buildingsAbortRef.current = null;
@@ -2093,25 +2091,7 @@ export function YandexMap({
       };
       showBuildingsNoticeRef.current = showBuildingsNotice;
 
-      const ensureBuildingsReady = () => {
-        // Здания грузятся по bbox активной зоны. Если зоны нет — не блокируем.
-        if (!activeBoundary) return true;
-        if (buildingsStatus === 'ready') return true;
-        if (buildingsStatus === 'loading') {
-          showBuildingsNotice('Загружаю здания (OSM)… подождите.');
-          return false;
-        }
-        if (buildingsStatus === 'error') {
-          showBuildingsNotice('Не удалось загрузить здания (OSM). Попробуйте ещё раз через пару секунд.');
-          return false;
-        }
-        // idle / unknown
-        showBuildingsNotice('Загружаю здания (OSM)…');
-        return false;
-      };
-
       if (routeEditMode) {
-        if (!ensureBuildingsReady()) return;
         const path = Array.isArray(routeEditPathRef.current) ? routeEditPathRef.current : [];
         if (routeShiftSelectionMode && path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
           const nearestPointM = findNearestRoutePointDistanceMeters(path, clickPoint.lat, clickPoint.lng);
@@ -2139,10 +2119,12 @@ export function YandexMap({
           Array.isArray(last) && last.length >= 2
             ? { lat: Number(last[0]), lng: Number(last[1]) }
             : null;
+        const buildingList =
+          buildingsStatusRef.current === 'ready' ? buildingsRef.current : [];
         if (
           prev &&
-          buildingsStatus === 'ready' &&
-          routeSegmentCrossesBuildings(prev, clickPoint, buildings)
+          buildingList.length > 0 &&
+          routeSegmentCrossesBuildings(prev, clickPoint, buildingList)
         ) {
           showBuildingsNotice('Нельзя прокладывать маршрут через здания (OSM).');
           return;

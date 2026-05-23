@@ -43,6 +43,7 @@ import {
   fetchDroneLogsFromBackend,
   createDroneLogInBackend,
   fetchMissionAiResultFromBackend,
+  fetchMissionProcessingStatusFromBackend,
   deleteMissionAiResultInBackend,
   deleteAllMissionAiResultsInBackend,
   postTelemetryToBackend,
@@ -273,6 +274,10 @@ export function AppProvider({ children }) {
   const [authReady, setAuthReady] = useState(hasStoredApiToken);
   const [aiResultsByMissionId, setAiResultsByMissionId] = useState({});
   const [aiPendingByMissionId, setAiPendingByMissionId] = useState({});
+  const aiPendingByMissionIdRef = useRef(aiPendingByMissionId);
+  useEffect(() => {
+    aiPendingByMissionIdRef.current = aiPendingByMissionId;
+  }, [aiPendingByMissionId]);
   const [aiCloudNotice, setAiCloudNotice] = useState(null);
   const [aiCloudNoticeUi, setAiCloudNoticeUi] = useState({ notice: null, visible: false, exiting: false });
   const [sidebarTab, setSidebarTab] = useState('control');
@@ -1515,6 +1520,37 @@ export function AppProvider({ children }) {
       });
   }, [aiResultsByMissionId, drones]);
 
+  const aiProcessingPendingForSidebar = useMemo(() => {
+    const entries = Object.entries(aiPendingByMissionId);
+    if (!entries.length) return [];
+    return entries
+      .filter(([missionId]) => !(String(missionId) in aiResultsByMissionId))
+      .map(([missionId, pendingRaw]) => {
+        const pending = pendingRaw === true ? {} : (pendingRaw && typeof pendingRaw === 'object' ? pendingRaw : {});
+        const numericMissionId = Number(missionId);
+        const droneId = missionDroneByMissionIdRef.current.get(numericMissionId);
+        const droneName = drones.find((d) => d.id === droneId)?.name ?? null;
+        const progress = Number(pending.processingProgress);
+        const shardsCount = Number(pending.shardsCount);
+        const processedShards = Number(pending.processedShards);
+        const rowsCount = Number(pending.rowsCount);
+        return {
+          missionId: numericMissionId,
+          droneId: droneId ?? null,
+          droneName,
+          phase: pending.phase ?? 'processing',
+          videoStatus: pending.videoStatus ?? null,
+          processingProgress: Number.isFinite(progress) ? Math.min(100, Math.max(0, progress)) : null,
+          shardsCount: Number.isFinite(shardsCount) && shardsCount > 0 ? shardsCount : null,
+          processedShards: Number.isFinite(processedShards) && processedShards >= 0 ? processedShards : null,
+          rowsCount: Number.isFinite(rowsCount) && rowsCount > 0 ? rowsCount : null,
+          statusMessage: pending.statusMessage ?? null,
+          updatedAt: pending.updatedAt ?? null,
+        };
+      })
+      .sort((a, b) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0));
+  }, [aiPendingByMissionId, aiResultsByMissionId, drones]);
+
   const hydrateBackendContext = useCallback(async () => {
     const zones = await fetchZonesFromBackend();
     setBackendZones(zones);
@@ -1613,7 +1649,10 @@ export function AppProvider({ children }) {
           trackedMissionIdsRef.current.add(numericMissionId);
           setAiPendingByMissionId((prev) => ({
             ...prev,
-            [String(numericMissionId)]: true,
+            [String(numericMissionId)]: {
+              phase: 'mission',
+              updatedAt: Date.now(),
+            },
           }));
         }
       } catch {
@@ -1744,13 +1783,66 @@ export function AppProvider({ children }) {
 
     let cancelled = false;
     const poll = async () => {
-      const missionIds = Array.from(trackedMissionIdsRef.current.values())
-        .sort((a, b) => Number(b) - Number(a))
+      const missionIdSet = new Set([
+        ...Array.from(trackedMissionIdsRef.current.values()),
+        ...Object.keys(aiPendingByMissionIdRef.current),
+      ]);
+      const missionIds = Array.from(missionIdSet)
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id))
+        .sort((a, b) => b - a)
         .slice(0, 8);
       if (!missionIds.length) return;
 
       for (const missionId of missionIds) {
         if (cancelled) return;
+        const missionKey = String(missionId);
+
+        try {
+          const statusPayload = await fetchMissionProcessingStatusFromBackend(missionId);
+          if (statusPayload && !cancelled) {
+            const progressRaw = statusPayload.processing_progress ?? statusPayload.processingProgress;
+            const progressNum = Number(progressRaw);
+            const videoStatus = statusPayload.video_status ?? statusPayload.videoStatus ?? null;
+            const shardsCount = statusPayload.shards_count ?? statusPayload.shardsCount;
+            const processedShards = statusPayload.processed_shards ?? statusPayload.processedShards;
+            const rowsCount = statusPayload.rows_count ?? statusPayload.rowsCount;
+            const available = statusPayload.available !== false;
+            let statusMessage = null;
+            if (!available) {
+              statusMessage = 'Ожидание отправки видео в Vineyard';
+            } else if (videoStatus === 'completed' && (!Number.isFinite(progressNum) || progressNum >= 100)) {
+              statusMessage = 'Синхронизация результатов…';
+            } else if (videoStatus === 'error') {
+              statusMessage = 'Ошибка обработки в Vineyard';
+            }
+
+            setAiPendingByMissionId((prev) => {
+              const prevEntry = prev[missionKey];
+              const prevObj = prevEntry === true ? {} : (prevEntry && typeof prevEntry === 'object' ? prevEntry : {});
+              if (!(missionKey in prev) && !trackedMissionIdsRef.current.has(missionId)) {
+                return prev;
+              }
+              return {
+                ...prev,
+                [missionKey]: {
+                  ...prevObj,
+                  phase: available ? 'processing' : (prevObj.phase ?? 'waiting'),
+                  videoStatus,
+                  processingProgress: Number.isFinite(progressNum) ? progressNum : prevObj.processingProgress ?? null,
+                  shardsCount: shardsCount ?? prevObj.shardsCount ?? null,
+                  processedShards: processedShards ?? prevObj.processedShards ?? null,
+                  rowsCount: rowsCount ?? prevObj.rowsCount ?? null,
+                  statusMessage: statusMessage ?? prevObj.statusMessage ?? null,
+                  updatedAt: Date.now(),
+                },
+              };
+            });
+          }
+        } catch (e) {
+          console.warn('poll processing_status failed:', e?.message ?? e);
+        }
+
         try {
           const payload = await fetchMissionAiResultFromBackend(missionId);
           const result = payload?.ai_result;
@@ -1759,14 +1851,14 @@ export function AppProvider({ children }) {
           }
 
           setAiResultsByMissionId((prev) => {
-            const prevResult = prev[String(missionId)];
+            const prevResult = prev[missionKey];
             if (prevResult?.updated_at === result.updated_at) return prev;
-            return { ...prev, [String(missionId)]: result };
+            return { ...prev, [missionKey]: result };
           });
           setAiPendingByMissionId((prev) => {
-            if (!(String(missionId) in prev)) return prev;
+            if (!(missionKey in prev)) return prev;
             const copy = { ...prev };
-            delete copy[String(missionId)];
+            delete copy[missionKey];
             return copy;
           });
           trackedMissionIdsRef.current.delete(missionId);
@@ -3267,6 +3359,7 @@ export function AppProvider({ children }) {
     setSelectedDroneForModal,
     globalMissionLog,
     aiResultsForSidebar,
+    aiProcessingPendingForSidebar,
     deleteAiResultForMission,
     deleteAllAiResults,
     sidebarTab,

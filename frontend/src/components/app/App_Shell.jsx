@@ -109,6 +109,7 @@ export function App_Shell() {
     setSelectedDroneForModal,
     globalMissionLog,
     aiResultsForSidebar,
+    aiProcessingPendingForSidebar,
     deleteAiResultForMission,
     deleteAllAiResults,
     sidebarTab,
@@ -465,6 +466,7 @@ export function App_Shell() {
                   suspendAutoSelectDrone={Boolean(templateToApplyId)}
                   missionLog={globalMissionLog}
                   aiResults={aiResultsForSidebar}
+                  aiProcessingPending={aiProcessingPendingForSidebar}
                 onDeleteAiMissionResult={deleteAiResultForMission}
                 onDeleteAllAiMissionResults={deleteAllAiResults}
                   initialTab={sidebarTab}
