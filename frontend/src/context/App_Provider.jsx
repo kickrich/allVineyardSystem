@@ -769,6 +769,7 @@ export function AppProvider({ children }) {
   const [globalMissionLog, setGlobalMissionLog] = useState([]);
   const [weatherFlightSafe, setWeatherFlightSafe] = useState(true);
   const [weatherFlightReasons, setWeatherFlightReasons] = useState([]);
+  const weatherFlightSafeRef = useRef(true);
   const activeTimersRef = useRef(new Map());
 
   const telemetryLastSentAtRef = useRef(new Map());
@@ -932,14 +933,25 @@ export function AppProvider({ children }) {
   };
 
   const handleWeatherFlightConditions = useCallback((conditions) => {
-    setWeatherFlightSafe(conditions.safe);
-    setWeatherFlightReasons(conditions.reasons || []);
+    const safe = Boolean(conditions?.safe);
+    const reasons = Array.isArray(conditions?.reasons) ? conditions.reasons : [];
+    weatherFlightSafeRef.current = safe;
+    setWeatherFlightSafe(safe);
+    setWeatherFlightReasons(reasons);
   }, []);
 
   const [placementMode, setPlacementMode] = useState(false);
   const [droneToPlace, setDroneToPlace] = useState(null);
   const [isRouteEditMode, setIsRouteEditMode] = useState(false);
   const [selectedDroneForSidebar, setSelectedDroneForSidebar] = useState(null);
+
+  useEffect(() => {
+    if (!weatherFlightSafe && placementMode) {
+      setPlacementMode(false);
+      setDroneToPlace(null);
+    }
+  }, [weatherFlightSafe, placementMode]);
+
   const selectedRouteEditPath = useMemo(() => {
     if (selectedDroneForSidebar == null) return null;
     const d = drones.find((x) => x.id === selectedDroneForSidebar);
@@ -1069,12 +1081,14 @@ export function AppProvider({ children }) {
   }, []);
 
   const startDronePlacement = (droneId) => {
+    if (!weatherFlightSafeRef.current) return;
     setDroneToPlace(droneId);
     setPlacementMode(true);
   };
 
   const placeDroneOnMap = (latlng) => {
     if (!droneToPlace || !placementMode) return;
+    if (!weatherFlightSafeRef.current) return;
     const drone = drones.find(d => d.id === droneToPlace);
     if (!drone) return;
 
@@ -3222,6 +3236,8 @@ export function AppProvider({ children }) {
     zoneFitNonce,
     zoneMapMessageOverlay,
     handleWeatherFlightConditions,
+    weatherFlightSafe,
+    weatherFlightReasons,
     handleDronePositionChange,
     selectedDroneForSidebar,
     droneFocusRequest,
@@ -3268,8 +3284,6 @@ export function AppProvider({ children }) {
     handleToggleRouteMode,
     centerMapToFirstWaypoint,
     flyDroneToFirstWaypoint,
-    weatherFlightSafe,
-    weatherFlightReasons,
     isDroneAtMissionStart,
     workZoneReady,
     authUserLabel,

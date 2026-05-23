@@ -79,6 +79,8 @@ export function App_Shell() {
     zoneFitNonce,
     zoneMapMessageOverlay,
     handleWeatherFlightConditions,
+    weatherFlightSafe,
+    weatherFlightReasons,
     handleDronePositionChange,
     selectedDroneForSidebar,
     droneFocusRequest,
@@ -125,8 +127,6 @@ export function App_Shell() {
     handleToggleRouteMode,
     centerMapToFirstWaypoint,
     flyDroneToFirstWaypoint,
-    weatherFlightSafe,
-    weatherFlightReasons,
     isDroneAtMissionStart,
     workZoneReady,
     authUserLabel,
@@ -191,6 +191,8 @@ export function App_Shell() {
                 <DroneParking
                   drones={drones}
                   onPlaceDrone={startDronePlacement}
+                  placementAllowedByWeather={weatherFlightSafe}
+                  weatherFlightReasons={weatherFlightReasons}
                   onRemoveDrone={removeDroneFromMap}
                   onCreateDrone={createDroneFromParking}
                   onDroneClick={handleDroneClick}
@@ -483,8 +485,6 @@ export function App_Shell() {
                   onToggleRouteMode={handleToggleRouteMode}
                   onCenterToFirstWaypoint={centerMapToFirstWaypoint}
                   onFlyToFirstWaypoint={flyDroneToFirstWaypoint}
-                  flightAllowedByWeather={weatherFlightSafe}
-                  weatherFlightReasons={weatherFlightReasons}
                   isDroneAtMissionStart={isDroneAtMissionStart}
                   workZoneReady={workZoneReady}
                   instructionTourActive={workspaceTourOpen}

@@ -9,6 +9,8 @@ export const DroneParking = ({
   onDroneClick,
   onBackToTemplates,
   onClose,
+  placementAllowedByWeather = true,
+  weatherFlightReasons = [],
 }) => {
   const placedDrones = drones.filter((d) => d.isVisible);
   const availableDrones = drones.filter((d) => !d.isVisible);
@@ -305,11 +307,20 @@ export const DroneParking = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          onPlaceDrone(drone.id);
+                          if (placementAllowedByWeather) onPlaceDrone(drone.id);
                         }}
+                        disabled={!placementAllowedByWeather}
                         {...(idx === 0 ? { 'data-onboarding': 'place-drone' } : {})}
-                        className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors hover:scale-105 flex items-center whitespace-nowrap shrink-0"
-                        title="Разместить дрон на карте"
+                        className={`px-3 py-2 min-h-[44px] rounded text-sm transition-colors flex items-center whitespace-nowrap shrink-0 ${
+                          placementAllowedByWeather
+                            ? 'bg-green-600 hover:bg-green-700 text-white hover:scale-105'
+                            : 'bg-gray-600 text-gray-400 cursor-not-allowed opacity-60'
+                        }`}
+                        title={
+                          placementAllowedByWeather
+                            ? 'Разместить дрон на карте'
+                            : `Размещение недоступно: ${weatherFlightReasons.join(', ') || 'неблагоприятная погода'}`
+                        }
                       >
                         Разместить
                       </button>

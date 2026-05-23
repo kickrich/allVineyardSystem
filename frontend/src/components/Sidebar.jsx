@@ -24,8 +24,6 @@ export const Sidebar = ({
   onToggleRouteMode,
   onCenterToFirstWaypoint,
   onFlyToFirstWaypoint,
-  flightAllowedByWeather = true,
-  weatherFlightReasons = [],
   isDroneAtMissionStart,
   workZoneReady = false,
   instructionTourActive = false,
@@ -679,11 +677,6 @@ export const Sidebar = ({
                   >
                     К первой точке миссии
                   </button>
-                  {!flightAllowedByWeather && weatherFlightReasons.length > 0 && !tourUiPreview && (
-                    <div className="mt-2 px-3 py-2 rounded-lg bg-amber-900/40 border border-amber-600 text-amber-200 text-xs">
-                      ⚠️ Неблагоприятные условия для полёта: {weatherFlightReasons.join(', ')}
-                    </div>
-                  )}
                   <div className="mt-4" data-onboarding="mission-first-waypoint">
                     <h4 className="font-semibold text-white mb-2">Управление полетом</h4>
                     <div className="grid grid-cols-2 gap-2">
