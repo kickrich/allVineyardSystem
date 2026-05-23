@@ -67,7 +67,7 @@ const VIDEO_CANVAS_HEIGHT = 360;
 const VIDEO_RECORDING_FPS = 15;
 const VIDEO_BACKEND_CONTENT_TYPE = 'video/webm';
 const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
-const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024; // >= 1MB (минимум в backend)
+const VIDEO_MULTIPART_CHUNK_SIZE_BYTES = 1024 * 1024;
 const AI_RESULTS_POLL_INTERVAL_MS = 5000;
 const LOGS_CLEARED_AT_KEY = 'ui_logs_cleared_at_ms_v1';
 
@@ -91,7 +91,6 @@ function writeLogsClearedAtMs(ms) {
   try {
     localStorage.setItem(LOGS_CLEARED_AT_KEY, String(Number(ms) || Date.now()));
   } catch {
-    /* ignore */
   }
 }
 
@@ -168,8 +167,6 @@ function inferRouteProgressFromPosition(path, position) {
     const bLat = Number(b[0]);
     const bLng = Number(b[1]);
     if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
-
-    // Локальная проекция в метры вокруг точки A (достаточно точно для малых расстояний).
     const latRad = (aLat * Math.PI) / 180;
     const cosLat = Math.cos(latRad) || 1e-6;
     const mPerLat = 111_320;
@@ -638,7 +635,6 @@ function App() {
     const normalizedShiftSegments = Array.isArray(tpl.shiftSegments)
       ? [...new Set(tpl.shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
       : [];
-    // Обновляем ref сразу, чтобы старт полёта в этот же тик видел сегменты смещения.
     routeShiftSegmentsByDroneIdRef.current[String(droneId)] = normalizedShiftSegments;
     setDrones((prev) => {
       const path = tpl.path.map((p) => [p[0], p[1]]);
@@ -984,8 +980,6 @@ function App() {
                       .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng))
                     : normalizeRoutePath(drone?.path);
                   const persistedDronePath = normalizeRoutePath(drone?.path);
-                  // Не подменяем основной маршрут дрона временным "подлетом к 1-й точке".
-                  // Если в drone.route_path уже есть валидный маршрут, оставляем его.
                   const routePathForDrone =
                     persistedDronePath.length >= 2 ? persistedDronePath : routePath;
                   const missionStatus = String(mission?.status ?? '').toLowerCase();
@@ -1043,7 +1037,6 @@ function App() {
                             totalDistance: inferredFlightState.missionParameters.totalDistance,
                             estimatedTime: inferredFlightState.missionParameters.estimatedTime,
                             missionParams: inferredFlightState.missionParameters,
-                            // В симуляции движение идёт по основному path.
                             flightPath: routePathForDrone,
                           }
                         : null),
@@ -1057,8 +1050,6 @@ function App() {
             }
 
             const restoredResults = {};
-            // После F5 восстанавливаем ai_result для последних миссий (включая завершённые),
-            // но в polling добавляем только активные без результата.
             for (const mission of recentMissions) {
               if (cancelled) return;
               const missionId = Number(mission?.id);
@@ -1067,14 +1058,11 @@ function App() {
                 const payload = await fetchMissionAiResultFromBackend(missionId);
                 const result = payload?.ai_result;
                 if (!result) {
-                  // После F5: если по миссии пока нет ai_result, оставляем её для одноразового polling.
                   continue;
                 }
                 restoredResults[String(missionId)] = result;
-                // После F5: уже получили ai_result в restore, не нужно повторно опрашивать ту же миссию.
                 trackedMissionIdsRef.current.delete(missionId);
               } catch {
-                // Ignore per-mission restore errors; polling will retry.
               }
             }
 
@@ -1090,8 +1078,6 @@ function App() {
                 seenAiResultKeysRef.current.add(versionKey);
               });
             }
-
-            // После F5: добавляем в polling только активные миссии без уже восстановленного ai_result.
             activeMissionIds.forEach((missionId) => {
               if (restoredResults[String(missionId)]) {
                 trackedMissionIdsRef.current.delete(missionId);
@@ -1141,7 +1127,6 @@ function App() {
               })
             );
           } else if (!cancelled) {
-            // Если на сервере пусто — уважаем "очистить" и не показываем старое.
             setGlobalMissionLog([]);
             setDrones((prev) => prev.map((d) => (d.flightLog?.length ? { ...d, flightLog: [] } : d)));
           }
@@ -1184,7 +1169,7 @@ function App() {
   const videoUploadInProgressRef = useRef(new Map());
   const videoSplitInProgressRef = useRef(new Map());
   const videoRowSplitStateRef = useRef(new Map());
-  /** Синхронизируется с `routeShiftSegmentsByDroneId` (ниже) через useEffect. */
+  
   const routeShiftSegmentsByDroneIdRef = useRef({});
 
   const startVideoRecordingChunkForDrone = (droneId) => {
@@ -1437,17 +1422,12 @@ function App() {
   const handleSelectDroneForSidebar = useCallback(
     (droneId) => {
       setSelectedDroneForSidebar(droneId);
-
-      // Фокус карты на выбранный дрон (если он размещён на карте).
-      // Не мешаем режимам рисования зоны / размещения / редактирования шаблона.
       if (drawRectZoneMode || templateEditMode || (placementMode && droneToPlace != null)) return;
       const drone = drones.find((d) => d.id === droneId);
       if (!drone || !drone.isVisible || !drone.position) return;
       const lat = Number(drone.position.lat);
       const lng = Number(drone.position.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-
-      // Плавная анимация фокуса делается внутри YandexMap (как у выбора зон).
       const DRONE_FOCUS_MIN_ZOOM = 18;
       const DRONE_FOCUS_MAX_ZOOM = 19;
       const targetZoom = Math.min(
@@ -1948,8 +1928,6 @@ function App() {
       if (!ctx?.userId || !ctx?.zoneId) {
         ctx = await hydrateBackendContext();
       }
-      // После перезагрузки у дрона уже может быть активная миссия в backend.
-      // В этом случае не создаём новую (чтобы не получать 422 "уже назначен"), а переиспользуем текущую.
       try {
         const active = await fetchActiveMissionsForDrone(drone.id);
         if (Array.isArray(active) && active.length > 0) {
@@ -2003,9 +1981,6 @@ function App() {
       if (!missionId) {
         throw new Error('Backend не вернул id миссии');
       }
-
-      // ВАЖНО: результаты (ai_result) приходят асинхронно после выполнения миссии.
-      // Чтобы они появлялись без перезагрузки страницы, добавляем миссию в polling сразу после создания.
       try {
         const numericMissionId = Number(missionId);
         if (Number.isFinite(numericMissionId)) {
@@ -2017,7 +1992,6 @@ function App() {
           }));
         }
       } catch {
-        /* ignore */
       }
 
       const speedMps = Math.max(0, Number(drone.maxSpeed ?? 0) / 3.6);
@@ -2156,8 +2130,6 @@ function App() {
           const payload = await fetchMissionAiResultFromBackend(missionId);
           const result = payload?.ai_result;
           if (!result) {
-            // Результат может прийти с задержкой после complete/callback.
-            // Оставляем миссию в polling, чтобы уведомление и карточка появились без F5.
             continue;
           }
 
@@ -2172,8 +2144,6 @@ function App() {
             delete copy[String(missionId)];
             return copy;
           });
-
-          // Одноразовый запрос по миссии: после первого полученного ai_result больше не опрашиваем.
           trackedMissionIdsRef.current.delete(missionId);
 
           const versionKey = [
@@ -2430,7 +2400,6 @@ function App() {
       const rowSplitState = videoRowSplitStateRef.current.get(droneId);
       if (rowSplitState) {
         rowSplitState.missionId = missionId ?? rowSplitState.missionId;
-        // Если сплит-индексы появились чуть позже (после применения шаблона), подхватываем их во время полёта.
         if (!rowSplitState.shiftSegments.length) {
           const lateShiftSegs = toNormalizedShiftSegmentsForDrone(droneId);
           if (lateShiftSegs.length) {
@@ -2783,7 +2752,6 @@ function App() {
   }, [drones, selectedDroneForSidebar]);
 
   const flyDroneToFirstWaypoint = useCallback((droneId) => {
-    // Как и при старте миссии: при перелёте к первой точке режим редактирования маршрута выключаем.
     setIsRouteEditMode(false);
 
     const drone = drones.find(d => d.id === droneId);
@@ -2907,8 +2875,6 @@ function App() {
   const handleStart = (templateId = null) => {
     setHasStarted(true);
     if (templateId) {
-      // При выборе шаблона не «переносим» ранее выбранного дрона на новый маршрут.
-      // Сначала показываем шаблонный маршрут (превью), затем пользователь выбирает дрона.
       setSelectedDroneForSidebar(null);
       setIsRouteEditMode(false);
       setTemplateToApplyId(templateId);
