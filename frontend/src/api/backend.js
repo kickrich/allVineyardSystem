@@ -127,6 +127,7 @@ export async function ensureApiSession() {
   try {
     return await login(email, password);
   } catch {
+    // fall through to register
   }
 
   try {
