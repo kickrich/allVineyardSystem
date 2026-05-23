@@ -14,22 +14,16 @@ const ZONE_FIT_ANIMATION_MS = 520;
 const DRONE_PLACE_OFFSET_M = 72;
 const DRONE_PLACE_DURATION_MS = 400;
 
-/** Лёгкое «зависание» на точке: амплитуда по север–юг (м) и период (мс). */
-const DRONE_HOVER_AMPLITUDE_M = 3.5;
-const DRONE_HOVER_PERIOD_MS = 2000;
-
-/** Сдвиг позиции из props (м) — «зависание» полностью выключается; после паузы без движения снова включается. */
-const DRONE_MOTION_THRESHOLD_M = 0.35;
-const DRONE_MOTION_HOVER_RESUME_MS = 550;
-
 const OSM_OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const BUILDINGS_REFRESH_DEBOUNCE_MS = 450;
+/** Крупные полигоны OSM (кварталы/зоны) не считаем отдельным зданием для проверки маршрута. */
+const MAX_BUILDING_FOOTPRINT_AREA_M2 = 25_000;
 
 function easeOutCubic(t) {
   return 1 - (1 - t) ** 3;
 }
 
-/** Полёт / миссия: нельзя тянуть маркер; в sync — жёстко к координатам из props (без «зависания»). */
+/** Полёт / миссия: нельзя тянуть маркер; в sync — жёстко к координатам из props. */
 function isDroneFlyingLike(drone) {
   if (!drone) return false;
   if (drone.status === 'в полете') return true;
@@ -41,26 +35,6 @@ function isDroneFlyingLike(drone) {
     fs === flightStatus.LANDING ||
     fs === flightStatus.PAUSED
   );
-}
-
-/** Любое изменение позиции из props — «зависание» выключается до паузы без новых координат. */
-function touchDroneMotionMap(motionRef, idStr, lat, lng, now) {
-  let st = motionRef.current[idStr];
-  const key = `${Number(lat).toFixed(7)},${Number(lng).toFixed(7)}`;
-  if (!st) {
-    motionRef.current[idStr] = { lat, lng, key, resumeHoverAt: 0 };
-    return false;
-  }
-  const latRad = (lat * Math.PI) / 180;
-  const cosLat = Math.cos(latRad) || 1e-6;
-  const movedM = Math.hypot((lat - st.lat) * 111_320, (lng - st.lng) * 111_320 * cosLat);
-  if (key !== st.key || movedM > DRONE_MOTION_THRESHOLD_M) {
-    st.resumeHoverAt = now + DRONE_MOTION_HOVER_RESUME_MS;
-  }
-  st.lat = lat;
-  st.lng = lng;
-  st.key = key;
-  return st.resumeHoverAt > now;
 }
 
 /** Сместить точку на offsetM по азимуту: 0 — север, π/2 — восток (случайный угол для прилёта/улёта). */
@@ -149,27 +123,6 @@ function inflateBbox(bbox, padM = 40) {
   };
 }
 
-function pointInRing(point, ring) {
-  if (!point || !Array.isArray(ring) || ring.length < 3) return false;
-  const x = Number(point.lng);
-  const y = Number(point.lat);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const yi = Number(ring[i]?.[0]);
-    const xi = Number(ring[i]?.[1]);
-    const yj = Number(ring[j]?.[0]);
-    const xj = Number(ring[j]?.[1]);
-    if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
-    const intersect =
-      (yi > y) !== (yj > y) &&
-      x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
 function orientation(ax, ay, bx, by, cx, cy) {
   const v = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
   if (Math.abs(v) < 1e-12) return 0;
@@ -198,13 +151,12 @@ function segmentsIntersect(a, b, c, d) {
   return false;
 }
 
-function segmentIntersectsRing(pointA, pointB, ring) {
+/** Пересекает ли отрезок маршрута контур здания (только «сквозь» стены, не «точка внутри квартала»). */
+function routeSegmentCrossesRing(pointA, pointB, ring) {
   if (!pointA || !pointB || !Array.isArray(ring) || ring.length < 3) return false;
   const a = { x: Number(pointA.lng), y: Number(pointA.lat) };
   const b = { x: Number(pointB.lng), y: Number(pointB.lat) };
   if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return false;
-
-  if (pointInRing(pointA, ring) || pointInRing(pointB, ring)) return true;
 
   for (let i = 0; i < ring.length - 1; i += 1) {
     const p0 = ring[i];
@@ -217,12 +169,48 @@ function segmentIntersectsRing(pointA, pointB, ring) {
   return false;
 }
 
-function bboxReject(point, bbox) {
-  if (!point || !bbox) return true;
-  const lat = Number(point.lat);
-  const lng = Number(point.lng);
-  if (![lat, lng].every(Number.isFinite)) return true;
-  return lat < bbox.south || lat > bbox.north || lng < bbox.west || lng > bbox.east;
+function bboxAreaSqM(bbox) {
+  if (!bbox) return 0;
+  const latMid = (bbox.south + bbox.north) / 2;
+  const heightM = Math.abs(bbox.north - bbox.south) * 111_320;
+  const widthM = Math.abs(bbox.east - bbox.west) * 111_320 * Math.cos((latMid * Math.PI) / 180);
+  return heightM * widthM;
+}
+
+function routeSegmentCrossesBuildings(prevPoint, clickPoint, buildingList) {
+  if (!prevPoint || !clickPoint) return false;
+  if (!Array.isArray(buildingList) || buildingList.length === 0) return false;
+  for (const b of buildingList) {
+    if (!b?.ring || !b?.bbox) continue;
+    const minLat = Math.min(prevPoint.lat, clickPoint.lat);
+    const maxLat = Math.max(prevPoint.lat, clickPoint.lat);
+    const minLng = Math.min(prevPoint.lng, clickPoint.lng);
+    const maxLng = Math.max(prevPoint.lng, clickPoint.lng);
+    if (
+      maxLat < b.bbox.south ||
+      minLat > b.bbox.north ||
+      maxLng < b.bbox.west ||
+      minLng > b.bbox.east
+    ) {
+      continue;
+    }
+    if (routeSegmentCrossesRing(prevPoint, clickPoint, b.ring)) return true;
+  }
+  return false;
+}
+
+function pathHasSegmentThroughBuildings(path, buildingList) {
+  if (!Array.isArray(path) || path.length < 2) return false;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const a = path[i];
+    const b = path[i + 1];
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) continue;
+    const prev = { lat: Number(a[0]), lng: Number(a[1]) };
+    const next = { lat: Number(b[0]), lng: Number(b[1]) };
+    if (![prev.lat, prev.lng, next.lat, next.lng].every(Number.isFinite)) continue;
+    if (routeSegmentCrossesBuildings(prev, next, buildingList)) return true;
+  }
+  return false;
 }
 
 function ringBbox(ring) {
@@ -286,6 +274,7 @@ out skel qt;
     if (ring.length < 4) return;
     const bbox = ringBbox(ring);
     if (!bbox) return;
+    if (bboxAreaSqM(bbox) > MAX_BUILDING_FOOTPRINT_AREA_M2) return;
     polygons.push({ ring, bbox });
   });
   return polygons;
@@ -622,17 +611,16 @@ export function YandexMap({
   const buildingsAbortRef = useRef(null);
   const buildingsDebounceRef = useRef(null);
   const [buildingsNotice, setBuildingsNotice] = useState(null);
+  const buildingsRef = useRef([]);
+  const buildingsStatusRef = useRef('idle');
+  const showBuildingsNoticeRef = useRef(null);
   const droneMarkersRef = useRef({});
   const dronePlaceAnimRafRef = useRef({});
   const dronePlaceAnimActiveRef = useRef(new Set());
   const droneRemoveAnimActiveRef = useRef(new Set());
   const dronePlaceTargetKeyRef = useRef(new Map());
   const droneMarkerPositionKeyRef = useRef(new Map());
-  const droneHoverPhaseRef = useRef({});
-  const droneHoverLoopRafRef = useRef(null);
-  const droneMotionForHoverRef = useRef({});
   const droneDragActiveRef = useRef(new Set());
-  const dronesRef = useRef(drones);
   const routeEditModeRef = useRef(false);
   const placementModeRef = useRef(false);
   const routePolylinesRef = useRef({});
@@ -670,7 +658,6 @@ export function YandexMap({
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
 
-  dronesRef.current = drones;
   routeEditModeRef.current = routeEditMode;
   placementModeRef.current = placementMode;
   routeEditPathRef.current = routeEditPath;
@@ -786,6 +773,11 @@ export function YandexMap({
       }
     };
   }, [activeBoundary]);
+
+  useEffect(() => {
+    buildingsRef.current = buildings;
+    buildingsStatusRef.current = buildingsStatus;
+  }, [buildings, buildingsStatus]);
 
   const cancelDroneMarkerAnim = (droneId) => {
     const id = String(droneId);
@@ -1024,7 +1016,6 @@ export function YandexMap({
             cancelDroneMarkerAnim(drone.id);
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
-            delete droneHoverPhaseRef.current[idStr];
             try {
               existingMarker.options.set(
                 'draggable',
@@ -1052,7 +1043,6 @@ export function YandexMap({
           } else if (isDroneFlyingLike(drone)) {
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
-            delete droneHoverPhaseRef.current[idStr];
           } else {
             const lastKey = droneMarkerPositionKeyRef.current.get(idStr);
             if (lastKey !== posKey) {
@@ -1090,89 +1080,6 @@ export function YandexMap({
     });
 
   }, [drones, selectedDroneId, mapLoaded, routeEditMode, placementMode]);
-
-  useEffect(() => {
-    if (!mapLoaded || !mapInstanceRef.current) return;
-
-    const tick = (now) => {
-      if (!mapInstanceRef.current) {
-        droneHoverLoopRafRef.current = null;
-        return;
-      }
-      if (routeEditModeRef.current || placementModeRef.current) {
-        droneHoverLoopRafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-
-      const list = dronesRef.current || [];
-      const amp = DRONE_HOVER_AMPLITUDE_M / 111_320;
-      const omega = (2 * Math.PI) / DRONE_HOVER_PERIOD_MS;
-
-      for (const drone of list) {
-        if (!drone.isVisible || !drone.position) continue;
-        const idStr = String(drone.id);
-        if (dronePlaceAnimActiveRef.current.has(idStr)) continue;
-        if (droneRemoveAnimActiveRef.current.has(idStr)) continue;
-        if (droneDragActiveRef.current.has(idStr)) continue;
-
-        const placemark = droneMarkersRef.current[drone.id];
-        if (!placemark) continue;
-
-        const baseLat = Number(drone.position.lat);
-        const baseLng = Number(drone.position.lng);
-        if (touchDroneMotionMap(droneMotionForHoverRef, idStr, baseLat, baseLng, now)) {
-          try {
-            placemark.geometry.setCoordinates([baseLat, baseLng]);
-          } catch {
-            /* ignore */
-          }
-          delete droneHoverPhaseRef.current[idStr];
-          continue;
-        }
-        let phase = droneHoverPhaseRef.current[idStr];
-        if (phase == null) {
-          phase = Math.random() * DRONE_HOVER_PERIOD_MS;
-          droneHoverPhaseRef.current[idStr] = phase;
-        }
-        const delta = amp * Math.sin(omega * (now + phase));
-        try {
-          placemark.geometry.setCoordinates([baseLat + delta, baseLng]);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      const listIds = new Set(
-        list.filter((d) => d.isVisible && d.position).map((d) => String(d.id))
-      );
-      for (const k of Object.keys(droneMotionForHoverRef.current)) {
-        if (!listIds.has(k)) delete droneMotionForHoverRef.current[k];
-      }
-      for (const k of Object.keys(droneHoverPhaseRef.current)) {
-        if (!listIds.has(k)) {
-          delete droneHoverPhaseRef.current[k];
-          continue;
-        }
-        const d = list.find((x) => String(x.id) === k);
-        if (!d?.position) {
-          delete droneHoverPhaseRef.current[k];
-          continue;
-        }
-        const m = droneMotionForHoverRef.current[k];
-        if (m && m.resumeHoverAt > now) delete droneHoverPhaseRef.current[k];
-      }
-
-      droneHoverLoopRafRef.current = requestAnimationFrame(tick);
-    };
-
-    droneHoverLoopRafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (droneHoverLoopRafRef.current != null) {
-        cancelAnimationFrame(droneHoverLoopRafRef.current);
-        droneHoverLoopRafRef.current = null;
-      }
-    };
-  }, [mapLoaded]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
@@ -1325,6 +1232,26 @@ export function YandexMap({
         const nextPath = coords
           .filter((c) => Array.isArray(c) && c.length >= 2)
           .map((c) => [c[0], c[1]]);
+
+        if (
+          buildingsStatusRef.current === 'ready' &&
+          pathHasSegmentThroughBuildings(nextPath, buildingsRef.current)
+        ) {
+          if (typeof showBuildingsNoticeRef.current === 'function') {
+            showBuildingsNoticeRef.current('Нельзя прокладывать маршрут через здания (OSM).');
+          }
+          const prevPath = routeEditPathRef.current;
+          if (Array.isArray(prevPath) && prevPath.length >= 2) {
+            isSyncingRouteEditRef.current = true;
+            try {
+              polyline.geometry.setCoordinates(prevPath.map((p) => [p[0], p[1]]));
+            } finally {
+              isSyncingRouteEditRef.current = false;
+            }
+          }
+          return;
+        }
+
         onRoutePathChange(nextPath);
       };
       routeEditGeometryChangeHandlerRef.current = handleRouteGeometryChange;
@@ -2100,33 +2027,6 @@ export function YandexMap({
       if (!Array.isArray(coords) || coords.length < 2) return;
       const clickPoint = { lat: coords[0], lng: coords[1] };
 
-      const rejectByBuildings = (prevPoint) => {
-        if (buildingsStatus !== 'ready') return false;
-        if (!Array.isArray(buildings) || buildings.length === 0) return false;
-        for (const b of buildings) {
-          if (!b?.ring || !b?.bbox) continue;
-          // point test (cheap bbox reject first)
-          if (!bboxReject(clickPoint, b.bbox) && pointInRing(clickPoint, b.ring)) return true;
-          if (prevPoint) {
-            // segment bbox reject
-            const minLat = Math.min(prevPoint.lat, clickPoint.lat);
-            const maxLat = Math.max(prevPoint.lat, clickPoint.lat);
-            const minLng = Math.min(prevPoint.lng, clickPoint.lng);
-            const maxLng = Math.max(prevPoint.lng, clickPoint.lng);
-            if (
-              maxLat < b.bbox.south ||
-              minLat > b.bbox.north ||
-              maxLng < b.bbox.west ||
-              minLng > b.bbox.east
-            ) {
-              continue;
-            }
-            if (segmentIntersectsRing(prevPoint, clickPoint, b.ring)) return true;
-          }
-        }
-        return false;
-      };
-
       const showBuildingsNotice = (text) => {
         setBuildingsNotice(text);
         window.setTimeout(() => {
@@ -2137,6 +2037,7 @@ export function YandexMap({
           }
         }, 1400);
       };
+      showBuildingsNoticeRef.current = showBuildingsNotice;
 
       const ensureBuildingsReady = () => {
         // Здания грузятся по bbox активной зоны. Если зоны нет — не блокируем.
@@ -2184,7 +2085,11 @@ export function YandexMap({
           Array.isArray(last) && last.length >= 2
             ? { lat: Number(last[0]), lng: Number(last[1]) }
             : null;
-        if (rejectByBuildings(prev)) {
+        if (
+          prev &&
+          buildingsStatus === 'ready' &&
+          routeSegmentCrossesBuildings(prev, clickPoint, buildings)
+        ) {
           showBuildingsNotice('Нельзя прокладывать маршрут через здания (OSM).');
           return;
         }
@@ -2194,11 +2099,6 @@ export function YandexMap({
         return;
       }
       if (placementMode) {
-        if (!ensureBuildingsReady()) return;
-        if (rejectByBuildings(null)) {
-          showBuildingsNotice('Нельзя размещать дрона в здании (OSM).');
-          return;
-        }
         if (typeof onMapClick === 'function') {
           onMapClick(clickPoint);
         }
@@ -2544,12 +2444,6 @@ export function YandexMap({
       droneRemoveAnimActiveRef.current.clear();
       dronePlaceTargetKeyRef.current.clear();
       droneMarkerPositionKeyRef.current.clear();
-      if (droneHoverLoopRafRef.current != null) {
-        cancelAnimationFrame(droneHoverLoopRafRef.current);
-        droneHoverLoopRafRef.current = null;
-      }
-      droneHoverPhaseRef.current = {};
-      droneMotionForHoverRef.current = {};
       droneDragActiveRef.current.clear();
       if (mapInstanceRef.current) {
         try {
