@@ -56,7 +56,8 @@ class VideoShardProcessorService
 
     conn = Faraday.new(url: @cv_service_url) do |faraday|
       faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 1200
+      faraday.options.open_timeout = cv_service_open_timeout
+      faraday.options.timeout = cv_service_read_timeout
     end
 
     callback_host = ENV.fetch("RAILS_URL", "http://localhost:3000")
@@ -161,6 +162,14 @@ class VideoShardProcessorService
     )
   end
 
+  def cv_service_read_timeout
+    ENV.fetch('CV_SERVICE_READ_TIMEOUT', '3600').to_i
+  end
+
+  def cv_service_open_timeout
+    ENV.fetch('CV_SERVICE_OPEN_TIMEOUT', '60').to_i
+  end
+
   def source_payload_from_shard
     source = (@shard.result_json || {})['source'] || {}
     object_key = source['object_key'].to_s.presence
@@ -215,7 +224,8 @@ class VideoShardProcessorService
       faraday.request :multipart
       faraday.request :url_encoded
       faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = 600
+      faraday.options.open_timeout = cv_service_open_timeout
+      faraday.options.timeout = cv_service_read_timeout
     end
 
     callback_host = ENV.fetch('RAILS_URL', 'http://localhost:3000')

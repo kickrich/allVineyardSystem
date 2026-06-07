@@ -12,13 +12,19 @@ class S3MultipartUploadService
     region = ENV.fetch("S3_REGION", "us-east-1")
     endpoint = ENV["S3_ENDPOINT"].to_s
     force_path_style = ENV.fetch("S3_FORCE_PATH_STYLE", "true") == "true"
+    http_open_timeout = Integer(ENV.fetch("S3_HTTP_OPEN_TIMEOUT", 15))
+    http_read_timeout = Integer(ENV.fetch("S3_HTTP_READ_TIMEOUT", 600))
+    http_idle_timeout = Integer(ENV.fetch("S3_HTTP_IDLE_TIMEOUT", 60))
 
     @client = Aws::S3::Client.new(
       access_key_id: access_key_id.presence,
       secret_access_key: secret_access_key.presence,
       region: region,
       endpoint: endpoint.presence,
-      force_path_style: force_path_style
+      force_path_style: force_path_style,
+      http_open_timeout: http_open_timeout,
+      http_read_timeout: http_read_timeout,
+      http_idle_timeout: http_idle_timeout
     )
     @endpoint = endpoint
     @region = region

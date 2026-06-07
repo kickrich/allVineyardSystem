@@ -344,6 +344,101 @@ module Api
         render_errors("S3 abort multipart failed: #{e.message}", status: :unprocessable_entity)
       end
 
+      # POST /api/v1/media_uploads/push_test_mission_shard
+      # Копирует файл с диска (TEST_MISSION_SHARD_VIDEOS_DIR) в MinIO на сервере — без скачивания blob в браузер.
+      # JSON: mission_id, shard_filename, row_index?, rows_count?, shift_segment_indices?
+      def push_test_mission_shard
+        mission = find_mission_or_render_error
+        return if mission.nil?
+
+        unless mission.user_id == @current_user.id
+          render_errors("Нет доступа к миссии", status: :forbidden)
+          return
+        end
+
+        unless Rails.env.development? || truthy_param?(ENV["ENABLE_TEST_MISSION_VIDEO_SHARDS"])
+          render_errors("Тестовые шард-видео отключены", status: :not_found)
+          return
+        end
+
+        shard_filename = params.require(:shard_filename).to_s
+        disk_path = TestMissionShardDisk.absolute_path_for_shard(shard_filename)
+        unless disk_path&.file?
+          render_errors("Файл шарда не найден или имя недопустимо", status: :not_found)
+          return
+        end
+
+        content_type = TestMissionShardDisk.content_type_for_path(disk_path)
+        unless MediaUpload::ALLOWED_VIDEO_CONTENT_TYPES.include?(content_type)
+          render_errors("Недопустимый тип файла", status: :unprocessable_entity)
+          return
+        end
+
+        byte_size = disk_path.size
+        if byte_size > MediaUpload::MAX_VIDEO_SIZE_BYTES
+          render_errors("Видео слишком большое", status: :unprocessable_entity)
+          return
+        end
+
+        row_index = parsed_row_index_param
+        rows_count = parsed_rows_count_param
+        shift_segment_indices = parsed_shift_segment_indices_param
+
+        session_id = SecureRandom.hex(16)
+        dest_filename = "mission_#{mission.id}_shard_#{session_id}#{disk_path.extname.downcase}"
+        key = build_multipart_key(
+          mission_id: mission.id,
+          session_id: session_id,
+          filename: dest_filename
+        )
+
+        multipart_service.upload_file(key: key, path: disk_path.to_s, content_type: content_type)
+
+        upload_meta = {
+          "storage" => "s3",
+          "key" => key,
+          "filename" => dest_filename,
+          "content_type" => content_type,
+          "byte_size" => byte_size,
+          "mission_id" => mission.id,
+          "source" => "test_mission_shard_disk",
+          "shard_original_name" => shard_filename
+        }
+        upload_meta["row_index"] = row_index if row_index
+        upload_meta["rows_count"] = rows_count if rows_count
+        upload_meta["shift_segment_indices"] = shift_segment_indices
+
+        public_url = multipart_service.object_public_url(key)
+
+        media_upload = MediaUpload.new(
+          mission_id: mission.id,
+          media_type: "video",
+          status: "processing",
+          url: public_url,
+          upload_session_id: session_id,
+          upload_meta: upload_meta.merge(
+            "source_key" => key,
+            "source_url" => public_url
+          )
+        )
+
+        unless media_upload.save
+          render_errors(media_upload.errors.full_messages, status: :unprocessable_entity)
+          return
+        end
+
+        MediaUploadTranscodeJob.perform_later(media_upload.id)
+
+        render_data(media_upload_payload(media_upload), status: :created)
+      rescue S3MultipartUploadService::ConfigError => e
+        render_errors(e.message, status: :unprocessable_entity)
+      rescue Aws::S3::Errors::ServiceError => e
+        render_errors("S3 upload failed: #{e.message}", status: :unprocessable_entity)
+      rescue Seahorse::Client::NetworkingError, Errno::ECONNREFUSED, SocketError => e
+        Rails.logger.error("[push_test_mission_shard] network #{e.class}: #{e.message}")
+        render_errors("S3 upload failed: #{e.message}", status: :unprocessable_entity)
+      end
+
       # POST /api/v1/media_uploads/resumable_init
       # Для плохой связи: клиент/агент грузит видео частями (chunks) и может продолжить после обрыва.
       # Параметры (JSON): mission_id, media_type, filename, byte_size, content_type, chunk_size_bytes (опционально)

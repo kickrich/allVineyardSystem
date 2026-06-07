@@ -57,3 +57,7 @@ Thumbs.db
 *Zone.Identifier
 :Zone.Identifier
 **/:Zone.Identifier
+
+# Тестовые видео для симуляции миссий (локально, не в GitHub)
+test_mission_shard_videos/*
+!test_mission_shard_videos/.gitkeep

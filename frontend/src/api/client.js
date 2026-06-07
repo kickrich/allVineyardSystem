@@ -28,6 +28,27 @@ function getStoredToken() {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+export function getStoredApiSession() {
+  if (typeof window === 'undefined') return null;
+  const token = getStoredToken();
+  if (!token) return null;
+
+  let user = null;
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        user = parsed;
+      }
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  return { token, user };
+}
+
 function shouldAttachAuth(path) {
   try {
     const pathname = path.startsWith('http') ? new URL(path).pathname : path.split('?')[0];
@@ -135,8 +156,8 @@ export async function apiPost(path, body, options = {}) {
   return handleJsonResponse(res, path);
 }
 
-export async function apiPostForm(path, formData) {
-  const res = await apiRequest(path, { method: 'POST', body: formData });
+export async function apiPostForm(path, formData, options = {}) {
+  const res = await apiRequest(path, { method: 'POST', body: formData, ...options });
   return handleJsonResponse(res, path);
 }
 

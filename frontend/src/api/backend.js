@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession } from './client';
+import { apiGet, apiGetBlob, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession, getStoredApiSession } from './client';
 
 const DEFAULT_DEV_EMAIL = import.meta.env.VITE_API_EMAIL ?? 'operator@drones.local';
 const DEFAULT_DEV_PASSWORD = import.meta.env.VITE_API_PASSWORD ?? 'password123';
@@ -120,6 +120,11 @@ async function registerDevUser(email, password, name) {
 }
 
 export async function ensureApiSession() {
+  const currentSession = getStoredApiSession();
+  if (currentSession?.token) {
+    return currentSession;
+  }
+
   const email = DEFAULT_DEV_EMAIL;
   const password = DEFAULT_DEV_PASSWORD;
   const name = DEFAULT_DEV_NAME;
@@ -516,6 +521,48 @@ export async function multipartListParts({ uploadSessionId } = {}) {
   const response = await apiGet(
     `/api/v1/media_uploads/multipart_list_parts?upload_session_id=${encodeURIComponent(uploadSessionId)}`
   );
+  return extractData(response);
+}
+
+export async function fetchTestMissionVideoShardList() {
+  const response = await apiGet('/api/v1/test_mission_video_shards');
+  return extractData(response);
+}
+
+export async function fetchTestMissionVideoShardBlob(filename) {
+  if (!filename) throw new Error('filename is required');
+  return apiGetBlob(`/api/v1/test_mission_video_shards/download?name=${encodeURIComponent(filename)}`);
+}
+
+export async function pushTestMissionShardToS3({
+  missionId,
+  shardFilename,
+  rowIndex = null,
+  rowsCount = null,
+  shiftSegmentIndices = [],
+} = {}) {
+  if (missionId == null) throw new Error('missionId is required');
+  if (!shardFilename) throw new Error('shardFilename is required');
+
+  const payload = {
+    mission_id: missionId,
+    shard_filename: String(shardFilename),
+  };
+
+  if (Number.isInteger(rowIndex) && rowIndex > 0) {
+    payload.row_index = rowIndex;
+  }
+  if (Number.isInteger(rowsCount) && rowsCount > 0) {
+    payload.rows_count = rowsCount;
+  }
+  const normalizedShifts = Array.isArray(shiftSegmentIndices)
+    ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+    : [];
+  payload.shift_segment_indices = normalizedShifts;
+
+  const response = await apiPost('/api/v1/media_uploads/push_test_mission_shard', payload, {
+    timeoutMs: 600_000,
+  });
   return extractData(response);
 }
 

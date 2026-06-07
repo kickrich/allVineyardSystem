@@ -43,11 +43,14 @@ Rails.application.routes.draw do
           post :resumable_init
           post :resumable_upload_part
           post :resumable_complete
+          post :push_test_mission_shard
         end
       end
 
       # Endpoint для получения результатов от VineyardApp
       post '/vineyard_app/results', to: 'vineyard_app#results'
+      get "test_mission_video_shards", to: "test_mission_video_shards#index"
+      get "test_mission_video_shards/download", to: "test_mission_video_shards#download"
 
       # Тестовые видео «шарды» с диска (см. TEST_MISSION_SHARD_VIDEOS_DIR, ENABLE_TEST_MISSION_VIDEO_SHARDS)
       get "test_mission_video_shards", to: "test_mission_video_shards#index"
