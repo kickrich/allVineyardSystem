@@ -9,11 +9,18 @@ Rails.application.routes.draw do
       post "auth/login", to: "auth#login"
 
       resources :drones
+      resources :drone_logs, only: [:index, :create]
       
       resources :missions do
         member do
           post :start
           post :complete
+          get :ai_result
+          get :processing_status
+          delete :ai_result, action: :destroy_ai_result
+        end
+        collection do
+          delete :ai_results, action: :destroy_all_ai_results
         end
       end
 
@@ -49,7 +56,7 @@ Rails.application.routes.draw do
       resources :users
       
       resources :zones
-      resources :route_templates
+      resources :route_templates, only: [:index, :show, :create, :update, :destroy]
     end
   end
 end

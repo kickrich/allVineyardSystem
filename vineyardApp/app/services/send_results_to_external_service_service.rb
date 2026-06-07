@@ -1,5 +1,6 @@
 require 'faraday'
 require 'faraday/multipart'
+require 'uri'
 
 class SendResultsToExternalServiceService
   def initialize(video)
@@ -16,7 +17,7 @@ class SendResultsToExternalServiceService
   private
 
   def send_to_external_service
-    results = @video.aggregated_results
+    results = callback_payload
 
     conn = Faraday.new(url: @video.external_service_url) do |faraday|
       faraday.request :json
@@ -27,7 +28,7 @@ class SendResultsToExternalServiceService
     headers = {}
     headers['Authorization'] = "Bearer #{@video.external_callback_token}" if @video.external_callback_token.present?
 
-    response = conn.post('/api/v1/vineyard_app/results') do |req|
+    response = conn.post(resolved_callback_path) do |req|
       req.headers.merge!(headers)
       req.body = results.to_json
     end
@@ -43,5 +44,30 @@ class SendResultsToExternalServiceService
     Rails.logger.error("SendResultsToExternalServiceService error: #{e.message}")
     Rails.logger.error(e.backtrace.join("\n"))
     false
+  end
+
+  def callback_payload
+    payload = @video.aggregated_results
+    # Keep real positions in callback so Drones backend can render vineyard scheme.
+    # Payload trimming can be reintroduced later behind an explicit env flag if needed.
+    payload
+  end
+
+  def resolved_callback_path
+    default_path = '/api/v1/vineyard_app/results'
+    configured_path = ENV.fetch('EXTERNAL_RESULTS_PATH', '').to_s.strip
+    return default_path if configured_path.empty?
+    return default_path if configured_path.include?('%{')
+
+    if configured_path.start_with?('http://', 'https://')
+      uri = URI.parse(configured_path)
+      path = uri.request_uri
+      return default_path if path.blank?
+      return path
+    end
+
+    configured_path.start_with?('/') ? configured_path : "/#{configured_path}"
+  rescue URI::InvalidURIError
+    default_path
   end
 end

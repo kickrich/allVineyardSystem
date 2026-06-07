@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_25_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_25_194000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -79,9 +79,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_25_120000) do
     t.string "mission_id", comment: "ID миссии от внешнего сервиса"
     t.string "name"
     t.datetime "recorded_at"
+    t.integer "row_index"
+    t.integer "rows_count"
     t.integer "status", default: 0, null: false
     t.datetime "updated_at", null: false
-    t.index ["mission_id"], name: "index_videos_on_mission_id", unique: true
+    t.index ["mission_id", "row_index"], name: "index_videos_on_mission_id_and_row_index", unique: true
+    t.index ["mission_id"], name: "index_videos_on_mission_id"
   end
 
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"

@@ -27,6 +27,10 @@ class Api::VideosController < ApplicationController
       return render json: { error: "Файл не выбран" }, status: :unprocessable_entity
     end
 
+    if shard_index < 1
+      return render json: { error: "Некорректный номер ряда (минимум 1)" }, status: :unprocessable_entity
+    end
+
     if video.video_shards.exists?(shard_index: shard_index)
       return render json: { error: "Shard #{shard_index} уже загружен" }, status: :conflict
     end
@@ -49,6 +53,8 @@ class Api::VideosController < ApplicationController
       # Не запускаем валидации повторно: они тяжелые (FFMPEG) и могут падать,
       # а job_id — техническое поле.
       shard.update_column(:job_id, job.job_id)
+
+      video.recalculate_status!
 
       render json: {
         id: shard.id,
@@ -81,7 +87,6 @@ class Api::VideosController < ApplicationController
       statistics: {
         total_bushes: video.total_bushes_count,
         total_gaps: video.total_gaps_count,
-        avg_bush_spacing: video.avg_bush_spacing,
         bushes_positions: video.all_bushes_positions,
         gaps_positions: video.all_gaps_positions
       },
@@ -93,7 +98,6 @@ class Api::VideosController < ApplicationController
           filename: shard.original_filename,
           bushes_count: shard.bushes_count,
           gaps_count: shard.gaps_count,
-          bush_spacing_avg: shard.bush_spacing_avg,
           processed_at: shard.updated_at
         }
       end
@@ -138,7 +142,6 @@ class Api::VideosController < ApplicationController
       status: shard.status,
       bushes_count: shard.bushes_count,
       gaps_count: shard.gaps_count,
-      bush_spacing_avg: shard.bush_spacing_avg,
       progress: case shard.status
                 when 'pending' then 0
                 when 'processing' then 50

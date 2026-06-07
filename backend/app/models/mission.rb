@@ -19,7 +19,17 @@ class Mission < ApplicationRecord
   has_many :routes, dependent: :destroy
   has_many :telemetries, dependent: :destroy
   has_many :media_uploads, dependent: :destroy
-  has_one  :ai_result, dependent: :destroy
+  has_many :ai_results, dependent: :destroy
+
+  # Backward-compatible: historically mission had a single ai_result.
+  # Keep read access returning the latest record to avoid breaking callers.
+  def ai_result
+    ai_results.order(created_at: :desc).first
+  end
+
+  def build_ai_result(attributes = {})
+    ai_results.build(attributes)
+  end
 
   # Интеграция с VineyardApp
   attribute :vineyard_app_callback_token, :string, default: -> { SecureRandom.hex(32) }
@@ -46,7 +56,6 @@ class Mission < ApplicationRecord
   before_validation :set_default_status, on: :create
   before_validation :strip_mission_type
   after_destroy :free_drone_if_needed
-  after_commit :enqueue_ready_video_uploads_for_vineyard, on: :update, if: :completed_status_committed?
 
   validates :drone, presence: { message: "должен быть указан" }
   validates :user, presence: { message: "должен быть указан" }
@@ -60,7 +69,6 @@ class Mission < ApplicationRecord
   validate :drone_must_be_idle, on: :create
   validate :drone_availability_on_creation, on: :create
   validate :sufficient_battery_to_start, if: :in_progress?
-  validate :user_not_busy, on: :create
   validate :valid_status_transition, on: :update
 
   validates :vineyard_app_video_id, uniqueness: { allow_nil: true }
@@ -167,18 +175,6 @@ class Mission < ApplicationRecord
   end
 
   private
-
-  def completed_status_committed?
-    previous_changes.key?("status") && completed?
-  end
-
-  def enqueue_ready_video_uploads_for_vineyard
-    media_uploads
-      .where(media_type: "video", status: "ready")
-      .find_each do |media_upload|
-        SendVideoToVineyardAppJob.perform_later(media_upload.id)
-      end
-  end
 
   def mission_type_present?
     mission_type.present?

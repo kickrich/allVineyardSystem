@@ -52,7 +52,9 @@ async function parseApiError(response) {
     if (typeof payload?.message === 'string' && payload.message.length > 0) {
       return payload.message;
     }
-  } catch {}
+  } catch {
+    // response body is not JSON
+  }
   return `API ${response.status}: ${response.statusText}`;
 }
 

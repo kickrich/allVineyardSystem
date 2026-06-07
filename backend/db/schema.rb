@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_26_180500) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_28_132500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -52,14 +52,43 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_26_180500) do
     t.integer "rows_count"
     t.string "status"
     t.datetime "updated_at", null: false
-    t.index ["mission_id"], name: "index_ai_results_on_mission_id"
+  end
+
+  create_table "detections", force: :cascade do |t|
+    t.float "bush_spacing_avg"
+    t.integer "bushes_count"
+    t.datetime "created_at", null: false
+    t.integer "gaps_count"
+    t.jsonb "result_json"
+    t.float "row_spacing"
+    t.datetime "updated_at", null: false
+    t.bigint "video_id", null: false
+    t.index ["video_id"], name: "index_detections_on_video_id"
+  end
+
+  create_table "drone_logs", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.jsonb "data", default: {}, null: false
+    t.bigint "drone_id"
+    t.datetime "logged_at", null: false
+    t.string "message", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["drone_id"], name: "index_drone_logs_on_drone_id"
+    t.index ["logged_at"], name: "index_drone_logs_on_logged_at"
+    t.index ["user_id"], name: "index_drone_logs_on_user_id"
   end
 
   create_table "drones", force: :cascade do |t|
     t.integer "battery"
     t.datetime "created_at", null: false
+    t.boolean "is_visible", default: false, null: false
+    t.float "latitude"
+    t.float "longitude"
     t.string "model"
     t.string "name"
+    t.jsonb "route_path", default: [], null: false
+    t.jsonb "shift_segment_indices", default: [], null: false
     t.string "status"
     t.datetime "updated_at", null: false
   end
@@ -146,6 +175,14 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_26_180500) do
     t.datetime "updated_at", null: false
   end
 
+  create_table "videos", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "original_filename"
+    t.datetime "recorded_at"
+    t.string "status"
+    t.datetime "updated_at", null: false
+  end
+
   create_table "zones", force: :cascade do |t|
     t.jsonb "boundary", default: []
     t.string "color"
@@ -158,6 +195,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_26_180500) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "ai_results", "missions"
+  add_foreign_key "detections", "videos"
+  add_foreign_key "drone_logs", "drones"
+  add_foreign_key "drone_logs", "users"
   add_foreign_key "media_uploads", "missions"
   add_foreign_key "missions", "drones"
   add_foreign_key "missions", "users"

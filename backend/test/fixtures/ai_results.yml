@@ -6,7 +6,6 @@ one:
   bushes_count: 1
   rows_count: 1
   avg_distance_between_rows: 1.5
-  avg_distance_between_bushes: 1.5
 
 two:
   mission: two
@@ -14,4 +13,3 @@ two:
   bushes_count: 1
   rows_count: 1
   avg_distance_between_rows: 1.5
-  avg_distance_between_bushes: 1.5

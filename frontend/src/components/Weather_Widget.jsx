@@ -1,6 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
+const FETCH_TIMEOUT_MS = 15000;
+const COORD_DEBOUNCE_MS = 500;
+const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+
+function normalizeCoords(latitude, longitude) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { lat: 44.605, lng: 33.522 };
+  }
+  return {
+    lat: Math.max(-90, Math.min(90, lat)),
+    lng: Math.max(-180, Math.min(180, lng)),
+  };
+}
 
 const weatherLabel = (code) => {
   if (code === null || code === undefined) return { short: '—', icon: '🌡️' };
@@ -67,9 +82,11 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
   const [closing, setClosing] = useState(false);
   const [panelVisible, setPanelVisible] = useState(false);
   const closeTimeoutRef = useRef(null);
+  const fetchAbortRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [coords, setCoords] = useState(() => normalizeCoords(latitude, longitude));
 
   useEffect(() => {
     if (!expanded && !closing) {
@@ -96,32 +113,78 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
 
   useEffect(() => () => {
     if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    if (fetchAbortRef.current) {
+      try {
+        fetchAbortRef.current.abort();
+      } catch {
+        /* ignore */
+      }
+    }
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setCoords(normalizeCoords(latitude, longitude));
+    }, COORD_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [latitude, longitude]);
+
   const fetchWeather = useCallback(async () => {
-    const lat = latitude ?? 44.605;
-    const lng = longitude ?? 33.522;
+    const { lat, lng } = coords;
+    if (fetchAbortRef.current) {
+      try {
+        fetchAbortRef.current.abort();
+      } catch {
+        /* ignore */
+      }
+    }
+    const ac = new AbortController();
+    fetchAbortRef.current = ac;
+    const timeoutId = window.setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
         latitude: String(lat),
         longitude: String(lng),
-        current: 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,apparent_temperature',
-        timezone: 'auto'
+        current:
+          'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,apparent_temperature',
+        timezone: 'auto',
       });
-      const res = await fetch(`${OPEN_METEO_URL}?${params}`);
-      if (!res.ok) throw new Error('Ошибка запроса погоды');
+      const res = await fetch(`${OPEN_METEO_URL}?${params}`, { signal: ac.signal });
+      if (!res.ok) {
+        throw new Error(`Сервис погоды недоступен (HTTP ${res.status})`);
+      }
       const json = await res.json();
+      if (json?.error) {
+        throw new Error(typeof json.reason === 'string' ? json.reason : 'Ошибка ответа сервиса погоды');
+      }
       const current = json.current ? { ...json.current, time: json.current?.time } : null;
+      if (!current) {
+        throw new Error('Пустой ответ сервиса погоды');
+      }
       setData(current);
     } catch (e) {
-      setError(e.message || 'Не удалось загрузить погоду');
+      if (String(e?.name) === 'AbortError') {
+        if (fetchAbortRef.current !== ac) return;
+        setError('Таймаут запроса погоды. Нажмите «Обновить».');
+        setData(null);
+        return;
+      }
+      const msg = String(e?.message ?? '');
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        setError('Нет связи с сервисом погоды (Open-Meteo). Проверьте интернет или VPN.');
+      } else {
+        setError(msg || 'Не удалось загрузить погоду');
+      }
       setData(null);
     } finally {
+      window.clearTimeout(timeoutId);
+      if (fetchAbortRef.current === ac) fetchAbortRef.current = null;
       setLoading(false);
     }
-  }, [latitude, longitude]);
+  }, [coords]);
 
   useEffect(() => {
     const conditions = getFlightConditions(data);
@@ -132,8 +195,8 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
 
   useEffect(() => {
     fetchWeather();
-    const interval = setInterval(fetchWeather, 10 * 60 * 1000);
-    return () => clearInterval(interval);
+    const interval = window.setInterval(fetchWeather, REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
   }, [fetchWeather]);
 
   const w = data ? weatherLabel(data.weather_code) : { short: '—', icon: '🌡️' };
@@ -168,7 +231,17 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
         {loading && !data ? (
           <span className="text-gray-400 text-sm">Загрузка...</span>
         ) : error ? (
-          <span className="text-red-400 text-sm" title={error}>Ошибка</span>
+          <button
+            type="button"
+            className="text-red-400 text-sm underline-offset-2 hover:underline"
+            title={error}
+            onClick={(e) => {
+              e.stopPropagation();
+              fetchWeather();
+            }}
+          >
+            Ошибка ↻
+          </button>
         ) : (
           <>
             {flightConditions.status === 'danger' && <span className="text-amber-400" title="Неблагоприятные условия для полёта">⚠️</span>}

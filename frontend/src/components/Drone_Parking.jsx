@@ -6,8 +6,11 @@ export const DroneParking = ({
   onPlaceDrone,
   onRemoveDrone,
   onCreateDrone,
+  onDroneClick,
   onBackToTemplates,
   onClose,
+  placementAllowedByWeather = true,
+  weatherFlightReasons = [],
 }) => {
   const placedDrones = drones.filter((d) => d.isVisible);
   const availableDrones = drones.filter((d) => !d.isVisible);
@@ -54,25 +57,25 @@ export const DroneParking = ({
   }, [onCreateDrone, newDroneName, createBusy]);
 
   const getStatusColor = (drone) => {
-    if (!drone.isVisible) return 'bg-gray-700';
+    if (!drone.isVisible) return 'bg-gray-900/45 border-gray-700/60';
 
     switch (drone.flightStatus) {
       case 'FLYING':
-        return 'bg-green-900/30 border-green-500';
+        return 'border-green-500 bg-green-900/20';
       case 'PAUSED':
-        return 'bg-yellow-900/30 border-yellow-500';
+        return 'border-yellow-500 bg-yellow-900/20';
       case 'TAKEOFF':
       case 'LANDING':
-        return 'bg-blue-900/30 border-blue-500';
+        return 'border-blue-500 bg-blue-900/20';
       case 'COMPLETED':
-        return 'bg-green-900/30 border-green-700';
+        return 'border-green-700 bg-green-900/20';
       default:
-        return 'bg-gray-900/30 border-gray-500';
+        return 'border-gray-500 bg-gray-900/20';
     }
   };
 
   const getStatusIcon = (drone) => {
-    if (!drone.isVisible) return '📦';
+    if (!drone.isVisible) return '';
 
     switch (drone.flightStatus) {
       case 'FLYING':
@@ -85,7 +88,7 @@ export const DroneParking = ({
       case 'COMPLETED':
         return '✅';
       default:
-        return '🛸';
+        return '';
     }
   };
 
@@ -170,13 +173,15 @@ export const DroneParking = ({
       : null;
 
   return (
-    <div className="flex flex-shrink-0 w-72">
-      <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden h-full flex flex-col w-full">
-        <div className="bg-gradient-to-r from-gray-700 to-gray-800 p-4">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col lg:w-72">
+      <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl bg-gray-800/95 lg:bg-gray-800/85 border border-gray-700/70 backdrop-blur-sm shadow-2xl">
+        <div className="shrink-0 bg-gradient-to-r from-gray-800 to-gray-900 p-4 border-b border-gray-700/80">
           <div className="flex justify-between items-center gap-2">
-            <h2 className="text-xl font-bold text-white leading-tight whitespace-nowrap min-w-0 truncate">
-              Стоянка для дронов
-            </h2>
+            <div className="flex-1 flex justify-center">
+              <h2 className="text-xl font-bold text-white leading-tight whitespace-nowrap min-w-0 truncate text-center">
+                БПЛА
+              </h2>
+            </div>
             {onClose && (
               <button
                 type="button"
@@ -190,14 +195,14 @@ export const DroneParking = ({
               </button>
             )}
           </div>
-          <div className="flex items-center gap-2 mt-2">
+          <div className="flex items-center gap-2 mt-2 justify-center">
             <div className="bg-green-500 rounded-full w-2 h-2"></div>
             <span className="text-sm text-gray-300">
               Размещено: {placedDrones.length} из {drones.length}
             </span>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pr-2 space-y-4 [scrollbar-gutter:stable]">
           {placedDrones.length > 0 && (
             <div>
               <h3 className="text-lg font-semibold text-white mb-3">Размещенные дроны</h3>
@@ -205,7 +210,21 @@ export const DroneParking = ({
                 {placedDrones.map((drone) => (
                   <div
                     key={drone.id}
-                    className={`border ${getStatusColor(drone)} rounded-lg p-3 transition-all duration-200 hover:scale-[1.01]`}
+                    role={typeof onDroneClick === 'function' ? 'button' : undefined}
+                    tabIndex={typeof onDroneClick === 'function' ? 0 : undefined}
+                    onKeyDown={(e) => {
+                      if (typeof onDroneClick !== 'function') return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onDroneClick(drone);
+                      }
+                    }}
+                    onClick={() => {
+                      if (typeof onDroneClick === 'function') onDroneClick(drone);
+                    }}
+                    className={`border ${getStatusColor(drone)} rounded-lg p-3 transition-all duration-200 hover:bg-gray-800/60 ${
+                      typeof onDroneClick === 'function' ? 'cursor-pointer' : ''
+                    }`}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex items-center gap-2">
@@ -215,7 +234,10 @@ export const DroneParking = ({
                         </div>
                       </div>
                       <button
-                        onClick={() => onRemoveDrone(drone.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveDrone(drone.id);
+                        }}
                         className="text-red-400 hover:text-red-300 transition-colors p-1 hover:bg-red-900/30 rounded"
                         title="Убрать дрон с карты"
                       >
@@ -242,15 +264,15 @@ export const DroneParking = ({
           {availableDrones.length > 0 && (
             <div>
               <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="text-lg font-semibold text-white">Доступные дроны</h3>
+                <h3 className="text-lg font-semibold text-white text-center w-full">Доступные БПЛА</h3>
                 {onCreateDrone && (
                   <button
                     type="button"
                     onClick={openCreateModal}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors whitespace-nowrap shrink-0"
-                    title="Создать дрона в backend и добавить в стоянку"
+                    className="bg-blue-600 hover:bg-green-700 text-white px-3 py-2 min-h-[20px] rounded text-sm transition-colors whitespace-nowrap shrink-0"
+                    title="Создать дрона"
                   >
-                    Создать
+                    +
                   </button>
                 )}
               </div>
@@ -258,21 +280,47 @@ export const DroneParking = ({
                 {availableDrones.map((drone, idx) => (
                   <div
                     key={drone.id}
-                    className="bg-gray-900/50 border border-gray-700 rounded-lg p-3 hover:bg-gray-800/50 transition-colors hover:border-gray-600"
+                    role={typeof onDroneClick === 'function' ? 'button' : undefined}
+                    tabIndex={typeof onDroneClick === 'function' ? 0 : undefined}
+                    onKeyDown={(e) => {
+                      if (typeof onDroneClick !== 'function') return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onDroneClick(drone);
+                      }
+                    }}
+                    onClick={() => {
+                      if (typeof onDroneClick === 'function') onDroneClick(drone);
+                    }}
+                    className={`bg-gray-900/45 border border-gray-700/60 rounded-lg p-3 hover:bg-gray-800/60 transition-colors hover:border-gray-600 ${
+                      typeof onDroneClick === 'function' ? 'cursor-pointer' : ''
+                    }`}
                   >
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-3">
-                        <div className="text-2xl">📦</div>
+                        <div className="text-2xl"></div>
                         <div>
                           <h4 className="font-bold text-gray-300">{drone.name}</h4>
                         </div>
                       </div>
                       <button
                         type="button"
-                        onClick={() => onPlaceDrone(drone.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (placementAllowedByWeather) onPlaceDrone(drone.id);
+                        }}
+                        disabled={!placementAllowedByWeather}
                         {...(idx === 0 ? { 'data-onboarding': 'place-drone' } : {})}
-                        className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 min-h-[44px] rounded text-sm transition-colors hover:scale-105 flex items-center whitespace-nowrap shrink-0"
-                        title="Разместить дрон на карте"
+                        className={`px-3 py-2 min-h-[44px] rounded text-sm transition-colors flex items-center whitespace-nowrap shrink-0 ${
+                          placementAllowedByWeather
+                            ? 'bg-green-600 hover:bg-green-700 text-white hover:scale-105'
+                            : 'bg-gray-600 text-gray-400 cursor-not-allowed opacity-60'
+                        }`}
+                        title={
+                          placementAllowedByWeather
+                            ? 'Разместить дрон на карте'
+                            : `Размещение недоступно: ${weatherFlightReasons.join(', ') || 'неблагоприятная погода'}`
+                        }
                       >
                         Разместить
                       </button>
@@ -284,7 +332,6 @@ export const DroneParking = ({
           )}
           {drones.length === 0 && (
             <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">🛸</div>
               <p>Нет доступных дронов</p>
               {onCreateDrone && (
                 <button
@@ -299,7 +346,7 @@ export const DroneParking = ({
           )}
         </div>
         {onBackToTemplates && (
-          <div className="flex-shrink-0 p-4 pt-2 border-t border-gray-700 hidden lg:block">
+          <div className="shrink-0 border-t border-gray-700 bg-gray-800/95 p-4 pt-2 backdrop-blur-sm hidden lg:block">
             <button
               type="button"
               onClick={onBackToTemplates}
@@ -308,7 +355,7 @@ export const DroneParking = ({
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
-              Вернуться к шаблонам
+              Шаблоны
             </button>
           </div>
         )}

@@ -4,6 +4,7 @@ require "aws-sdk-s3"
 require "securerandom"
 require "uri"
 require "json"
+require "cgi"
 
 class VideoShardProcessorService
   def initialize(shard)
@@ -53,7 +54,10 @@ class VideoShardProcessorService
       raise "Не найден object_key для обработки (и нет прикрепленного файла)"
     end
 
-    conn = faraday_client_to_cv
+    conn = Faraday.new(url: @cv_service_url) do |faraday|
+      faraday.adapter Faraday.default_adapter
+      faraday.options.timeout = 1200
+    end
 
     callback_host = ENV.fetch("RAILS_URL", "http://localhost:3000")
     callback_url = "#{callback_host}/api/video_shards/#{@shard.id}/results"
@@ -68,7 +72,7 @@ class VideoShardProcessorService
 
     response = conn.post("/process_video_shard_from_minio") do |req|
       req.headers["Content-Type"] = "application/json"
-      req.body = payload
+      req.body = JSON.generate(payload)
     end
 
     parsed =
@@ -144,7 +148,6 @@ class VideoShardProcessorService
     @shard.update_columns(
       bushes_count: p["bushes_count"],
       gaps_count: p["gaps_count"],
-      bush_spacing_avg: p["bush_spacing_avg"],
       result_json: result_json,
       recorded_at: Time.current,
       status: VideoShard.statuses[:completed],
@@ -183,29 +186,11 @@ class VideoShardProcessorService
     segments = uri.path.to_s.split('/').reject(&:blank?)
     return [nil, nil] if segments.size < 2
 
-    bucket = segments.first
-    key = segments[1..].join('/')
+    bucket = CGI.unescape(segments.first)
+    key = CGI.unescape(segments[1..].join('/'))
     [bucket, key]
   rescue URI::InvalidURIError
     [nil, nil]
-  end
-
-  # Таймаут ожидания ответа от cvService (сек), см. .env: CV_SERVICE_HTTP_TIMEOUT_SECONDS
-  def faraday_client_to_cv(multipart: false)
-    Faraday.new(url: @cv_service_url) do |faraday|
-      faraday.request :multipart if multipart
-      faraday.request :url_encoded if multipart
-      faraday.request :json unless multipart
-      faraday.adapter Faraday.default_adapter
-      faraday.options.timeout = cv_service_http_timeout_seconds
-    end
-  end
-
-  def cv_service_http_timeout_seconds
-    raw = ENV["CV_SERVICE_HTTP_TIMEOUT_SECONDS"].to_s.strip
-    t = raw.empty? ? 1800 : raw.to_i
-    t = 1800 if t < 1
-    t.clamp(60, 86_400)
   end
 
   def send_to_cv_service_legacy
@@ -226,7 +211,12 @@ class VideoShardProcessorService
       raise "Скачанный файл имеет нулевой размер"
     end
 
-    conn = faraday_client_to_cv(multipart: true)
+    conn = Faraday.new(url: @cv_service_url) do |faraday|
+      faraday.request :multipart
+      faraday.request :url_encoded
+      faraday.adapter Faraday.default_adapter
+      faraday.options.timeout = 600
+    end
 
     callback_host = ENV.fetch('RAILS_URL', 'http://localhost:3000')
     callback_url = "#{callback_host}/api/video_shards/#{@shard.id}/results"

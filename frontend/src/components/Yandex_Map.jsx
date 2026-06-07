@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flightStatus } from '../constants/drones_data';
+import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '../constants/app';
 import { RouteShiftSegmentsPopup } from './Route_Shift_Segments_Popup';
 
 if (typeof window !== 'undefined') {
@@ -14,19 +15,38 @@ const ZONE_FIT_ANIMATION_MS = 520;
 const DRONE_PLACE_OFFSET_M = 72;
 const DRONE_PLACE_DURATION_MS = 400;
 
-/** Лёгкое «зависание» на точке: амплитуда по север–юг (м) и период (мс). */
-const DRONE_HOVER_AMPLITUDE_M = 3.5;
-const DRONE_HOVER_PERIOD_MS = 2000;
+const OSM_OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const BUILDINGS_REFRESH_DEBOUNCE_MS = 200;
+/** Крупные полигоны OSM (кварталы/зоны) не считаем отдельным зданием для проверки маршрута. */
+const MAX_BUILDING_FOOTPRINT_AREA_M2 = 25_000;
 
-/** Сдвиг позиции из props (м) — «зависание» полностью выключается; после паузы без движения снова включается. */
-const DRONE_MOTION_THRESHOLD_M = 0.35;
-const DRONE_MOTION_HOVER_RESUME_MS = 550;
+const YANDEX_MAP_TYPE_SATELLITE = 'yandex#satellite';
+const YANDEX_MAP_TYPE_SCHEME = 'yandex#map';
+
+function applyYandexZoomRangeForType(map, mapType, center) {
+  if (!map || typeof window.ymaps?.getZoomRange !== 'function') return;
+  const coords = Array.isArray(center) && center.length >= 2 ? center : null;
+  if (!coords) return;
+  window.ymaps
+    .getZoomRange(mapType, coords)
+    .then((range) => {
+      if (!map) return;
+      const minZ = Number(range?.[0]);
+      const maxZ = Number(range?.[1]);
+      if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) return;
+      map.options.set({
+        minZoom: Math.max(MAP_MIN_ZOOM, minZ),
+        maxZoom: Math.min(MAP_MAX_ZOOM, maxZ),
+      });
+    })
+    .catch(() => {});
+}
 
 function easeOutCubic(t) {
   return 1 - (1 - t) ** 3;
 }
 
-/** Полёт / миссия: нельзя тянуть маркер; в sync — жёстко к координатам из props (без «зависания»). */
+/** Полёт / миссия: нельзя тянуть маркер; в sync — жёстко к координатам из props. */
 function isDroneFlyingLike(drone) {
   if (!drone) return false;
   if (drone.status === 'в полете') return true;
@@ -38,26 +58,6 @@ function isDroneFlyingLike(drone) {
     fs === flightStatus.LANDING ||
     fs === flightStatus.PAUSED
   );
-}
-
-/** Любое изменение позиции из props — «зависание» выключается до паузы без новых координат. */
-function touchDroneMotionMap(motionRef, idStr, lat, lng, now) {
-  let st = motionRef.current[idStr];
-  const key = `${Number(lat).toFixed(7)},${Number(lng).toFixed(7)}`;
-  if (!st) {
-    motionRef.current[idStr] = { lat, lng, key, resumeHoverAt: 0 };
-    return false;
-  }
-  const latRad = (lat * Math.PI) / 180;
-  const cosLat = Math.cos(latRad) || 1e-6;
-  const movedM = Math.hypot((lat - st.lat) * 111_320, (lng - st.lng) * 111_320 * cosLat);
-  if (key !== st.key || movedM > DRONE_MOTION_THRESHOLD_M) {
-    st.resumeHoverAt = now + DRONE_MOTION_HOVER_RESUME_MS;
-  }
-  st.lat = lat;
-  st.lng = lng;
-  st.key = key;
-  return st.resumeHoverAt > now;
 }
 
 /** Сместить точку на offsetM по азимуту: 0 — север, π/2 — восток (случайный угол для прилёта/улёта). */
@@ -101,6 +101,206 @@ function rectCornersToBoundary(cornerA, cornerB) {
     [minLng, maxLat],
     [minLng, minLat],
   ];
+}
+
+function computeBoundaryBbox(boundary) {
+  if (!Array.isArray(boundary) || boundary.length < 4) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  boundary.forEach(([lng, lat]) => {
+    const la = Number(lat);
+    const ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+    minLat = Math.min(minLat, la);
+    maxLat = Math.max(maxLat, la);
+    minLng = Math.min(minLng, ln);
+    maxLng = Math.max(maxLng, ln);
+  });
+  if (![minLat, maxLat, minLng, maxLng].every(Number.isFinite)) return null;
+  if (minLat === maxLat || minLng === maxLng) return null;
+  return { south: minLat, west: minLng, north: maxLat, east: maxLng };
+}
+
+function metersToLat(m) {
+  return m / 111_320;
+}
+
+function metersToLng(m, atLatDeg) {
+  const latRad = (Number(atLatDeg) * Math.PI) / 180;
+  const cosLat = Math.cos(latRad) || 1e-6;
+  return m / (111_320 * cosLat);
+}
+
+function inflateBbox(bbox, padM = 40) {
+  if (!bbox) return null;
+  const latMid = (bbox.south + bbox.north) / 2;
+  const dLat = metersToLat(padM);
+  const dLng = metersToLng(padM, latMid);
+  return {
+    south: bbox.south - dLat,
+    west: bbox.west - dLng,
+    north: bbox.north + dLat,
+    east: bbox.east + dLng,
+  };
+}
+
+function orientation(ax, ay, bx, by, cx, cy) {
+  const v = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
+  if (Math.abs(v) < 1e-12) return 0;
+  return v > 0 ? 1 : 2;
+}
+
+function onSegment(ax, ay, bx, by, cx, cy) {
+  return (
+    Math.min(ax, bx) - 1e-12 <= cx &&
+    cx <= Math.max(ax, bx) + 1e-12 &&
+    Math.min(ay, by) - 1e-12 <= cy &&
+    cy <= Math.max(ay, by) + 1e-12
+  );
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const o1 = orientation(a.x, a.y, b.x, b.y, c.x, c.y);
+  const o2 = orientation(a.x, a.y, b.x, b.y, d.x, d.y);
+  const o3 = orientation(c.x, c.y, d.x, d.y, a.x, a.y);
+  const o4 = orientation(c.x, c.y, d.x, d.y, b.x, b.y);
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(a.x, a.y, b.x, b.y, c.x, c.y)) return true;
+  if (o2 === 0 && onSegment(a.x, a.y, b.x, b.y, d.x, d.y)) return true;
+  if (o3 === 0 && onSegment(c.x, c.y, d.x, d.y, a.x, a.y)) return true;
+  if (o4 === 0 && onSegment(c.x, c.y, d.x, d.y, b.x, b.y)) return true;
+  return false;
+}
+
+/** Пересекает ли отрезок маршрута контур здания (только «сквозь» стены, не «точка внутри квартала»). */
+function routeSegmentCrossesRing(pointA, pointB, ring) {
+  if (!pointA || !pointB || !Array.isArray(ring) || ring.length < 3) return false;
+  const a = { x: Number(pointA.lng), y: Number(pointA.lat) };
+  const b = { x: Number(pointB.lng), y: Number(pointB.lat) };
+  if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return false;
+
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const p0 = ring[i];
+    const p1 = ring[i + 1];
+    const c = { x: Number(p0?.[1]), y: Number(p0?.[0]) };
+    const d = { x: Number(p1?.[1]), y: Number(p1?.[0]) };
+    if (![c.x, c.y, d.x, d.y].every(Number.isFinite)) continue;
+    if (segmentsIntersect(a, b, c, d)) return true;
+  }
+  return false;
+}
+
+function bboxAreaSqM(bbox) {
+  if (!bbox) return 0;
+  const latMid = (bbox.south + bbox.north) / 2;
+  const heightM = Math.abs(bbox.north - bbox.south) * 111_320;
+  const widthM = Math.abs(bbox.east - bbox.west) * 111_320 * Math.cos((latMid * Math.PI) / 180);
+  return heightM * widthM;
+}
+
+function routeSegmentCrossesBuildings(prevPoint, clickPoint, buildingList) {
+  if (!prevPoint || !clickPoint) return false;
+  if (!Array.isArray(buildingList) || buildingList.length === 0) return false;
+  for (const b of buildingList) {
+    if (!b?.ring || !b?.bbox) continue;
+    const minLat = Math.min(prevPoint.lat, clickPoint.lat);
+    const maxLat = Math.max(prevPoint.lat, clickPoint.lat);
+    const minLng = Math.min(prevPoint.lng, clickPoint.lng);
+    const maxLng = Math.max(prevPoint.lng, clickPoint.lng);
+    if (
+      maxLat < b.bbox.south ||
+      minLat > b.bbox.north ||
+      maxLng < b.bbox.west ||
+      minLng > b.bbox.east
+    ) {
+      continue;
+    }
+    if (routeSegmentCrossesRing(prevPoint, clickPoint, b.ring)) return true;
+  }
+  return false;
+}
+
+function pathHasSegmentThroughBuildings(path, buildingList) {
+  if (!Array.isArray(path) || path.length < 2) return false;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const a = path[i];
+    const b = path[i + 1];
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) continue;
+    const prev = { lat: Number(a[0]), lng: Number(a[1]) };
+    const next = { lat: Number(b[0]), lng: Number(b[1]) };
+    if (![prev.lat, prev.lng, next.lat, next.lng].every(Number.isFinite)) continue;
+    if (routeSegmentCrossesBuildings(prev, next, buildingList)) return true;
+  }
+  return false;
+}
+
+function ringBbox(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  ring.forEach(([lat, lng]) => {
+    const la = Number(lat);
+    const ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+    minLat = Math.min(minLat, la);
+    maxLat = Math.max(maxLat, la);
+    minLng = Math.min(minLng, ln);
+    maxLng = Math.max(maxLng, ln);
+  });
+  if (![minLat, maxLat, minLng, maxLng].every(Number.isFinite)) return null;
+  return { south: minLat, west: minLng, north: maxLat, east: maxLng };
+}
+
+async function fetchBuildingsFromOverpass(bbox, signal) {
+  const query = `
+[out:json][timeout:25];
+(
+  way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+);
+out body;
+>;
+out skel qt;
+`.trim();
+
+  const res = await fetch(OSM_OVERPASS_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: `data=${encodeURIComponent(query)}`,
+    signal,
+  });
+  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+  const data = await res.json();
+  const elements = Array.isArray(data?.elements) ? data.elements : [];
+  const nodes = new Map();
+  const ways = [];
+  elements.forEach((el) => {
+    if (el?.type === 'node' && el?.id != null) {
+      const lat = Number(el.lat);
+      const lon = Number(el.lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) nodes.set(el.id, [lat, lon]);
+    } else if (el?.type === 'way' && Array.isArray(el?.nodes)) {
+      ways.push(el);
+    }
+  });
+  const polygons = [];
+  ways.forEach((w) => {
+    const pts = w.nodes.map((nid) => nodes.get(nid)).filter(Boolean);
+    if (pts.length < 4) return;
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    const closed = first && last && first[0] === last[0] && first[1] === last[1];
+    const ring = closed ? pts : [...pts, [...pts[0]]];
+    if (ring.length < 4) return;
+    const bbox = ringBbox(ring);
+    if (!bbox) return;
+    if (bboxAreaSqM(bbox) > MAX_BUILDING_FOOTPRINT_AREA_M2) return;
+    polygons.push({ ring, bbox });
+  });
+  return polygons;
 }
 
 function scaleRingAroundCenter(ring, factor = 1.01) {
@@ -167,15 +367,6 @@ function areSamePolylineCoords(currentCoords, nextCoords) {
     if (a[0] !== b[0] || a[1] !== b[1]) return false;
   }
   return true;
-}
-
-function formatSchemaRows(rowsSchema) {
-  if (!Array.isArray(rowsSchema) || rowsSchema.length === 0) return [];
-  return rowsSchema.map((row) => {
-    const index = Number(row?.shard_index || 0);
-    const sequence = Array.isArray(row?.row_sequence) ? row.row_sequence.join(' ') : '—';
-    return `#${index}: ${sequence}`;
-  });
 }
 
 /**
@@ -421,8 +612,6 @@ export function YandexMap({
   zoneColor = '#22c55e',
   /** Увеличивайте после загрузки KML / смены зоны — карта подгонит вид под полигон. */
   zoneFitNonce = 0,
-  /** Маркеры со схемой обработанной миссии рядом с зонами. */
-  zoneResultOverlays = [],
   /** Превью прямоугольника до сохранения зоны (тот же формат boundary). */
   draftRectBoundary = null,
   /** Режим рисования прямоугольника мышью (зажал-потянул-отпустил). */
@@ -433,20 +622,28 @@ export function YandexMap({
   onRouteShiftSegmentToggle,
   /** Текущий id шага тура (WorkspaceOnboarding): на шаге route-shift-segments (последний) кнопка «Смещения» и демо на карте. */
   workspaceOnboardingStepId = null,
+  /** Запрос фокуса на точку (например, выбранный дрон): { center: [lat,lng], zoom?: number, nonce: number } */
+  focusRequest = null,
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const mapSizeRafRef = useRef(null);
+  const lastMapSizeRef = useRef({ w: 0, h: 0 });
+  const [buildings, setBuildings] = useState([]);
+  const [buildingsStatus, setBuildingsStatus] = useState('idle');
+  const buildingsAbortRef = useRef(null);
+  const buildingsDebounceRef = useRef(null);
+  const [buildingsNotice, setBuildingsNotice] = useState(null);
+  const buildingsRef = useRef([]);
+  const buildingsStatusRef = useRef('idle');
+  const showBuildingsNoticeRef = useRef(null);
   const droneMarkersRef = useRef({});
   const dronePlaceAnimRafRef = useRef({});
   const dronePlaceAnimActiveRef = useRef(new Set());
   const droneRemoveAnimActiveRef = useRef(new Set());
   const dronePlaceTargetKeyRef = useRef(new Map());
   const droneMarkerPositionKeyRef = useRef(new Map());
-  const droneHoverPhaseRef = useRef({});
-  const droneHoverLoopRafRef = useRef(null);
-  const droneMotionForHoverRef = useRef({});
   const droneDragActiveRef = useRef(new Set());
-  const dronesRef = useRef(drones);
   const routeEditModeRef = useRef(false);
   const placementModeRef = useRef(false);
   const routePolylinesRef = useRef({});
@@ -477,15 +674,14 @@ export function YandexMap({
   const rectDrawStateRef = useRef({ active: false, start: null, last: null });
   const lastZoneFitNonceRef = useRef(zoneFitNonce);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [mapType, setMapType] = useState(YANDEX_MAP_TYPE_SATELLITE);
   const [error, setError] = useState(null);
   const [routeShiftPanelOpen, setRouteShiftPanelOpen] = useState(false);
   const [routeShiftSelectionMode, setRouteShiftSelectionMode] = useState(false);
   const [routeShiftDemoAnchorVersion, setRouteShiftDemoAnchorVersion] = useState(0);
-  const [schemaPanelOpen, setSchemaPanelOpen] = useState(false);
   const lastMapCenterRef = useRef(mapCenter);
   const lastMapZoomRef = useRef(mapZoom);
 
-  dronesRef.current = drones;
   routeEditModeRef.current = routeEditMode;
   placementModeRef.current = placementMode;
   routeEditPathRef.current = routeEditPath;
@@ -509,10 +705,6 @@ export function YandexMap({
   const activeStroke = /^#[0-9a-fA-F]{6}$/.test(activeZoneFromList?.color) ? activeZoneFromList.color : zoneStrokeColor;
   const activeFill = `${activeStroke}2e`;
   const activeHoverFill = `${activeStroke}47`;
-  const schemaOverlays = useMemo(
-    () => (Array.isArray(zoneResultOverlays) ? zoneResultOverlays : []),
-    [zoneResultOverlays]
-  );
 
   useEffect(() => {
     if (window.ymaps && window.yandexMapsLoaded) {
@@ -553,6 +745,61 @@ export function YandexMap({
 
     document.head.appendChild(script);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (buildingsDebounceRef.current) {
+      clearTimeout(buildingsDebounceRef.current);
+      buildingsDebounceRef.current = null;
+    }
+    if (buildingsAbortRef.current) {
+      try { buildingsAbortRef.current.abort(); } catch {}
+      buildingsAbortRef.current = null;
+    }
+
+    const bboxRaw = computeBoundaryBbox(activeBoundary);
+    if (!bboxRaw) {
+      setBuildings([]);
+      setBuildingsStatus('idle');
+      return;
+    }
+    const bbox = inflateBbox(bboxRaw, 40);
+    setBuildingsStatus('loading');
+
+    buildingsDebounceRef.current = setTimeout(() => {
+      const ac = new AbortController();
+      buildingsAbortRef.current = ac;
+      fetchBuildingsFromOverpass(bbox, ac.signal)
+        .then((polys) => {
+          setBuildings(Array.isArray(polys) ? polys : []);
+          setBuildingsStatus('ready');
+        })
+        .catch((e) => {
+          if (String(e?.name) === 'AbortError') return;
+          console.warn('Overpass buildings fetch failed:', e?.message ?? e);
+          setBuildingsStatus((prev) => (prev === 'ready' ? 'ready' : 'error'));
+        })
+        .finally(() => {
+          buildingsAbortRef.current = null;
+        });
+    }, BUILDINGS_REFRESH_DEBOUNCE_MS);
+
+    return () => {
+      if (buildingsDebounceRef.current) {
+        clearTimeout(buildingsDebounceRef.current);
+        buildingsDebounceRef.current = null;
+      }
+      if (buildingsAbortRef.current) {
+        try { buildingsAbortRef.current.abort(); } catch {}
+        buildingsAbortRef.current = null;
+      }
+    };
+  }, [activeBoundary]);
+
+  useEffect(() => {
+    buildingsRef.current = buildings;
+    buildingsStatusRef.current = buildingsStatus;
+  }, [buildings, buildingsStatus]);
 
   const cancelDroneMarkerAnim = (droneId) => {
     const id = String(droneId);
@@ -634,11 +881,23 @@ export function YandexMap({
     if (!mapContainerRef.current || !window.ymaps) return;
     if (mapInstanceRef.current) return;
 
-    const map = new window.ymaps.Map(mapContainerRef.current, {
-      center: mapCenter || [55.751244, 37.618423],
-      zoom: mapZoom,
-      controls: [],
-    });
+    const map = new window.ymaps.Map(
+      mapContainerRef.current,
+      {
+        center: mapCenter || [55.751244, 37.618423],
+        zoom: mapZoom,
+        type: YANDEX_MAP_TYPE_SATELLITE,
+        controls: [],
+      },
+      {
+        minZoom: MAP_MIN_ZOOM,
+        maxZoom: MAP_MAX_ZOOM,
+        avoidFractionalZoom: false,
+      }
+    );
+
+    const center = mapCenter || [55.751244, 37.618423];
+    applyYandexZoomRangeForType(map, YANDEX_MAP_TYPE_SATELLITE, center);
 
     mapInstanceRef.current = map;
     lastMapCenterRef.current = mapCenter;
@@ -791,7 +1050,6 @@ export function YandexMap({
             cancelDroneMarkerAnim(drone.id);
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
-            delete droneHoverPhaseRef.current[idStr];
             try {
               existingMarker.options.set(
                 'draggable',
@@ -819,7 +1077,6 @@ export function YandexMap({
           } else if (isDroneFlyingLike(drone)) {
             existingMarker.geometry.setCoordinates(pos);
             droneMarkerPositionKeyRef.current.set(idStr, posKey);
-            delete droneHoverPhaseRef.current[idStr];
           } else {
             const lastKey = droneMarkerPositionKeyRef.current.get(idStr);
             if (lastKey !== posKey) {
@@ -857,89 +1114,6 @@ export function YandexMap({
     });
 
   }, [drones, selectedDroneId, mapLoaded, routeEditMode, placementMode]);
-
-  useEffect(() => {
-    if (!mapLoaded || !mapInstanceRef.current) return;
-
-    const tick = (now) => {
-      if (!mapInstanceRef.current) {
-        droneHoverLoopRafRef.current = null;
-        return;
-      }
-      if (routeEditModeRef.current || placementModeRef.current) {
-        droneHoverLoopRafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-
-      const list = dronesRef.current || [];
-      const amp = DRONE_HOVER_AMPLITUDE_M / 111_320;
-      const omega = (2 * Math.PI) / DRONE_HOVER_PERIOD_MS;
-
-      for (const drone of list) {
-        if (!drone.isVisible || !drone.position) continue;
-        const idStr = String(drone.id);
-        if (dronePlaceAnimActiveRef.current.has(idStr)) continue;
-        if (droneRemoveAnimActiveRef.current.has(idStr)) continue;
-        if (droneDragActiveRef.current.has(idStr)) continue;
-
-        const placemark = droneMarkersRef.current[drone.id];
-        if (!placemark) continue;
-
-        const baseLat = Number(drone.position.lat);
-        const baseLng = Number(drone.position.lng);
-        if (touchDroneMotionMap(droneMotionForHoverRef, idStr, baseLat, baseLng, now)) {
-          try {
-            placemark.geometry.setCoordinates([baseLat, baseLng]);
-          } catch {
-            /* ignore */
-          }
-          delete droneHoverPhaseRef.current[idStr];
-          continue;
-        }
-        let phase = droneHoverPhaseRef.current[idStr];
-        if (phase == null) {
-          phase = Math.random() * DRONE_HOVER_PERIOD_MS;
-          droneHoverPhaseRef.current[idStr] = phase;
-        }
-        const delta = amp * Math.sin(omega * (now + phase));
-        try {
-          placemark.geometry.setCoordinates([baseLat + delta, baseLng]);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      const listIds = new Set(
-        list.filter((d) => d.isVisible && d.position).map((d) => String(d.id))
-      );
-      for (const k of Object.keys(droneMotionForHoverRef.current)) {
-        if (!listIds.has(k)) delete droneMotionForHoverRef.current[k];
-      }
-      for (const k of Object.keys(droneHoverPhaseRef.current)) {
-        if (!listIds.has(k)) {
-          delete droneHoverPhaseRef.current[k];
-          continue;
-        }
-        const d = list.find((x) => String(x.id) === k);
-        if (!d?.position) {
-          delete droneHoverPhaseRef.current[k];
-          continue;
-        }
-        const m = droneMotionForHoverRef.current[k];
-        if (m && m.resumeHoverAt > now) delete droneHoverPhaseRef.current[k];
-      }
-
-      droneHoverLoopRafRef.current = requestAnimationFrame(tick);
-    };
-
-    droneHoverLoopRafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (droneHoverLoopRafRef.current != null) {
-        cancelAnimationFrame(droneHoverLoopRafRef.current);
-        droneHoverLoopRafRef.current = null;
-      }
-    };
-  }, [mapLoaded]);
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !window.ymaps) return;
@@ -1092,6 +1266,26 @@ export function YandexMap({
         const nextPath = coords
           .filter((c) => Array.isArray(c) && c.length >= 2)
           .map((c) => [c[0], c[1]]);
+
+        if (
+          buildingsStatusRef.current === 'ready' &&
+          pathHasSegmentThroughBuildings(nextPath, buildingsRef.current)
+        ) {
+          if (typeof showBuildingsNoticeRef.current === 'function') {
+            showBuildingsNoticeRef.current('Нельзя прокладывать маршрут через здания (OSM).');
+          }
+          const prevPath = routeEditPathRef.current;
+          if (Array.isArray(prevPath) && prevPath.length >= 2) {
+            isSyncingRouteEditRef.current = true;
+            try {
+              polyline.geometry.setCoordinates(prevPath.map((p) => [p[0], p[1]]));
+            } finally {
+              isSyncingRouteEditRef.current = false;
+            }
+          }
+          return;
+        }
+
         onRoutePathChange(nextPath);
       };
       routeEditGeometryChangeHandlerRef.current = handleRouteGeometryChange;
@@ -1522,12 +1716,6 @@ export function YandexMap({
   }, [mapLoaded, normalizedZones, zoneBoundary, zoneColor, zoneFitNonce, activeFill, activeStroke]);
 
   useEffect(() => {
-    if (!schemaOverlays.length) {
-      setSchemaPanelOpen(false);
-    }
-  }, [schemaOverlays.length]);
-
-  useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !activeBoundary || drawRectZoneMode) return;
     const map = mapInstanceRef.current;
 
@@ -1795,6 +1983,94 @@ export function YandexMap({
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    try {
+      map.setType(mapType);
+    } catch {
+      /* ignore */
+    }
+    let center = mapCenter;
+    try {
+      const c = typeof map.getCenter === 'function' ? map.getCenter() : null;
+      if (Array.isArray(c) && c.length >= 2) center = c;
+    } catch {
+      /* ignore */
+    }
+    applyYandexZoomRangeForType(map, mapType, center);
+  }, [mapType, mapLoaded, mapCenter]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current) return;
+    if (!focusRequest || typeof focusRequest !== 'object') return;
+    const nonce = focusRequest.nonce;
+    const center = focusRequest.center;
+    const zoom = focusRequest.zoom;
+    if (nonce == null) return;
+    if (!Array.isArray(center) || center.length < 2) return;
+    const lat = Number(center[0]);
+    const lng = Number(center[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const nextZoom = typeof zoom === 'number' && Number.isFinite(zoom) ? zoom : null;
+
+    const map = mapInstanceRef.current;
+    let syncTimer = null;
+    try {
+      // Один плавный переход (центр + зум) — без резких “скачков”.
+      const z =
+        nextZoom != null
+          ? nextZoom
+          : (typeof map.getZoom === 'function' ? map.getZoom() : null);
+      map.setCenter([lat, lng], z, {
+        duration: ZONE_FIT_ANIMATION_MS,
+        timingFunction: 'ease-in-out',
+      });
+    } catch {
+      // Fallback: если анимированный setCenter недоступен — хотя бы плавный panTo.
+      try {
+        map.panTo([lat, lng], {
+          delay: 0,
+          duration: ZONE_FIT_ANIMATION_MS,
+          flying: true,
+          timingFunction: 'ease-in-out',
+        });
+        if (nextZoom != null) {
+          // Зум отдельно, но только в fallback-ветке.
+          try {
+            map.setZoom(nextZoom, { duration: ZONE_FIT_ANIMATION_MS });
+          } catch {
+            map.setZoom(nextZoom);
+          }
+        }
+      } catch {
+        try {
+          map.setCenter([lat, lng]);
+          if (nextZoom != null) map.setZoom(nextZoom);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    syncTimer = window.setTimeout(() => {
+      try {
+        const c = typeof map.getCenter === 'function' ? map.getCenter() : null;
+        const z = typeof map.getZoom === 'function' ? map.getZoom() : null;
+        if (Array.isArray(c) && c.length >= 2 && typeof onMapCenterChange === 'function') {
+          onMapCenterChange([Number(c[0]), Number(c[1])]);
+        }
+        if (typeof z === 'number' && Number.isFinite(z) && typeof onMapZoomChange === 'function') {
+          onMapZoomChange(z);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, ZONE_FIT_ANIMATION_MS);
+
+    return () => window.clearTimeout(syncTimer);
+  }, [mapLoaded, focusRequest, onMapCenterChange, onMapZoomChange]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current) return;
     if (drawRectZoneMode) return;
 
     const map = mapInstanceRef.current;
@@ -1802,6 +2078,19 @@ export function YandexMap({
       const coords = e.get('coords');
       if (!Array.isArray(coords) || coords.length < 2) return;
       const clickPoint = { lat: coords[0], lng: coords[1] };
+
+      const showBuildingsNotice = (text) => {
+        setBuildingsNotice(text);
+        window.setTimeout(() => {
+          try {
+            setBuildingsNotice((prev) => (prev === text ? null : prev));
+          } catch {
+            /* ignore */
+          }
+        }, 1400);
+      };
+      showBuildingsNoticeRef.current = showBuildingsNotice;
+
       if (routeEditMode) {
         const path = Array.isArray(routeEditPathRef.current) ? routeEditPathRef.current : [];
         if (routeShiftSelectionMode && path.length >= 2 && typeof onRouteShiftSegmentToggle === 'function') {
@@ -1823,6 +2112,21 @@ export function YandexMap({
             onRouteShiftSegmentToggle(segInfo.index);
             return;
           }
+          return;
+        }
+        const last = path.length > 0 ? path[path.length - 1] : null;
+        const prev =
+          Array.isArray(last) && last.length >= 2
+            ? { lat: Number(last[0]), lng: Number(last[1]) }
+            : null;
+        const buildingList =
+          buildingsStatusRef.current === 'ready' ? buildingsRef.current : [];
+        if (
+          prev &&
+          buildingList.length > 0 &&
+          routeSegmentCrossesBuildings(prev, clickPoint, buildingList)
+        ) {
+          showBuildingsNotice('Нельзя прокладывать маршрут через здания (OSM).');
           return;
         }
         if (typeof onMapClick === 'function') {
@@ -1904,6 +2208,8 @@ export function YandexMap({
     routeShiftSelectionMode,
     placementMode,
     onRouteShiftSegmentToggle,
+    buildings,
+    buildingsStatus,
   ]);
 
   useEffect(() => {
@@ -2024,63 +2330,83 @@ export function YandexMap({
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current || !mapContainerRef.current) return;
 
-    const updateMapSize = () => {
-      if (mapInstanceRef.current && mapContainerRef.current) {
+    const scheduleMapResize = (nextW = null, nextH = null) => {
+      // Скролл/анимации могут вызывать частые resize/RO callbacks.
+      // Сжимаем вызовы в 1 апдейт на кадр и только при реальном изменении размера.
+      if (!mapInstanceRef.current || !mapContainerRef.current) return;
+
+      const container = mapContainerRef.current;
+      const w = Number.isFinite(nextW) ? nextW : container.offsetWidth;
+      const h = Number.isFinite(nextH) ? nextH : container.offsetHeight;
+      if (!(w > 0 && h > 0)) return;
+
+      const prev = lastMapSizeRef.current;
+      if (prev.w === w && prev.h === h) return;
+      lastMapSizeRef.current = { w, h };
+
+      if (mapSizeRafRef.current != null) return;
+      mapSizeRafRef.current = requestAnimationFrame(() => {
+        mapSizeRafRef.current = null;
+        const map = mapInstanceRef.current;
+        const c = mapContainerRef.current;
+        if (!map || !c) return;
+
+        const width = c.offsetWidth;
+        const height = c.offsetHeight;
+        if (!(width > 0 && height > 0)) return;
+
         try {
-          const map = mapInstanceRef.current;
-          const container = mapContainerRef.current;
-          const width = container.offsetWidth;
-          const height = container.offsetHeight;
-          
-          if (width > 0 && height > 0) {
-            map.container.fitToViewport();
-          }
+          map.container.fitToViewport();
         } catch (error) {
           try {
-            const map = mapInstanceRef.current;
-            const container = mapContainerRef.current;
-            if (map && container) {
-              const width = container.offsetWidth;
-              const height = container.offsetHeight;
-              
-              if (width > 0 && height > 0) {
-                map.container.setSize([width, height]);
-              }
-            }
+            map.container.setSize([width, height]);
           } catch (e) {
             console.warn('Не удалось обновить размер карты:', e);
           }
         }
-      }
+      });
     };
-    window.addEventListener('resize', updateMapSize);
+
+    const handleWindowResize = () => scheduleMapResize();
+    window.addEventListener('resize', handleWindowResize, { passive: true });
     let resizeObserver = null;
     if (mapContainerRef.current && window.ResizeObserver) {
-      resizeObserver = new ResizeObserver(() => {
-        // Небольшая задержка для завершения CSS-анимаций
-        setTimeout(updateMapSize, 100);
+      resizeObserver = new ResizeObserver((entries) => {
+        const entry = Array.isArray(entries) ? entries[0] : null;
+        const cr = entry?.contentRect;
+        const w = cr ? Math.round(cr.width) : null;
+        const h = cr ? Math.round(cr.height) : null;
+        scheduleMapResize(w, h);
       });
       resizeObserver.observe(mapContainerRef.current);
     } else {
       const intervalId = setInterval(() => {
         if (mapContainerRef.current && mapInstanceRef.current) {
-          updateMapSize();
+          scheduleMapResize();
         }
       }, 500);
       
       return () => {
         clearInterval(intervalId);
-        window.removeEventListener('resize', updateMapSize);
+        window.removeEventListener('resize', handleWindowResize);
         if (resizeObserver) {
           resizeObserver.disconnect();
+        }
+        if (mapSizeRafRef.current != null) {
+          cancelAnimationFrame(mapSizeRafRef.current);
+          mapSizeRafRef.current = null;
         }
       };
     }
 
     return () => {
-      window.removeEventListener('resize', updateMapSize);
+      window.removeEventListener('resize', handleWindowResize);
       if (resizeObserver) {
         resizeObserver.disconnect();
+      }
+      if (mapSizeRafRef.current != null) {
+        cancelAnimationFrame(mapSizeRafRef.current);
+        mapSizeRafRef.current = null;
       }
     };
   }, [mapLoaded]);
@@ -2154,12 +2480,6 @@ export function YandexMap({
       droneRemoveAnimActiveRef.current.clear();
       dronePlaceTargetKeyRef.current.clear();
       droneMarkerPositionKeyRef.current.clear();
-      if (droneHoverLoopRafRef.current != null) {
-        cancelAnimationFrame(droneHoverLoopRafRef.current);
-        droneHoverLoopRafRef.current = null;
-      }
-      droneHoverPhaseRef.current = {};
-      droneMotionForHoverRef.current = {};
       droneDragActiveRef.current.clear();
       if (mapInstanceRef.current) {
         try {
@@ -2278,6 +2598,14 @@ export function YandexMap({
     (onboardingRouteShiftStep ||
       (routeEditMode && Array.isArray(routeEditPath) && routeEditPath.length >= 2));
 
+  const isSatelliteMap = mapType === YANDEX_MAP_TYPE_SATELLITE;
+
+  const toggleMapType = () => {
+    setMapType((prev) =>
+      prev === YANDEX_MAP_TYPE_SATELLITE ? YANDEX_MAP_TYPE_SCHEME : YANDEX_MAP_TYPE_SATELLITE
+    );
+  };
+
   return (
     <div
       className={`relative h-full w-full overflow-hidden rounded bg-gray-900 ${cursorAddPoint ? 'cursor-route-edit' : ''}`}
@@ -2291,100 +2619,29 @@ export function YandexMap({
           cursor: cursorAddPoint ? 'crosshair' : 'grab',
         }}
       />
-      {(
-        <>
-          <div className="pointer-events-auto absolute bottom-2 right-2 z-[166]">
-            <button
-              type="button"
-              title="Показать схему участка"
-              aria-label="Показать схему участка"
-              onClick={() => setSchemaPanelOpen((v) => !v)}
-              className={`h-10 w-10 rounded-full border text-xl font-bold shadow-lg transition-colors ${
-                schemaPanelOpen
-                  ? 'border-amber-300 bg-amber-600 text-white'
-                  : 'border-amber-500/80 bg-amber-900/90 text-amber-100 hover:bg-amber-800'
-              }`}
-            >
-              {schemaOverlays.length > 0 ? '!' : '?'}
-            </button>
-          </div>
-
-          {schemaPanelOpen && (
-            <div className="pointer-events-auto absolute bottom-14 right-2 z-[166] w-[min(92vw,360px)] max-h-[70vh] overflow-y-auto rounded-xl border border-amber-600/50 bg-gray-900/95 p-3 shadow-2xl backdrop-blur-sm">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold text-amber-200">Схема участков</p>
-                <button
-                  type="button"
-                  onClick={() => setSchemaPanelOpen(false)}
-                  className="rounded border border-gray-500 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-800"
-                >
-                  Закрыть
-                </button>
-              </div>
-              {schemaOverlays.length === 0 ? (
-                <div className="rounded-lg border border-gray-700 bg-gray-800/80 p-3">
-                  <p className="text-sm text-gray-200">Схема участка пока не получена.</p>
-                  <p className="mt-1 text-xs text-gray-400">Проверь завершение миссии и отправку AI-результатов с backend.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {schemaOverlays.map((overlay) => {
-                    const rows = formatSchemaRows(overlay?.rowsSchema);
-                    const canFocusOnMap =
-                      Number.isFinite(Number(overlay?.position?.[0])) &&
-                      Number.isFinite(Number(overlay?.position?.[1]));
-                    return (
-                      <div
-                        key={overlay?.id || `${overlay?.zoneId}-${overlay?.missionId}`}
-                        className="rounded-lg border border-gray-700 bg-gray-800/80 p-2"
-                      >
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-medium text-white">{overlay?.zoneName || `Зона ${overlay?.zoneId}`}</p>
-                          <button
-                            type="button"
-                            disabled={!canFocusOnMap}
-                            className="shrink-0 rounded border border-gray-500 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => {
-                              const map = mapInstanceRef.current;
-                              const lat = Number(overlay?.position?.[0]);
-                              const lng = Number(overlay?.position?.[1]);
-                              if (!map || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-                              try {
-                                map.panTo([lat, lng], { delay: 0, duration: 350, flying: true, timingFunction: 'ease-in-out' });
-                              } catch {
-                                try {
-                                  map.setCenter([lat, lng]);
-                                } catch {
-                                  /* ignore */
-                                }
-                              }
-                            }}
-                          >
-                            На карте
-                          </button>
-                        </div>
-                        <p className="text-xs text-gray-300">
-                          Миссия #{overlay?.missionId} · Кустов: <strong>{overlay?.bushesCount ?? 0}</strong> · Пропусков: <strong>{overlay?.gapsCount ?? 0}</strong>
-                        </p>
-                        <p className="text-xs text-gray-400">Средний шаг: {Number(overlay?.avgBushSpacing || 0).toFixed(2)}</p>
-                        {rows.length > 0 && (
-                          <div className="mt-1 rounded border border-gray-700 bg-gray-900/70 p-1.5">
-                            <p className="mb-1 text-[11px] uppercase tracking-wide text-amber-300">Ряды</p>
-                            <div className="space-y-0.5">
-                              {rows.map((rowLine) => (
-                                <p key={rowLine} className="text-xs text-gray-200">{rowLine}</p>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </>
+      {mapLoaded && (
+        <div className="pointer-events-auto absolute bottom-3 right-3 z-[200]">
+          <button
+            type="button"
+            onClick={toggleMapType}
+            title={
+              isSatelliteMap
+                ? 'Переключить на схему (дороги и подписи)'
+                : 'Переключить на спутниковые снимки'
+            }
+            aria-label={
+              isSatelliteMap ? 'Показать схему карты' : 'Показать спутниковую карту'
+            }
+            className="rounded-xl border border-gray-500/70 bg-gray-900/90 px-3 py-2 min-h-[44px] text-sm font-medium text-gray-100 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800/95"
+          >
+            {isSatelliteMap ? 'Схема' : 'Спутник'}
+          </button>
+        </div>
+      )}
+      {buildingsNotice && (
+        <div className="pointer-events-none absolute top-3 left-1/2 z-[210] w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-500/60 bg-amber-950/90 px-3 py-2 text-sm text-amber-100 shadow-xl backdrop-blur-sm">
+          {buildingsNotice}
+        </div>
       )}
       {showRouteShiftUi && (
         <>

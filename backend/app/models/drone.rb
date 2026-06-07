@@ -3,6 +3,7 @@ class Drone < ApplicationRecord
 
   # При удалении дрона удаляем связанные миссии и их дочерние записи (маршруты, телеметрия и т.д.).
   has_many :missions, dependent: :destroy
+  has_many :drone_logs, dependent: :nullify
 
   enum :status, {
     idle: "idle",
@@ -28,6 +29,10 @@ class Drone < ApplicationRecord
     less_than_or_equal_to: 100,
     message: "должна быть от 0 до 100 процентов"
   }, allow_nil: true
+  validates :latitude, numericality: { greater_than_or_equal_to: -90, less_than_or_equal_to: 90 }, allow_nil: true
+  validates :longitude, numericality: { greater_than_or_equal_to: -180, less_than_or_equal_to: 180 }, allow_nil: true
+  validate :route_path_has_valid_points
+  validate :shift_segment_indices_valid
 
   scope :available, -> { where(status: [:idle, :charging]) }
   scope :by_status, ->(status) { where(status: status) }
@@ -61,6 +66,38 @@ class Drone < ApplicationRecord
       )
     )
     throw(:abort)
+  end
+
+  def route_path_has_valid_points
+    return if route_path.blank?
+    unless route_path.is_a?(Array)
+      errors.add(:route_path, "должен быть массивом точек")
+      return
+    end
+
+    route_path.each do |point|
+      unless point.is_a?(Array) && point.length >= 2
+        errors.add(:route_path, "содержит некорректную точку маршрута")
+        next
+      end
+      lat = Float(point[0]) rescue nil
+      lng = Float(point[1]) rescue nil
+      unless lat && lng && lat.between?(-90, 90) && lng.between?(-180, 180)
+        errors.add(:route_path, "содержит точку вне допустимого диапазона координат")
+      end
+    end
+  end
+
+  def shift_segment_indices_valid
+    return if shift_segment_indices.blank?
+    unless shift_segment_indices.is_a?(Array)
+      errors.add(:shift_segment_indices, "должен быть массивом индексов")
+      return
+    end
+    shift_segment_indices.each do |index|
+      n = Integer(index) rescue nil
+      errors.add(:shift_segment_indices, "содержит некорректный индекс") unless n && n >= 0
+    end
   end
 
 end

@@ -1,4 +1,4 @@
-import { apiGet, apiGetBlob, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession } from './client';
+import { apiGet, apiPost, apiPatch, apiDelete, apiPostForm, apiPatchForm, clearApiSession } from './client';
 
 const DEFAULT_DEV_EMAIL = import.meta.env.VITE_API_EMAIL ?? 'operator@drones.local';
 const DEFAULT_DEV_PASSWORD = import.meta.env.VITE_API_PASSWORD ?? 'password123';
@@ -6,6 +6,76 @@ const DEFAULT_DEV_NAME = import.meta.env.VITE_API_NAME ?? 'Drone Operator';
 
 function extractData(payload) {
   return payload?.data ?? payload;
+}
+
+// Защита от дублей ai_result:
+// - inFlight: склеивает параллельные запросы по одной миссии
+// - cache: после первого успешного ответа с ai_result повторно сеть не дёргаем
+const missionAiResultInFlight = new Map();
+const missionAiResultCache = new Map();
+const AI_RESULT_SESSION_CACHE_PREFIX = 'ai_result_cache:';
+const AI_RESULT_SESSION_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function readMissionAiResultFromSessionCache(missionIdKey) {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(`${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.data?.ai_result) return null;
+    const ts = Number(parsed.ts);
+    if (!Number.isFinite(ts) || Date.now() - ts > AI_RESULT_SESSION_CACHE_TTL_MS) {
+      sessionStorage.removeItem(`${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeMissionAiResultToSessionCache(missionIdKey, data) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(
+      `${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`,
+      JSON.stringify({ ts: Date.now(), data })
+    );
+  } catch {
+    // ignore storage quota / serialization issues
+  }
+}
+
+function clearMissionAiResultCacheById(missionIdKey) {
+  missionAiResultInFlight.delete(missionIdKey);
+  missionAiResultCache.delete(missionIdKey);
+  if (typeof window !== 'undefined') {
+    try {
+      sessionStorage.removeItem(`${AI_RESULT_SESSION_CACHE_PREFIX}${missionIdKey}`);
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
+function clearAllMissionAiResultCache() {
+  missionAiResultInFlight.clear();
+  missionAiResultCache.clear();
+  if (typeof window !== 'undefined') {
+    try {
+      const keysToDelete = [];
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const key = sessionStorage.key(i);
+        if (typeof key === 'string' && key.startsWith(AI_RESULT_SESSION_CACHE_PREFIX)) {
+          keysToDelete.push(key);
+        }
+      }
+      keysToDelete.forEach((key) => sessionStorage.removeItem(key));
+    } catch {
+      // ignore storage errors
+    }
+  }
 }
 
 async function login(email, password) {
@@ -50,23 +120,6 @@ async function registerDevUser(email, password, name) {
 }
 
 export async function ensureApiSession() {
-  // Не перетираем текущий токен: иначе можно "перепрыгнуть" на dev-пользователя
-  // и потерять доступ к уже созданной миссии другого пользователя.
-  if (typeof window !== 'undefined') {
-    const existingToken = localStorage.getItem('api_token');
-    if (typeof existingToken === 'string' && existingToken.trim().length > 0) {
-      const rawUser = localStorage.getItem('api_user');
-      if (rawUser) {
-        try {
-          return JSON.parse(rawUser);
-        } catch {
-          return { token: existingToken };
-        }
-      }
-      return { token: existingToken };
-    }
-  }
-
   const email = DEFAULT_DEV_EMAIL;
   const password = DEFAULT_DEV_PASSWORD;
   const name = DEFAULT_DEV_NAME;
@@ -74,6 +127,7 @@ export async function ensureApiSession() {
   try {
     return await login(email, password);
   } catch {
+    // fall through to register
   }
 
   try {
@@ -128,29 +182,33 @@ export async function fetchRouteTemplatesFromBackend() {
   return Array.isArray(templates) ? templates : [];
 }
 
-export async function createRouteTemplateInBackend({ name, path, zoneId = null, shiftSegmentIndices = [] }) {
+export async function createRouteTemplateInBackend({ name, path, zoneId = null, shiftSegments = [] }) {
   if (!name || !String(name).trim()) throw new Error('Укажите название шаблона');
   if (!Array.isArray(path) || path.length < 2) throw new Error('Шаблон должен содержать минимум 2 точки');
+  const normalizedShiftSegments = Array.isArray(shiftSegments)
+    ? [...new Set(shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
+    : [];
   const payload = {
     route_template: {
       name: String(name).trim(),
       path,
       zone_id: zoneId ?? null,
-      shift_segment_indices: Array.isArray(shiftSegmentIndices) ? shiftSegmentIndices : [],
+      shift_segment_indices: normalizedShiftSegments,
     },
   };
   const response = await apiPost('/api/v1/route_templates', payload);
   return extractData(response);
 }
 
-export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId, shiftSegmentIndices }) {
+export async function updateRouteTemplateInBackend(templateId, { name, path, zoneId, shiftSegments }) {
   if (templateId == null) throw new Error('Не выбран шаблон для обновления');
   const routeTemplatePatch = {};
   if (typeof name === 'string' && name.trim()) routeTemplatePatch.name = name.trim();
   if (Array.isArray(path)) routeTemplatePatch.path = path;
   if (zoneId !== undefined) routeTemplatePatch.zone_id = zoneId ?? null;
-  if (shiftSegmentIndices !== undefined) {
-    routeTemplatePatch.shift_segment_indices = Array.isArray(shiftSegmentIndices) ? shiftSegmentIndices : [];
+  if (Array.isArray(shiftSegments)) {
+    routeTemplatePatch.shift_segment_indices = [...new Set(shiftSegments.filter((i) => Number.isInteger(i) && i >= 0))]
+      .sort((a, b) => a - b);
   }
   const response = await apiPatch(`/api/v1/route_templates/${templateId}`, {
     route_template: routeTemplatePatch,
@@ -301,56 +359,85 @@ export async function fetchActiveMissionsForDrone(droneId) {
   return Array.isArray(missions) ? missions : [];
 }
 
-export async function fetchCompletedMissionSchemas() {
-  const response = await apiGet('/api/v1/missions?status=completed&with_ai_results=1');
+export async function fetchMissionsFromBackend() {
+  const response = await apiGet('/api/v1/missions');
   const missions = extractData(response);
   return Array.isArray(missions) ? missions : [];
 }
 
-/** Список тестовых видео из backend (папка TEST_MISSION_SHARD_VIDEOS_DIR). */
-export async function fetchTestMissionVideoShardList() {
-  const response = await apiGet('/api/v1/test_mission_video_shards');
-  return extractData(response);
+export async function fetchDroneLogsFromBackend({ limit = null, droneId = null } = {}) {
+  const query = new URLSearchParams();
+  if (Number.isFinite(Number(limit)) && Number(limit) > 0) {
+    query.set('limit', String(Math.max(1, Number(limit))));
+  }
+  if (droneId != null) query.set('drone_id', String(droneId));
+  const response = await apiGet(`/api/v1/drone_logs?${query.toString()}`);
+  const logs = extractData(response);
+  return Array.isArray(logs) ? logs : [];
 }
 
-/** Скачать один тестовый файл как Blob (для загрузки в MinIO как «шард»). */
-export async function fetchTestMissionVideoShardBlob(filename) {
-  const enc = encodeURIComponent(filename);
-  return apiGetBlob(`/api/v1/test_mission_video_shards/download?name=${enc}`);
-}
-
-/** Сервер копирует файл из TEST_MISSION_SHARD_VIDEOS_DIR в MinIO (без скачивания в браузер). */
-export async function pushTestMissionShardToS3({
-  missionId,
-  shardFilename,
-  rowIndex = null,
-  rowsCount = null,
-  shiftSegmentIndices = [],
-} = {}) {
-  if (missionId == null) throw new Error('missionId is required');
-  if (!shardFilename) throw new Error('shardFilename is required');
-
+export async function createDroneLogInBackend({ droneId = null, message, data = {}, loggedAt = null } = {}) {
+  if (!message || !String(message).trim()) return null;
   const payload = {
-    mission_id: missionId,
-    shard_filename: String(shardFilename),
+    drone_log: {
+      message: String(message).trim(),
+      data: data && typeof data === 'object' ? data : {},
+      logged_at: loggedAt ?? new Date().toISOString(),
+    },
   };
-
-  if (Number.isInteger(rowIndex) && rowIndex >= 1) {
-    payload.row_index = rowIndex;
-  }
-  if (Number.isInteger(rowsCount) && rowsCount > 0) {
-    payload.rows_count = rowsCount;
-  }
-  const normalizedShifts = Array.isArray(shiftSegmentIndices)
-    ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
-    : [];
-  payload.shift_segment_indices = normalizedShifts;
-
-  // Сервер читает файл с диска и заливает в MinIO — дольше обычного JSON (дефолт 10 с в client.js).
-  const response = await apiPost('/api/v1/media_uploads/push_test_mission_shard', payload, {
-    timeoutMs: 600_000,
-  });
+  if (droneId != null) payload.drone_log.drone_id = droneId;
+  const response = await apiPost('/api/v1/drone_logs', payload);
   return extractData(response);
+}
+
+export async function fetchMissionProcessingStatusFromBackend(missionId) {
+  if (missionId == null) return null;
+  const response = await apiGet(
+    `/api/v1/missions/${encodeURIComponent(missionId)}/processing_status`
+  );
+  return extractData(response);
+}
+
+export async function fetchMissionAiResultFromBackend(missionId) {
+  if (missionId == null) return null;
+  const key = String(missionId);
+  if (missionAiResultCache.has(key)) {
+    return missionAiResultCache.get(key);
+  }
+  const sessionCached = readMissionAiResultFromSessionCache(key);
+  if (sessionCached) {
+    missionAiResultCache.set(key, sessionCached);
+    return sessionCached;
+  }
+  if (missionAiResultInFlight.has(key)) {
+    return missionAiResultInFlight.get(key);
+  }
+
+  const requestPromise = (async () => {
+    const response = await apiGet(`/api/v1/missions/${encodeURIComponent(missionId)}/ai_result`);
+    const data = extractData(response);
+    if (data?.ai_result) {
+      missionAiResultCache.set(key, data);
+      writeMissionAiResultToSessionCache(key, data);
+    }
+    return data;
+  })().finally(() => {
+    missionAiResultInFlight.delete(key);
+  });
+
+  missionAiResultInFlight.set(key, requestPromise);
+  return requestPromise;
+}
+
+export async function deleteMissionAiResultInBackend(missionId) {
+  if (missionId == null) return;
+  await apiDelete(`/api/v1/missions/${encodeURIComponent(missionId)}/ai_result`);
+  clearMissionAiResultCacheById(String(missionId));
+}
+
+export async function deleteAllMissionAiResultsInBackend() {
+  await apiDelete('/api/v1/missions/ai_results');
+  clearAllMissionAiResultCache();
 }
 
 export async function multipartInitForVideo({
@@ -378,16 +465,15 @@ export async function multipartInitForVideo({
     chunk_size_bytes: chunkSizeBytes,
   };
 
-  if (Number.isInteger(rowIndex) && rowIndex >= 1) {
+  if (Number.isInteger(rowIndex) && rowIndex > 0) {
     payload.row_index = rowIndex;
   }
   if (Number.isInteger(rowsCount) && rowsCount > 0) {
     payload.rows_count = rowsCount;
   }
-  const normalizedShifts = Array.isArray(shiftSegmentIndices)
-    ? [...new Set(shiftSegmentIndices.filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b)
-    : [];
-  payload.shift_segment_indices = normalizedShifts;
+  if (Array.isArray(shiftSegmentIndices) && shiftSegmentIndices.length) {
+    payload.shift_segment_indices = shiftSegmentIndices;
+  }
 
   const response = await apiPost('/api/v1/media_uploads/multipart_init', payload);
   return extractData(response);
