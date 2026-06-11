@@ -2,9 +2,9 @@ default: &default
   adapter: postgresql
   encoding: unicode
   pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
-  username: vineyard_user
-  password: 1029
-  host: localhost
+  username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
+  password: <%= ENV.fetch("DB_PASSWORD", "1029") %>
+  host: <%= ENV.fetch("DB_HOST", "localhost") %>
   port: <%= ENV.fetch("DB_PORT") { 5432 } %>
 
 development:
@@ -16,7 +16,19 @@ test:
   database: vineyard_monitoring_test
 
 production:
-  <<: *default
-  database: vineyard_monitoring_production
-  username: vineyard_user
-  password: <%= ENV["VINEYARD_DATABASE_PASSWORD"] %>
+  primary: &primary_production
+    <<: *default
+    database: <%= ENV.fetch("DB_NAME", "vineyard_monitoring_production") %>
+    password: <%= ENV.fetch("VINEYARD_DATABASE_PASSWORD", ENV["DB_PASSWORD"]) %>
+  cache:
+    <<: *primary_production
+    database: <%= ENV.fetch("DB_CACHE_NAME", "#{ENV.fetch('DB_NAME', 'vineyard_monitoring_production')}_cache") %>
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *primary_production
+    database: <%= ENV.fetch("DB_QUEUE_NAME", "#{ENV.fetch('DB_NAME', 'vineyard_monitoring_production')}_queue") %>
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *primary_production
+    database: <%= ENV.fetch("DB_CABLE_NAME", "#{ENV.fetch('DB_NAME', 'vineyard_monitoring_production')}_cable") %>
+    migrations_paths: db/cable_migrate
