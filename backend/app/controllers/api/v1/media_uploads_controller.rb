@@ -297,20 +297,27 @@ module Api
           parts: parts
         )
 
-        media_upload.update!(
-          status: "processing",
-          url: multipart_service.object_public_url(meta["key"].to_s),
-          upload_meta: meta.merge(
-            "source_key" => meta["key"].to_s,
-            "source_url" => multipart_service.object_public_url(meta["key"].to_s)
-          )
+        source_key = meta["key"].to_s
+        source_url = multipart_service.object_public_url(source_key)
+        merged_meta = meta.merge(
+          "source_key" => source_key,
+          "source_url" => source_url
         )
 
-        # Асинхронная конвертация webm → mp4 (url переключится на mp4 после готовности).
         if media_upload.media_type == "video"
-          MediaUploadTranscodeJob.perform_later(media_upload.id)
+          media_upload.assign_attributes(
+            status: "processing",
+            url: source_url,
+            upload_meta: merged_meta
+          )
+          media_upload.save!
+          MediaUploadFinalizeService.new(media_upload).call
         else
-          media_upload.update!(status: "ready")
+          media_upload.update!(
+            status: "ready",
+            url: source_url,
+            upload_meta: merged_meta
+          )
         end
 
         render_data(media_upload_payload(media_upload), status: :created)
@@ -427,7 +434,7 @@ module Api
           return
         end
 
-        MediaUploadTranscodeJob.perform_later(media_upload.id)
+        MediaUploadFinalizeService.new(media_upload).call
 
         render_data(media_upload_payload(media_upload), status: :created)
       rescue S3MultipartUploadService::ConfigError => e

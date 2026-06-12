@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 namespace :media_uploads do
-  desc "Повторить transcode (processing) и отправку в VineyardApp (ready/failed) для видео миссий"
+  desc "Повторить finalize (processing) и отправку в VineyardApp (ready/failed) для видео миссий"
   task retry_pipeline: :environment do
     mission_id = ENV["MISSION_ID"].presence
 
@@ -14,7 +14,7 @@ namespace :media_uploads do
     puts "processing: #{processing.count}, ready/failed: #{ready.count}"
 
     processing.find_each do |mu|
-      puts "  transcode MediaUpload ##{mu.id} (mission ##{mu.mission_id})"
+      puts "  finalize MediaUpload ##{mu.id} (mission ##{mu.mission_id})"
       MediaUploadTranscodeJob.perform_later(mu.id)
     end
 
