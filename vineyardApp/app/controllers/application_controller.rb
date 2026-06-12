@@ -5,4 +5,9 @@ class ApplicationController < ActionController::Base
 
   # Changes to the importmap will invalidate the etag for HTML responses
   stale_when_importmap_changes
+
+  def default_url_options
+    root = Rails.application.config.relative_url_root.presence
+    root ? { script_name: root } : {}
+  end
 end
