@@ -185,6 +185,15 @@ CV_JOB_CONCURRENCY=1           # сколько shard-джобов vineyardApp �
 docker compose -f docker-compose.prod.yml --env-file .env up -d --build cv vineyard-app
 ```
 
+**Таймаут CV** (vineyard-app ждёт ответ от cv, по умолчанию 4 ч):
+
+```env
+CV_SERVICE_READ_TIMEOUT=14400
+CV_SERVICE_OPEN_TIMEOUT=60
+```
+
+После смены: `up -d --force-recreate vineyard-app` и `restart nginx`.
+
 ## HTTPS (Let's Encrypt)
 
 1. Направьте домен на IP сервера.

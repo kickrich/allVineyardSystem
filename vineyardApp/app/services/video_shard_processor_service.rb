@@ -163,7 +163,7 @@ class VideoShardProcessorService
   end
 
   def cv_service_read_timeout
-    ENV.fetch('CV_SERVICE_READ_TIMEOUT', '3600').to_i
+    ENV.fetch('CV_SERVICE_READ_TIMEOUT', '14400').to_i
   end
 
   def cv_service_open_timeout
