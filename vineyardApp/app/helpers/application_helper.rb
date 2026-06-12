@@ -1,17 +1,4 @@
 module ApplicationHelper
-  def app_base_path
-    Rails.application.config.relative_url_root.to_s.chomp("/")
-  end
-
-  # Путь с учётом RAILS_RELATIVE_URL_ROOT (/vineyard в production).
-  def app_path(path)
-    base = app_base_path
-    return path if base.blank?
-
-    path = "/#{path}" unless path.start_with?("/")
-    "#{base}#{path}"
-  end
-
   def status_color(status)
     case status.to_s
     when 'uploading'

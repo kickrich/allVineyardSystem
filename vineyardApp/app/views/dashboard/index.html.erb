@@ -160,14 +160,13 @@
                   <%= time_ago_in_words(video.created_at) %> назад
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                  <%= link_to "Подробнее", video_path(video), class: "btn-link btn-sm inline-block mr-2" %>
-                  <%= button_to destroy_video_path(video), 
-                        method: :delete, 
+                  <%= link_to "Подробнее", app_path("/video/#{video.id}"), class: "btn-link btn-sm inline-block mr-2" %>
+                  <%= button_to "Удалить",
+                        app_path("/video/#{video.id}"),
+                        method: :delete,
                         form: { style: "display: inline-block", data: { turbo: false } },
                         data: { confirm: "Вы уверены? Видео и все его ряды будут удалены безвозвратно." },
-                        class: "btn-danger btn-sm inline-block" do %>
-                    Удалить
-                  <% end %>
+                        class: "btn-danger btn-sm inline-block" %>
                 </td>
               </tr>
             <% end %>
