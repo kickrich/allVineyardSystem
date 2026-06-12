@@ -10,7 +10,7 @@ module Api
       # ensure_shard_directory! (только development или ENABLE_TEST_MISSION_VIDEO_SHARDS + папка).
       skip_before_action :authenticate_request!
 
-      VIDEO_EXT = %w[.webm .mp4].freeze
+      VIDEO_EXT = VideoUploadFormats::ALLOWED_VIDEO_EXTENSIONS
 
       before_action :ensure_shard_directory!
 
@@ -117,11 +117,7 @@ module Api
       end
 
       def content_type_for(path)
-        case path.extname.downcase
-        when ".mp4" then "video/mp4"
-        when ".webm" then "video/webm"
-        else "application/octet-stream"
-        end
+        VideoUploadFormats.content_type_for_extension(path.extname) || "application/octet-stream"
       end
     end
   end

@@ -905,7 +905,7 @@ export function AppProvider({ children }) {
       const shuffled = shuffleArray(files);
       testMissionShardFilesRef.current = shuffled;
       if (shuffled.length === 0) {
-        addToDroneLog(droneId, '⚠️ TEST шарды: в папке нет .webm/.mp4. Задайте TEST_MISSION_SHARD_VIDEOS_DIR в backend/.env');
+        addToDroneLog(droneId, '⚠️ TEST шарды: нет видео (.mp4/.webm/.mov/.avi/.mkv). Проверьте TEST_MISSION_SHARD_VIDEOS_DIR');
       } else {
         addToDroneLog(droneId, `🎲 TEST шарды: загружено файлов ${shuffled.length}, ряды назначаются в случайном порядке`);
       }

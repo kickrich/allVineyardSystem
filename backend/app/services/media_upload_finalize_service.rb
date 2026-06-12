@@ -13,8 +13,8 @@ class MediaUploadFinalizeService
     raise ArgumentError, "Не задан ключ объекта в MinIO" if source_key.blank?
 
     content_type = meta["content_type"].to_s
-    unless allowed_video?(content_type, source_key)
-      raise ArgumentError, "Неподдерживаемый формат видео (допустимы mp4 и webm)"
+    unless VideoUploadFormats.allowed_video?(content_type: content_type, path: source_key)
+      raise ArgumentError, "Неподдерживаемый формат видео (допустимы mp4, webm, mov, avi, mkv)"
     end
 
     service = S3MultipartUploadService.new
@@ -35,11 +35,4 @@ class MediaUploadFinalizeService
     @media_upload
   end
 
-  private
-
-  def allowed_video?(content_type, source_key)
-    return true if MediaUpload::ALLOWED_VIDEO_CONTENT_TYPES.include?(content_type)
-
-    %w[.mp4 .webm].include?(File.extname(source_key).downcase)
-  end
 end

@@ -1,4 +1,6 @@
 class MediaUpload < ApplicationRecord
+  include VideoUploadFormats
+
   belongs_to :mission
   has_one_attached :media_file
 
@@ -14,7 +16,8 @@ class MediaUpload < ApplicationRecord
   MAX_URL_LENGTH = 500
   URL_FORMAT = %r{\Ahttps?://}.freeze
   MAX_VIDEO_SIZE_BYTES = 1.gigabyte
-  ALLOWED_VIDEO_CONTENT_TYPES = %w[video/mp4 video/webm].freeze
+  ALLOWED_VIDEO_CONTENT_TYPES = VideoUploadFormats::ALLOWED_VIDEO_CONTENT_TYPES
+  ALLOWED_VIDEO_EXTENSIONS = VideoUploadFormats::ALLOWED_VIDEO_EXTENSIONS
   ALLOWED_IMAGE_CONTENT_TYPES = %w[image/jpeg image/png image/webp].freeze
 
   before_validation :strip_url
@@ -89,7 +92,7 @@ class MediaUpload < ApplicationRecord
 
     if media_type == "video"
       unless ALLOWED_VIDEO_CONTENT_TYPES.include?(media_file.content_type)
-        errors.add(:media_file, "для video допустимы только mp4/webm")
+        errors.add(:media_file, "для video допустимы mp4, webm, mov, avi, mkv")
       end
 
       if media_file.blob.byte_size > MAX_VIDEO_SIZE_BYTES

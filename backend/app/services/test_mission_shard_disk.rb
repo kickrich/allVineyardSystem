@@ -2,7 +2,7 @@
 
 # Разрешение каталога TEST_MISSION_SHARD_VIDEOS_DIR и проверка имён файлов (как в TestMissionVideoShardsController).
 class TestMissionShardDisk
-  VIDEO_EXT = %w[.webm .mp4].freeze
+  VIDEO_EXT = VideoUploadFormats::ALLOWED_VIDEO_EXTENSIONS
 
   class << self
     def root_directory
@@ -31,11 +31,7 @@ class TestMissionShardDisk
     end
 
     def content_type_for_path(path)
-      case path.extname.downcase
-      when ".mp4" then "video/mp4"
-      when ".webm" then "video/webm"
-      else "application/octet-stream"
-      end
+      VideoUploadFormats.content_type_for_extension(path.extname) || "application/octet-stream"
     end
 
     private
