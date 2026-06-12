@@ -162,6 +162,7 @@ docker compose up -d          # только MinIO + CV
 | Симптом | Решение |
 |---------|---------|
 | CORS error | Проверьте `PUBLIC_URL` в `.env` (должен совпадать с URL в браузере) |
-| backend не стартует | `docker compose logs backend` — часто неверный `BACKEND_RAILS_MASTER_KEY` |
+| `InvalidMessage` / `key must be 16 bytes` | Удалите `RAILS_MASTER_KEY*` из `.env`. Задайте только `BACKEND_SECRET_KEY_BASE` и `VINEYARD_SECRET_KEY_BASE` через `openssl rand -hex 64`. Пересоберите: `build --no-cache backend vineyard-app` |
+| backend не стартует | `docker compose logs backend` — проверьте `SECRET_KEY_BASE` (128 hex-символов, не master.key) |
 | CV не отвечает | `docker compose logs cv` |
 | 502 от nginx | Дождитесь запуска backend/vineyard-app: `docker compose ps` |

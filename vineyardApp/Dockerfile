@@ -55,6 +55,9 @@ RUN bundle install && \
 # Copy application code
 COPY . .
 
+# Docker prod uses SECRET_KEY_BASE from env, not encrypted credentials.
+RUN rm -f config/credentials.yml.enc config/master.key
+
 # Precompile bootsnap code for faster boot times.
 # -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
 RUN bundle exec bootsnap precompile -j 1 app/ lib/
