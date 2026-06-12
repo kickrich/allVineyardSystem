@@ -182,8 +182,7 @@ async def process_video_shard_from_minio(payload: ProcessFromMinioRequest):
 
     try:
         temp_path = download_from_minio(payload.object_key, payload.bucket)
-        result = await run_video_task(
-            process_video_file,
+        result = process_video_file(
             temp_path,
             frame_interval=payload.frame_interval,
             shard_id=payload.shard_id,

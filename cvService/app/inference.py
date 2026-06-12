@@ -36,20 +36,15 @@ def _env_truthy(name: str) -> bool:
 
 
 def default_frame_interval() -> int:
-    v = _env_int("CV_FRAME_INTERVAL", 8)
+    v = _env_int("CV_FRAME_INTERVAL", 4)
     return max(1, min(v, 120))
 
 
 def _env_enhance_frames() -> bool:
-    return _env_truthy("CV_ENHANCE_FRAMES")
-
-
-def _onnx_session_options() -> ort.SessionOptions:
-    opts = ort.SessionOptions()
-    opts.intra_op_num_threads = max(1, _env_int("CV_ORT_INTRA_THREADS", 4))
-    opts.inter_op_num_threads = max(1, _env_int("CV_ORT_INTER_THREADS", 1))
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return opts
+    raw = os.getenv("CV_ENHANCE_FRAMES", "").strip().lower()
+    if not raw:
+        return True
+    return raw in ("1", "true", "yes", "on")
 
 
 class ONNXYOLODetector:
@@ -60,11 +55,7 @@ class ONNXYOLODetector:
         if enhance_frames is None:
             enhance_frames = _env_enhance_frames()
 
-        self.session = ort.InferenceSession(
-            model_path,
-            sess_options=_onnx_session_options(),
-            providers=["CPUExecutionProvider"],
-        )
+        self.session = ort.InferenceSession(model_path)
 
         in0 = self.session.get_inputs()[0]
         self.input_name = in0.name
@@ -295,6 +286,10 @@ class ONNXYOLODetector:
         detections = self.track_detections(detections)
         
         return detections
+
+    def reset_tracker(self) -> None:
+        self.track_history.clear()
+        self.next_track_id = 0
     
     def process_video(
         self,
@@ -302,6 +297,8 @@ class ONNXYOLODetector:
         frame_interval: int = 4,
         on_progress: Optional[Callable[[Dict], None]] = None,
     ) -> Dict:
+        self.reset_tracker()
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"Не удалось открыть видео: {video_path}")
@@ -347,11 +344,11 @@ class ONNXYOLODetector:
         report_progress(force=True)
 
         while True:
-            if frame_count % interval == 0:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            ret, frame = cap.read()
+            if not ret:
+                break
 
+            if frame_count % interval == 0:
                 detections = self.detect_frame(frame, frame_count)
                 
                 detections.sort(key=lambda d: (d['bbox'][0] + d['bbox'][2]) / 2)
@@ -406,13 +403,8 @@ class ONNXYOLODetector:
                 
                 processed_frames += 1
                 report_progress()
-            else:
-                if not cap.grab():
-                    break
 
             frame_count += 1
-            if total_frames <= 0 and frame_count % 120 == 0:
-                total_frames = frame_count
 
         cap.release()
         processing_time = time.time() - start_time
@@ -617,7 +609,7 @@ class DummyVideoDetector:
 _detector = None
 
 
-def get_detector(model_path: Optional[str] = None, enhance_frames: Optional[bool] = None):
+def get_detector(model_path: Optional[str] = None, enhance_frames: bool = True):
     global _detector
     if _detector is not None:
         return _detector
