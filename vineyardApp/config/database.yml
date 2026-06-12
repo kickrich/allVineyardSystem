@@ -22,7 +22,7 @@ production:
     <<: *default
     database: <%= ENV.fetch("DB_NAME", "vineyard_app_production") %>
     username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
-    password: <%= ENV.fetch("DB_PASSWORD") %>
+    password: <%= ENV.fetch("DB_PASSWORD", "build_dummy") %>
     host: <%= ENV.fetch("DB_HOST", "postgres") %>
   cache:
     <<: *primary_production
