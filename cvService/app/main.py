@@ -21,10 +21,11 @@ import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
-from inference import get_detector, ONNXYOLODetector
+from inference import get_detector, ONNXYOLODetector, default_frame_interval
 
 app = FastAPI(title="Vineyard CV Service")
 logger = logging.getLogger("cvservice")
+_DEFAULT_FRAME_INTERVAL = default_frame_interval()
 
 @app.on_event("startup")
 async def startup_event():
@@ -60,7 +61,7 @@ async def process_video_shard(
     shard_id: int = Form(...),
     video_file: UploadFile = File(...),
     callback_url: Optional[str] = Form(None),
-    frame_interval: int = Form(4)
+    frame_interval: int = Form(_DEFAULT_FRAME_INTERVAL)
 ):
     temp_path = None
     
@@ -108,7 +109,7 @@ class ProcessFromMinioRequest(BaseModel):
     shard_id: int
     object_key: str
     callback_url: Optional[str] = None
-    frame_interval: int = 4
+    frame_interval: int = _DEFAULT_FRAME_INTERVAL
     bucket: Optional[str] = None
 
 @app.post("/process_video_shard_from_minio")
@@ -168,7 +169,7 @@ async def model_info():
 @app.post("/process_video_sync")
 async def process_video_sync(
     video_file: UploadFile = File(...),
-    frame_interval: int = Form(5)
+    frame_interval: int = Form(_DEFAULT_FRAME_INTERVAL)
 ):
     temp_path = None
     
@@ -190,7 +191,9 @@ async def process_video_sync(
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
-def process_video_file(video_path: str, frame_interval: int = 4) -> dict:
+def process_video_file(video_path: str, frame_interval: Optional[int] = None) -> dict:
+    if frame_interval is None:
+        frame_interval = default_frame_interval()
     try:
         detector = get_detector()
     except FileNotFoundError as e:

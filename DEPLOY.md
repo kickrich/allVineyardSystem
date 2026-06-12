@@ -158,10 +158,18 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d minio
 CV_DUMMY_INFERENCE=false
 ```
 
+**Ускорение CV на VPS 4 CPU / 6 GB** (уже в `.env.production.example`):
+
+```env
+CV_FRAME_INTERVAL=8          # 4=точнее, 12–16=быстрее
+CV_ENHANCE_FRAMES=false      # без тяжёлого улучшения кадров
+CV_ORT_INTRA_THREADS=4
+```
+
 Перезапуск:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build cv
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build cv vineyard-app
 ```
 
 ## HTTPS (Let's Encrypt)

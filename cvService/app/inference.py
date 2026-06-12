@@ -19,12 +19,51 @@ _CV_ROOT = Path(__file__).resolve().parent.parent
 def default_onnx_path() -> str:
     return str(_CV_ROOT / "models" / "best.onnx")
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def default_frame_interval() -> int:
+    v = _env_int("CV_FRAME_INTERVAL", 8)
+    return max(1, min(v, 120))
+
+
+def _env_enhance_frames() -> bool:
+    return _env_truthy("CV_ENHANCE_FRAMES")
+
+
+def _onnx_session_options() -> ort.SessionOptions:
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = max(1, _env_int("CV_ORT_INTRA_THREADS", 4))
+    opts.inter_op_num_threads = max(1, _env_int("CV_ORT_INTER_THREADS", 1))
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return opts
+
+
 class ONNXYOLODetector:
-    def __init__(self, model_path: str = 'models/best.onnx', enhance_frames: bool = True):
+    def __init__(self, model_path: str = 'models/best.onnx', enhance_frames: Optional[bool] = None):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Модель не найдена: {model_path}")
-        
-        self.session = ort.InferenceSession(model_path)
+
+        if enhance_frames is None:
+            enhance_frames = _env_enhance_frames()
+
+        self.session = ort.InferenceSession(
+            model_path,
+            sess_options=_onnx_session_options(),
+            providers=["CPUExecutionProvider"],
+        )
 
         in0 = self.session.get_inputs()[0]
         self.input_name = in0.name
@@ -282,11 +321,11 @@ class ONNXYOLODetector:
         start_time = time.time()
         
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
             if frame_count % frame_interval == 0:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
                 detections = self.detect_frame(frame, frame_count)
                 
                 detections.sort(key=lambda d: (d['bbox'][0] + d['bbox'][2]) / 2)
@@ -340,7 +379,10 @@ class ONNXYOLODetector:
                             })
                 
                 processed_frames += 1
-            
+            else:
+                if not cap.grab():
+                    break
+
             frame_count += 1
         
         cap.release()
@@ -422,10 +464,6 @@ class ONNXYOLODetector:
         return 0.0
 
 
-def _env_truthy(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
-
-
 class DummyVideoDetector:
     """Без ONNX: проверяет чтение видео, возвращает нулевые метрики (dev / CI)."""
 
@@ -501,7 +539,7 @@ class DummyVideoDetector:
 _detector = None
 
 
-def get_detector(model_path: Optional[str] = None, enhance_frames: bool = True):
+def get_detector(model_path: Optional[str] = None, enhance_frames: Optional[bool] = None):
     global _detector
     if _detector is not None:
         return _detector
