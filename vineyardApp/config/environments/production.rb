@@ -24,8 +24,8 @@ Rails.application.configure do
   # Cache assets for far-future expiry since they are all digest stamped.
   config.public_file_server.headers = { "cache-control" => "public, max-age=#{1.year.to_i}" }
 
-  # nginx проксирует приложение на /vineyard/ — иначе CSS/JS запрашиваются с /assets/ у frontend.
-  config.relative_url_root = ENV.fetch("RAILS_RELATIVE_URL_ROOT", "/")
+  # nginx: /vineyard/... → vineyard-app; без префикса ссылки ведут на frontend (/video/1).
+  config.relative_url_root = ENV["RAILS_RELATIVE_URL_ROOT"].presence
 
   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
   # config.asset_host = "http://assets.example.com"

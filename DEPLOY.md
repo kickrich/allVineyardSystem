@@ -229,7 +229,7 @@ docker compose -f docker-compose.prod.yml logs -f backend vineyard-app cv | grep
 | `sent_to_vineyard` | Шард передан, CV обрабатывает |
 | `failed` | Смотрите `error_message` |
 
-**Стили vineyardApp:** после обновления пересоберите `vineyard-app` (`RAILS_RELATIVE_URL_ROOT=/vineyard`). Откройте `http://ВАШ_IP/vineyard/`.
+**vineyardApp UI:** URL всегда с префиксом `/vineyard/` (например `/vineyard/video/1`). После обновления: `build vineyard-app` и `up -d --force-recreate nginx vineyard-app`.
 
 ## Полезные команды
 

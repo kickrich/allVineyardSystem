@@ -431,6 +431,7 @@
   </div>
 
   <script>
+    const APP_BASE = '<%= j app_base_path %>';
     let startTime = Date.now();
     let updateInterval;
     
@@ -534,7 +535,7 @@
       formData.append('video', file);
       formData.append('shard_index', shardIndex);
       
-      fetch(`/api/videos/<%= @video.id %>/upload_shard`, {
+      fetch(`${APP_BASE}/api/videos/<%= @video.id %>/upload_shard`, {
         method: 'POST',
         body: formData,
         headers: {
@@ -598,7 +599,7 @@
         const row = btn.closest('tr');
         
         try {
-          const response = await fetch(`/video/<%= @video.id %>/shards/${shardId}`, {
+          const response = await fetch(`${APP_BASE}/video/<%= @video.id %>/shards/${shardId}`, {
             method: 'DELETE',
             headers: {
               'X-CSRF-Token': document.querySelector('[name="csrf-token"]').content,
@@ -640,7 +641,7 @@
       const shardIndex = el.dataset.shardIndex;
       
       const updateProgress = () => {
-        fetch(`/api/videos/<%= @video.id %>/shards/${shardIndex}/status`)
+        fetch(`${APP_BASE}/api/videos/<%= @video.id %>/shards/${shardIndex}/status`)
           .then(res => res.json())
           .then(data => {
             if (!document.body.contains(el)) return;

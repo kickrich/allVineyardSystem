@@ -26,6 +26,8 @@ module VineyardApp
         ENV.delete("RAILS_MASTER_KEY")
         config.require_master_key = false
       end
+
+      config.relative_url_root = ENV["RAILS_RELATIVE_URL_ROOT"].presence
     end
 
     # Initialize configuration defaults for originally generated Rails version.
