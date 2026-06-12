@@ -405,6 +405,8 @@ class ONNXYOLODetector:
                 report_progress()
 
             frame_count += 1
+            if total_frames <= 0 and frame_count % 120 == 0:
+                total_frames = frame_count
 
         cap.release()
         processing_time = time.time() - start_time
