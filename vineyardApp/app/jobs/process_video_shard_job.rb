@@ -1,7 +1,7 @@
 class ProcessVideoShardJob < ApplicationJob
   include ActiveJob::Status
   
-  queue_as :default
+  queue_as :cv
 
   def perform(shard_id)
     shard = VideoShard.find(shard_id)

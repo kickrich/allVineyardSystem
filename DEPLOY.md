@@ -166,6 +166,19 @@ CV_ENHANCE_FRAMES=false      # без тяжёлого улучшения кад
 CV_ORT_INTRA_THREADS=4
 ```
 
+**Параллелизм** (в `.env`, пересборка `cv` + `vineyard-app`):
+
+```env
+CV_UVICORN_WORKERS=1           # процессы uvicorn (каждый держит копию ONNX в RAM)
+CV_MAX_CONCURRENT_VIDEOS=1     # видео одновременно в одном worker
+CV_JOB_CONCURRENCY=1           # сколько shard-джобов vineyardApp шлёт в CV параллельно
+```
+
+Максимум одновременных видео в CV ≈ `CV_UVICORN_WORKERS × CV_MAX_CONCURRENT_VIDEOS`.  
+Проверка: `curl -s http://127.0.0.1:8000/` (из контейнера cv) — поле `concurrency`.
+
+На VPS **4 CPU / 6 GB** безопасно `1/1/1`. Для 2 параллельных видео попробуйте `CV_UVICORN_WORKERS=2`, `CV_MAX_CONCURRENT_VIDEOS=1`, `CV_JOB_CONCURRENCY=2` и следите за RAM.
+
 Перезапуск:
 
 ```bash

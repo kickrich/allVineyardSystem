@@ -2,7 +2,10 @@ import sys
 import os
 import logging
 import traceback
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from dotenv import load_dotenv
 
@@ -27,14 +30,72 @@ app = FastAPI(title="Vineyard CV Service")
 logger = logging.getLogger("cvservice")
 _DEFAULT_FRAME_INTERVAL = default_frame_interval()
 
+T = TypeVar("T")
+
+_video_semaphore: asyncio.Semaphore | None = None
+_video_executor: ThreadPoolExecutor | None = None
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def max_concurrent_videos() -> int:
+    return max(1, _env_int("CV_MAX_CONCURRENT_VIDEOS", 1))
+
+
+def uvicorn_workers() -> int:
+    return max(1, _env_int("CV_UVICORN_WORKERS", 1))
+
+
+async def run_video_task(fn: Callable[..., T], *args, **kwargs) -> T:
+    """CPU-bound обработка видео: лимит параллелизма + отдельный поток."""
+    if _video_semaphore is None or _video_executor is None:
+        return fn(*args, **kwargs)
+
+    async with _video_semaphore:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            _video_executor,
+            lambda: fn(*args, **kwargs),
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
+    global _video_semaphore, _video_executor
+
+    concurrent = max_concurrent_videos()
+    _video_semaphore = asyncio.Semaphore(concurrent)
+    _video_executor = ThreadPoolExecutor(max_workers=concurrent)
+
+    logger.info(
+        "CV concurrency: uvicorn_workers=%s max_concurrent_videos=%s (max ~%s videos in parallel)",
+        uvicorn_workers(),
+        concurrent,
+        uvicorn_workers() * concurrent,
+    )
+
     try:
         get_detector()
     except FileNotFoundError as e:
         logger.warning("Модель не загружена при старте: %s", e)
     except Exception as e:
         logger.warning("Инициализация детектора при старте: %s", e)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _video_executor
+    if _video_executor is not None:
+        _video_executor.shutdown(wait=True, cancel_futures=False)
+        _video_executor = None
 
 @app.get("/")
 async def root():
@@ -50,6 +111,11 @@ async def root():
         "status": "running",
         "model_loaded": model_loaded,
         "classes": classes,
+        "concurrency": {
+            "uvicorn_workers": uvicorn_workers(),
+            "max_concurrent_videos": max_concurrent_videos(),
+            "max_parallel_videos": uvicorn_workers() * max_concurrent_videos(),
+        },
     }
 
 @app.get("/health")
@@ -70,26 +136,14 @@ async def process_video_shard(
             shutil.copyfileobj(video_file.file, tmp)
             temp_path = tmp.name
         
-        detector = get_detector()
-        results = detector.process_video(temp_path, frame_interval)
-        
-        result = {
-            "bushes_count": results["statistics"]["bushes_count"],
-            "gaps_count": results["statistics"]["gaps_count"],
-            "result_json": {
-                "bushes_positions": results["statistics"].get("bushes_positions", []),
-                "gaps_positions": results["statistics"].get("gaps_positions", []),
-                "video_info": results["video_info"],
-                "tracking_stats": results["tracking_stats"],
-                "details": results["statistics"]["details"],
-                "row_sequence": results.get("row_sequence", []),
-                "sequence_details": results.get("sequence_details", []),
-                "row_length": results.get("row_length", 0)
-            }
-        }
-        
+        results = await run_video_task(
+            process_video_file,
+            temp_path,
+            frame_interval=frame_interval,
+        )
+
         if callback_url:
-            response = requests.post(callback_url, json=result)
+            response = requests.post(callback_url, json=results)
             response.raise_for_status()
         
         return {"status": "success", "shard_id": shard_id}
@@ -118,7 +172,11 @@ async def process_video_shard_from_minio(payload: ProcessFromMinioRequest):
 
     try:
         temp_path = download_from_minio(payload.object_key, payload.bucket)
-        result = process_video_file(temp_path, frame_interval=payload.frame_interval)
+        result = await run_video_task(
+            process_video_file,
+            temp_path,
+            frame_interval=payload.frame_interval,
+        )
 
         callback_delivered = False
         if payload.callback_url:
@@ -178,13 +236,16 @@ async def process_video_sync(
             shutil.copyfileobj(video_file.file, tmp)
             temp_path = tmp.name
         
-        detector = get_detector()
-        results = detector.process_video(temp_path, frame_interval)
-        
+        results = await run_video_task(
+            process_video_file,
+            temp_path,
+            frame_interval=frame_interval,
+        )
+
         return {
-            "bushes_count": results["statistics"]["bushes_count"],
-            "gaps_count": results["statistics"]["gaps_count"],
-            "video_info": results["video_info"]
+            "bushes_count": results["bushes_count"],
+            "gaps_count": results["gaps_count"],
+            "video_info": results["result_json"]["video_info"],
         }
         
     finally:

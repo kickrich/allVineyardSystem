@@ -67,9 +67,11 @@ services:
       CV_ENHANCE_FRAMES: ${CV_ENHANCE_FRAMES:-false}
       CV_ORT_INTRA_THREADS: ${CV_ORT_INTRA_THREADS:-4}
       CV_ORT_INTER_THREADS: ${CV_ORT_INTER_THREADS:-1}
-      OMP_NUM_THREADS: "4"
-      MKL_NUM_THREADS: "4"
-      OPENBLAS_NUM_THREADS: "4"
+      CV_UVICORN_WORKERS: ${CV_UVICORN_WORKERS:-1}
+      CV_MAX_CONCURRENT_VIDEOS: ${CV_MAX_CONCURRENT_VIDEOS:-1}
+      OMP_NUM_THREADS: ${CV_ORT_INTRA_THREADS:-4}
+      MKL_NUM_THREADS: ${CV_ORT_INTRA_THREADS:-4}
+      OPENBLAS_NUM_THREADS: ${CV_ORT_INTRA_THREADS:-4}
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -145,6 +147,8 @@ services:
       BEHIND_SSL_PROXY: ${BEHIND_SSL_PROXY:-false}
       RAILS_RELATIVE_URL_ROOT: /vineyard
       CV_FRAME_INTERVAL: ${CV_FRAME_INTERVAL:-8}
+      CV_JOB_CONCURRENCY: ${CV_JOB_CONCURRENCY:-1}
+      JOB_CONCURRENCY: ${JOB_CONCURRENCY:-1}
     volumes:
       - vineyard-app-storage:/rails/storage
 
