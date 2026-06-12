@@ -12,8 +12,10 @@ Rails.application.configure do
   # Full error reports are disabled.
   config.consider_all_requests_local = false
 
-  # Docker/production: секрет через ENV, без credentials.yml.enc в образе.
-  config.secret_key_base = ENV.fetch("SECRET_KEY_BASE")
+  # Docker/production: SECRET_KEY_BASE из compose; при сборке образа — SECRET_KEY_BASE_DUMMY.
+  config.secret_key_base = ENV["SECRET_KEY_BASE"].presence || (
+    ENV["SECRET_KEY_BASE_DUMMY"].present? ? ("0" * 128) : ENV.fetch("SECRET_KEY_BASE")
+  )
   config.require_master_key = false
 
   # Turn on fragment caching in view templates.

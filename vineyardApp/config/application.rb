@@ -21,6 +21,13 @@ Bundler.require(*Rails.groups)
 
 module VineyardApp
   class Application < Rails::Application
+    config.before_configuration do
+      if ENV["SECRET_KEY_BASE"].to_s.strip != ""
+        ENV.delete("RAILS_MASTER_KEY")
+        config.require_master_key = false
+      end
+    end
+
     # Initialize configuration defaults for originally generated Rails version.
     config.load_defaults 8.1
 

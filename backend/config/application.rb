@@ -9,6 +9,13 @@ Bundler.require(*Rails.groups)
 
 module Drones
   class Application < Rails::Application
+    config.before_configuration do
+      if ENV["SECRET_KEY_BASE"].to_s.strip != ""
+        ENV.delete("RAILS_MASTER_KEY")
+        config.require_master_key = false
+      end
+    end
+
     # Puma logs harmless "SIG* not implemented" lines on Windows; hide them only there.
     if Gem.win_platform?
       config.before_configuration do
