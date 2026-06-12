@@ -38,6 +38,8 @@ RUN apt-get update -qq && \
         libpq-dev \
         libyaml-dev \
         libffi-dev \
+        nodejs \
+        npm \
         pkg-config \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -62,8 +64,13 @@ RUN chmod +x bin/* && \
     sed -i "s/\r$//g" bin/* && \
     sed -i 's/ruby\.exe$/ruby/' bin/*
 
+# cssbundling-rails needs npm; Tailwind CSS is built via tailwindcss-rails.
+RUN npm install --omit=dev
+
 # Precompiling assets for production without requiring secret RAILS_MASTER_KEY or real DB.
-RUN SECRET_KEY_BASE_DUMMY=1 RAILS_ENV=production DB_PASSWORD=build_dummy ./bin/rails assets:precompile
+RUN SECRET_KEY_BASE_DUMMY=1 RAILS_ENV=production DB_PASSWORD=build_dummy ./bin/rails tailwindcss:build && \
+    SECRET_KEY_BASE_DUMMY=1 RAILS_ENV=production DB_PASSWORD=build_dummy ./bin/rails assets:precompile && \
+    rm -rf node_modules
 
 
 
