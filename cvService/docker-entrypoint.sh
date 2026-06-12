@@ -1,15 +1,6 @@
 #!/bin/sh
 set -e
 
-WORKERS="${CV_UVICORN_WORKERS:-1}"
-# uvicorn требует целое >= 1
-case "$WORKERS" in
-  ''|*[!0-9]*)
-    WORKERS=1
-    ;;
-  0)
-    WORKERS=1
-    ;;
-esac
-
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers "$WORKERS"
+# Несколько uvicorn workers = несколько копий ONNX + риск гонок трекера.
+# Для корректного подсчёта кустов держим 1 worker (как preddeploy).
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1

@@ -15,7 +15,39 @@ from progress import build_progress_payload
 _logger = logging.getLogger("cvservice")
 # Глобальный детектор + трекер не thread-safe: один process_video за раз (как preddeploy).
 _PROCESS_LOCK = threading.Lock()
-_STALE_TRACK_AGE_FRAMES = 120
+
+
+def estimate_row_object_count(positions: List[Dict]) -> int:
+    """
+    Число объектов в ряду по кластерам median-x на track_id.
+    Устойчиво к «взрыву» track_id при сбое IoU-матчинга (тысячи ID → ~40–80 кустов).
+    """
+    if not positions:
+        return 0
+
+    by_track: Dict[int, List[float]] = defaultdict(list)
+    for p in positions:
+        by_track[int(p["track_id"])].append(float(p["x"]))
+
+    medians = sorted(float(np.median(xs)) for xs in by_track.values())
+    if len(medians) <= 1:
+        return len(medians)
+
+    gaps = [medians[i + 1] - medians[i] for i in range(len(medians) - 1)]
+    positive_gaps = [g for g in gaps if g > 1.0]
+    if positive_gaps:
+        typical_gap = float(np.median(positive_gaps))
+        merge_threshold = max(20.0, min(100.0, typical_gap * 0.45))
+    else:
+        merge_threshold = 40.0
+
+    count = 1
+    cluster_anchor = medians[0]
+    for x in medians[1:]:
+        if x - cluster_anchor > merge_threshold:
+            count += 1
+            cluster_anchor = x
+    return count
 
 # Корень cvService/ — путь к ONNX не зависит от cwd при запуске uvicorn.
 _CV_ROOT = Path(__file__).resolve().parent.parent
@@ -206,22 +238,11 @@ class ONNXYOLODetector:
         union = area1 + area2 - intersection
         
         return intersection / union if union > 0 else 0
-
-    def _prune_stale_tracks(self) -> None:
-        stale = [
-            track_id
-            for track_id, history in self.track_history.items()
-            if history and (self.current_frame - history[-1]["frame"]) > _STALE_TRACK_AGE_FRAMES
-        ]
-        for track_id in stale:
-            del self.track_history[track_id]
     
     def track_detections(self, detections: List[Dict]) -> List[Dict]:
         if not detections:
-            self.track_history.clear()
+            # Не сбрасываем track_history: иначе next_track_id растёт и unique_bushes → тысячи.
             return []
-
-        self._prune_stale_tracks()
         
         if not self.track_history:
             for det in detections:
@@ -462,6 +483,16 @@ class ONNXYOLODetector:
             frame_count,
             fps
         )
+
+        raw_bushes = len(unique_bushes)
+        raw_gaps = len(unique_gaps)
+        if raw_bushes > statistics["bushes_count"] * 2 and raw_bushes > 150:
+            _logger.info(
+                "Bush count: spatial=%s raw_track_ids=%s positions=%s",
+                statistics["bushes_count"],
+                raw_bushes,
+                len(bushes_positions),
+            )
         
         duration = (total_frames / fps) if fps > 0 else 0.0
         return {
@@ -474,9 +505,11 @@ class ONNXYOLODetector:
             },
             "statistics": statistics,
             "tracking_stats": {
-                "unique_bushes": len(unique_bushes),
-                "unique_gaps": len(unique_gaps),
-                "total_tracks": len(unique_bushes) + len(unique_gaps)
+                "unique_bushes": raw_bushes,
+                "unique_gaps": raw_gaps,
+                "spatial_bushes": statistics["bushes_count"],
+                "spatial_gaps": statistics["gaps_count"],
+                "total_tracks": raw_bushes + raw_gaps
             },
             "row_sequence": display_sequence,
             "sequence_details": sequence_details,
@@ -485,16 +518,20 @@ class ONNXYOLODetector:
     
     def calculate_statistics(self, unique_bushes, unique_gaps, bushes_positions, gaps_positions, total_frames, fps):
         row_spacing = self._calculate_row_spacing(bushes_positions)
+        spatial_bushes = estimate_row_object_count(bushes_positions)
+        spatial_gaps = estimate_row_object_count(gaps_positions)
         
         return {
-            "bushes_count": len(unique_bushes),
-            "gaps_count": len(unique_gaps),
+            "bushes_count": spatial_bushes,
+            "gaps_count": spatial_gaps,
             "row_spacing": row_spacing,
             "bushes_positions": bushes_positions,
             "gaps_positions": gaps_positions,
             "details": {
                 "processed_frames": len(set(p['frame'] for p in bushes_positions)),
                 "total_positions": len(bushes_positions),
+                "raw_track_bushes": len(unique_bushes),
+                "raw_track_gaps": len(unique_gaps),
                 "enhancement_enabled": self.enhance_frames
             }
         }
