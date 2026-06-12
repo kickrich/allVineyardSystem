@@ -130,6 +130,26 @@ curl -s http://127.0.0.1/api/v1/test_mission_video_shards
 
 Чтобы отключить: в `.env` задайте `ENABLE_TEST_MISSION_VIDEO_SHARDS=false` и `VITE_USE_TEST_MISSION_SHARD_VIDEOS=false`, затем пересоберите frontend и backend.
 
+## MinIO (веб-консоль)
+
+Порты проброшены **только на localhost VPS** (`127.0.0.1`), не в интернет.
+
+1. На Windows откройте SSH-туннель (окно держите открытым):
+
+```powershell
+ssh -L 9001:127.0.0.1:9001 -L 9000:127.0.0.1:9000 root@ВАШ_IP
+```
+
+2. В браузере: **http://localhost:9001**
+
+3. Логин и пароль — из `.env` на сервере: `MINIO_ROOT_USER` и `MINIO_ROOT_PASSWORD`.
+
+После `git pull` перезапустите MinIO:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env up -d minio
+```
+
 ## CV-модель (опционально)
 
 Положите веса в `cvService/models/best.onnx`, затем в `.env`:

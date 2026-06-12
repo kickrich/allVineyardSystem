@@ -25,6 +25,10 @@ services:
     image: minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
+    # localhost на VPS only — доступ с ПК через SSH-туннель (см. DEPLOY.md)
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
