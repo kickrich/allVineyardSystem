@@ -97,6 +97,39 @@ vineyard-app → CV, MinIO, PostgreSQL
 cv       → MinIO
 ```
 
+## Тестовые видео миссии (шарды)
+
+После завершения миссии фронт может показывать реальные ролики с диска вместо фейковых. В `docker-compose.prod.yml` это уже включено по умолчанию.
+
+1. На VPS создайте папку (если её нет после `git pull`):
+
+```bash
+mkdir -p /opt/allVineyardSystem/test_mission_shard_videos
+```
+
+2. Загрузите `.webm` или `.mp4` **с Windows** (не с VPS):
+
+```powershell
+scp "D:\путь\к\видео\*.webm" root@ВАШ_IP:/opt/allVineyardSystem/test_mission_shard_videos/
+```
+
+Файлы сортируются по имени — это порядок «рядов» на карте.
+
+3. Пересоберите backend и frontend (флаг VITE зашивается при сборке):
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env build frontend backend
+docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate frontend backend
+```
+
+4. Проверка API:
+
+```bash
+curl -s http://127.0.0.1/api/v1/test_mission_video_shards
+```
+
+Чтобы отключить: в `.env` задайте `ENABLE_TEST_MISSION_VIDEO_SHARDS=false` и `VITE_USE_TEST_MISSION_SHARD_VIDEOS=false`, затем пересоберите frontend и backend.
+
 ## CV-модель (опционально)
 
 Положите веса в `cvService/models/best.onnx`, затем в `.env`:
