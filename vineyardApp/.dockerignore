@@ -8,3 +8,5 @@ node_modules
 storage/*
 !storage/.keep
 .DS_Store
+config/credentials.yml.enc
+config/master.key

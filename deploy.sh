@@ -23,8 +23,8 @@ require_var() {
 
 require_var POSTGRES_PASSWORD
 require_var MINIO_ROOT_PASSWORD
-require_var BACKEND_RAILS_MASTER_KEY
-require_var VINEYARD_RAILS_MASTER_KEY
+require_var BACKEND_SECRET_KEY_BASE
+require_var VINEYARD_SECRET_KEY_BASE
 require_var PUBLIC_URL
 
 echo "==> Сборка и запуск production-стека..."

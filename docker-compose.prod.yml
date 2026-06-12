@@ -75,7 +75,7 @@ services:
         condition: service_completed_successfully
     environment:
       RAILS_ENV: production
-      RAILS_MASTER_KEY: ${BACKEND_RAILS_MASTER_KEY:?set BACKEND_RAILS_MASTER_KEY in .env}
+      SECRET_KEY_BASE: ${BACKEND_SECRET_KEY_BASE:?set BACKEND_SECRET_KEY_BASE in .env}
       RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
       SOLID_QUEUE_IN_PUMA: "true"
       DB_HOST: postgres
@@ -114,7 +114,7 @@ services:
         condition: service_started
     environment:
       RAILS_ENV: production
-      RAILS_MASTER_KEY: ${VINEYARD_RAILS_MASTER_KEY:?set VINEYARD_RAILS_MASTER_KEY in .env}
+      SECRET_KEY_BASE: ${VINEYARD_SECRET_KEY_BASE:?set VINEYARD_SECRET_KEY_BASE in .env}
       RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
       SOLID_QUEUE_IN_PUMA: "true"
       DB_HOST: postgres

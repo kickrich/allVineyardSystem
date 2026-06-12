@@ -7,3 +7,5 @@ tmp
 node_modules
 coverage
 .DS_Store
+config/credentials.yml.enc
+config/master.key

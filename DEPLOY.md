@@ -35,23 +35,16 @@ cd allVineyardSystem
 rsync -avz --exclude node_modules --exclude .git ./allVineyardSystem/ root@ВАШ_IP:/opt/allVineyardSystem/
 ```
 
-## 3. Rails master keys
+## 3. Rails secret keys (SECRET_KEY_BASE)
 
-На **локальной машине** (где вы разрабатываете) найдите ключи:
+В Docker-деплое **не нужны** `master.key` — используйте `SECRET_KEY_BASE`.
 
-```bash
-cat backend/config/master.key
-cat vineyardApp/config/master.key
-```
-
-Если файлов нет — создайте:
+На VPS сгенерируйте два разных секрета:
 
 ```bash
-cd backend && bin/rails credentials:edit
-cd ../vineyardApp && bin/rails credentials:edit
+openssl rand -hex 64   # → BACKEND_SECRET_KEY_BASE
+openssl rand -hex 64   # → VINEYARD_SECRET_KEY_BASE
 ```
-
-Скопируйте значения `master.key` — они понадобятся в `.env`.
 
 ## 4. Настройка `.env`
 
@@ -67,8 +60,8 @@ nano .env
 | `PUBLIC_URL` | `http://ВАШ_IP` или `https://ваш-домен.ru` |
 | `POSTGRES_PASSWORD` | Надёжный пароль БД |
 | `MINIO_ROOT_PASSWORD` | Пароль MinIO |
-| `BACKEND_RAILS_MASTER_KEY` | из `backend/config/master.key` |
-| `VINEYARD_RAILS_MASTER_KEY` | из `vineyardApp/config/master.key` |
+| `BACKEND_SECRET_KEY_BASE` | `openssl rand -hex 64` |
+| `VINEYARD_SECRET_KEY_BASE` | `openssl rand -hex 64` (другой!) |
 
 ## 5. Запуск
 
