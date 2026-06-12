@@ -100,7 +100,7 @@ services:
       CORS_ORIGINS: ${PUBLIC_URL}
       BEHIND_SSL_PROXY: ${BEHIND_SSL_PROXY:-false}
       TEST_MISSION_SHARD_VIDEOS_DIR: /rails/test_mission_shard_videos
-      ENABLE_TEST_MISSION_VIDEO_SHARDS: ${ENABLE_TEST_MISSION_VIDEO_SHARDS:-true}
+      ENABLE_TEST_MISSION_VIDEO_SHARDS: "true"
     volumes:
       - backend-storage:/rails/storage
       - ./test_mission_shard_videos:/rails/test_mission_shard_videos:ro
@@ -136,6 +136,7 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-vineyard-videos}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       BEHIND_SSL_PROXY: ${BEHIND_SSL_PROXY:-false}
+      RAILS_RELATIVE_URL_ROOT: /vineyard
     volumes:
       - vineyard-app-storage:/rails/storage
 

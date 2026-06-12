@@ -184,6 +184,53 @@ BEHIND_SSL_PROXY=true
 
 5. Перезапустите: `./deploy.sh`
 
+## Видео в MinIO, но не в vineyardApp / CV
+
+Цепочка: **MinIO** → transcode (`MediaUploadTranscodeJob`) → **vineyard-app** → **cv**.
+
+1. Проверьте, что все сервисы запущены (не только frontend/backend):
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+```
+
+2. Статус последних загрузок:
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend bin/rails runner \
+  'MediaUpload.order(:id).last(5).each { |m| p m.slice(:id,:mission_id,:status,:error_message) }'
+```
+
+3. Видео в vineyard-app:
+
+```bash
+docker compose -f docker-compose.prod.yml exec vineyard-app bin/rails runner \
+  'Video.order(:id).last(3).each { |v| p v.slice(:id,:mission_id,:status); p v.video_shards.pluck(:id,:status,:shard_index) }'
+```
+
+4. Повторить обработку застрявших файлов:
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend bin/rails media_uploads:retry_pipeline
+# или для одной миссии:
+docker compose -f docker-compose.prod.yml exec backend bin/rails media_uploads:retry_pipeline MISSION_ID=12
+```
+
+5. Логи:
+
+```bash
+docker compose -f docker-compose.prod.yml logs -f backend vineyard-app cv | grep -E 'Transcode|SendVideo|ProcessVideo|CV'
+```
+
+| `media_uploads.status` | Значение |
+|------------------------|----------|
+| `processing` | Ждёт transcode webm→mp4 |
+| `ready` | В MinIO готово, ждёт отправки в vineyard-app |
+| `sent_to_vineyard` | Шард передан, CV обрабатывает |
+| `failed` | Смотрите `error_message` |
+
+**Стили vineyardApp:** после обновления пересоберите `vineyard-app` (`RAILS_RELATIVE_URL_ROOT=/vineyard`). Откройте `http://ВАШ_IP/vineyard/`.
+
 ## Полезные команды
 
 ```bash
@@ -219,3 +266,5 @@ docker compose up -d          # только MinIO + CV
 | backend не стартует | `docker compose logs backend` — проверьте `SECRET_KEY_BASE` (128 hex-символов, не master.key) |
 | CV не отвечает | `docker compose logs cv` |
 | 502 от nginx | Дождитесь запуска backend/vineyard-app: `docker compose ps` |
+| Видео в MinIO, нет в vineyardApp | `media_uploads:retry_pipeline`, проверьте `vineyard-app` и `cv` в `docker compose ps` |
+| vineyardApp без стилей | Пересоберите vineyard-app (`RAILS_RELATIVE_URL_ROOT=/vineyard`), URL: `/vineyard/` |

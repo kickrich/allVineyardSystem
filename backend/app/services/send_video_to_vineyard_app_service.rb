@@ -183,6 +183,11 @@ class SendVideoToVineyardAppService
     begin
       n += 1
       response = yield
+      if response.status == 409
+        Rails.logger.warn("[SendVideoToVineyardAppService] Shard already exists (409), treating as success")
+        return response
+      end
+
       if !response.status.in?(200..299)
         body = response.body.to_s.truncate(400)
         message = "VineyardApp upload_shard failed (#{mode}): #{response.status} - #{body}"
