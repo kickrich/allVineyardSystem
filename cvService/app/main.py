@@ -25,6 +25,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 from inference import get_detector, ONNXYOLODetector, default_frame_interval
+from progress import clear_shard_progress, get_shard_progress, set_shard_progress
 
 app = FastAPI(title="Vineyard CV Service")
 logger = logging.getLogger("cvservice")
@@ -122,6 +123,14 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+
+@app.get("/shards/{shard_id}/processing_progress")
+async def shard_processing_progress(shard_id: int):
+    payload = get_shard_progress(shard_id)
+    if payload is None:
+        return {"shard_id": shard_id, "status": "idle"}
+    return payload
+
 @app.post("/process_video_shard")
 async def process_video_shard(
     shard_id: int = Form(...),
@@ -140,6 +149,7 @@ async def process_video_shard(
             process_video_file,
             temp_path,
             frame_interval=frame_interval,
+            shard_id=shard_id,
         )
 
         if callback_url:
@@ -176,6 +186,7 @@ async def process_video_shard_from_minio(payload: ProcessFromMinioRequest):
             process_video_file,
             temp_path,
             frame_interval=payload.frame_interval,
+            shard_id=payload.shard_id,
         )
 
         callback_delivered = False
@@ -252,7 +263,11 @@ async def process_video_sync(
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
-def process_video_file(video_path: str, frame_interval: Optional[int] = None) -> dict:
+def process_video_file(
+    video_path: str,
+    frame_interval: Optional[int] = None,
+    shard_id: Optional[int] = None,
+) -> dict:
     if frame_interval is None:
         frame_interval = default_frame_interval()
     try:
@@ -262,7 +277,19 @@ def process_video_file(video_path: str, frame_interval: Optional[int] = None) ->
             "Модель ONNX не найдена (включён CV_STRICT_MODEL): положите cvService/models/best.onnx "
             "или уберите CV_STRICT_MODEL для режима заглушки."
         ) from e
-    results = detector.process_video(video_path, frame_interval=frame_interval)
+
+    if shard_id is not None:
+        clear_shard_progress(shard_id)
+
+    def on_progress(data: dict) -> None:
+        if shard_id is not None:
+            set_shard_progress(shard_id, data)
+
+    results = detector.process_video(
+        video_path,
+        frame_interval=frame_interval,
+        on_progress=on_progress if shard_id is not None else None,
+    )
 
     return {
         "bushes_count": results["statistics"]["bushes_count"],

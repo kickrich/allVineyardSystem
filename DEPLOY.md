@@ -250,7 +250,7 @@ docker compose -f docker-compose.prod.yml logs -f backend vineyard-app cv | grep
 | `sent_to_vineyard` | Шард передан, CV обрабатывает |
 | `failed` | Смотрите `error_message` |
 
-**vineyardApp UI:** URL всегда с префиксом `/vineyard/` (например `/vineyard/video/1`). После обновления: `build vineyard-app` и `up -d --force-recreate nginx vineyard-app`.
+**vineyardApp UI:** URL всегда с префиксом `/vineyard/` (например `/vineyard/video/1`). При обработке ряда показываются прогресс и ETA по кадрам (`кадры N/M, осталось ≈ X мин`). После обновления: `build cv vineyard-app` и `up -d --force-recreate cv vineyard-app nginx`.
 
 ## Полезные команды
 

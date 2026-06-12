@@ -135,6 +135,28 @@ class Api::VideosController < ApplicationController
     if shard.nil?
       return render json: { error: "Shard не найден" }, status: :not_found
     end
+
+    cv_progress = nil
+    if shard.processing?
+      cv_progress = CvShardProgressService.fetch(shard.id)
+    end
+
+    progress = case shard.status
+               when 'pending' then 0
+               when 'processing' then cv_progress&.dig("progress_percent") || 0
+               when 'completed' then 100
+               when 'error' then 0
+               else 0
+               end
+
+    message = case shard.status
+              when 'pending' then "Видео в очереди"
+              when 'processing'
+                CvShardProgressService.status_message(cv_progress) || "CV сервис анализирует видео"
+              when 'completed' then "Обработка завершена успешно"
+              when 'error' then "Произошла ошибка при обработке"
+              else "Статус неизвестен"
+              end
     
     render json: {
       shard_id: shard.id,
@@ -142,13 +164,12 @@ class Api::VideosController < ApplicationController
       status: shard.status,
       bushes_count: shard.bushes_count,
       gaps_count: shard.gaps_count,
-      progress: case shard.status
-                when 'pending' then 0
-                when 'processing' then 50
-                when 'completed' then 100
-                when 'error' then 0
-                else 0
-                end,
+      progress: progress,
+      eta_seconds: cv_progress&.dig("eta_seconds"),
+      eta_label: CvShardProgressService.format_eta(cv_progress&.dig("eta_seconds")),
+      processed_frames: cv_progress&.dig("processed_frames"),
+      frames_to_process: cv_progress&.dig("frames_to_process"),
+      frame_interval: cv_progress&.dig("frame_interval"),
       step: case shard.status
             when 'pending' then "Ожидает обработки"
             when 'processing' then "Обработка..."
@@ -156,13 +177,7 @@ class Api::VideosController < ApplicationController
             when 'error' then "Ошибка"
             else "Неизвестно"
             end,
-      message: case shard.status
-              when 'pending' then "Видео в очереди"
-              when 'processing' then "CV сервис анализирует видео"
-              when 'completed' then "Обработка завершена успешно"
-              when 'error' then "Произошла ошибка при обработке"
-              else "Статус неизвестен"
-              end
+      message: message
     }
   end
 end

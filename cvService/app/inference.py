@@ -2,13 +2,14 @@ import logging
 import cv2
 import numpy as np
 import onnxruntime as ort
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Callable
 from collections import defaultdict
 import os
 import time
 from pathlib import Path
 
 from image_enhancement import VineTrunkEnhancer
+from progress import build_progress_payload
 
 _logger = logging.getLogger("cvservice")
 
@@ -295,7 +296,12 @@ class ONNXYOLODetector:
         
         return detections
     
-    def process_video(self, video_path: str, frame_interval: int = 4) -> Dict:
+    def process_video(
+        self,
+        video_path: str,
+        frame_interval: int = 4,
+        on_progress: Optional[Callable[[Dict], None]] = None,
+    ) -> Dict:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"Не удалось открыть видео: {video_path}")
@@ -308,6 +314,25 @@ class ONNXYOLODetector:
         
         frame_count = 0
         processed_frames = 0
+        last_progress_report = 0.0
+        interval = max(1, frame_interval)
+
+        def report_progress(force: bool = False) -> None:
+            nonlocal last_progress_report
+            if not on_progress:
+                return
+            now = time.time()
+            if not force and processed_frames > 0 and (now - last_progress_report) < 1.5:
+                return
+            last_progress_report = now
+            on_progress(
+                build_progress_payload(
+                    frame_interval=interval,
+                    total_frames=total_frames,
+                    processed_frames=processed_frames,
+                    elapsed_seconds=now - start_time,
+                )
+            )
         
         unique_bushes = set()
         unique_gaps = set()
@@ -319,9 +344,10 @@ class ONNXYOLODetector:
         tracked_objects = {}
         
         start_time = time.time()
-        
+        report_progress(force=True)
+
         while True:
-            if frame_count % frame_interval == 0:
+            if frame_count % interval == 0:
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -379,14 +405,27 @@ class ONNXYOLODetector:
                             })
                 
                 processed_frames += 1
+                report_progress()
             else:
                 if not cap.grab():
                     break
 
             frame_count += 1
-        
+            if total_frames <= 0 and frame_count % 120 == 0:
+                total_frames = frame_count
+
         cap.release()
         processing_time = time.time() - start_time
+        if on_progress:
+            on_progress(
+                build_progress_payload(
+                    frame_interval=interval,
+                    total_frames=max(total_frames, frame_count),
+                    processed_frames=processed_frames,
+                    elapsed_seconds=processing_time,
+                    status="completed",
+                )
+            )
         
         display_sequence = []
         for item in sorted(row_sequence, key=lambda x: x['order']):
@@ -475,7 +514,12 @@ class DummyVideoDetector:
     conf_threshold = 0.25
     iou_threshold = 0.45
 
-    def process_video(self, video_path: str, frame_interval: int = 4) -> Dict:
+    def process_video(
+        self,
+        video_path: str,
+        frame_interval: int = 4,
+        on_progress: Optional[Callable[[Dict], None]] = None,
+    ) -> Dict:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"Не удалось открыть видео: {video_path}")
@@ -484,20 +528,54 @@ class DummyVideoDetector:
         if fps <= 0:
             fps = 25.0
         total_frames_meta = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        interval = max(1, frame_interval)
 
         start = time.time()
         frame_count = 0
+        processed_frames = 0
+        last_progress_report = 0.0
+
+        def report_progress(force: bool = False) -> None:
+            nonlocal last_progress_report, processed_frames
+            if not on_progress:
+                return
+            now = time.time()
+            if not force and processed_frames > 0 and (now - last_progress_report) < 1.5:
+                return
+            last_progress_report = now
+            total = total_frames_meta if total_frames_meta > 0 else frame_count
+            on_progress(
+                build_progress_payload(
+                    frame_interval=interval,
+                    total_frames=total,
+                    processed_frames=processed_frames,
+                    elapsed_seconds=now - start,
+                )
+            )
+
+        report_progress(force=True)
+
         while True:
             ret, _ = cap.read()
             if not ret:
                 break
+            if frame_count % interval == 0:
+                processed_frames += 1
+                report_progress()
             frame_count += 1
         cap.release()
 
         elapsed = time.time() - start
-        processed_frames = 0
-        if frame_interval > 0 and frame_count > 0:
-            processed_frames = sum(1 for i in range(frame_count) if i % frame_interval == 0)
+        if on_progress:
+            on_progress(
+                build_progress_payload(
+                    frame_interval=interval,
+                    total_frames=max(total_frames_meta, frame_count),
+                    processed_frames=processed_frames,
+                    elapsed_seconds=elapsed,
+                    status="completed",
+                )
+            )
 
         duration = (total_frames_meta / fps) if total_frames_meta > 0 and fps > 0 else (
             frame_count / fps if fps > 0 else 0.0
