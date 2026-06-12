@@ -34,7 +34,6 @@ _DEFAULT_FRAME_INTERVAL = default_frame_interval()
 T = TypeVar("T")
 
 _video_semaphore: asyncio.Semaphore | None = None
-_video_executor: ThreadPoolExecutor | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -48,16 +47,20 @@ def _env_int(name: str, default: int) -> int:
 
 
 def max_concurrent_videos() -> int:
-    return max(1, _env_int("CV_MAX_CONCURRENT_VIDEOS", 1))
+    # Один ONNX-детектор на процесс; параллельные потоки ломают track_id (тысячи «кустов»).
+    return 1
 
 
 def uvicorn_workers() -> int:
     return max(1, _env_int("CV_UVICORN_WORKERS", 1))
 
 
+_video_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cv-worker")
+
+
 async def run_video_task(fn: Callable[..., T], *args, **kwargs) -> T:
-    """CPU-bound обработка видео: лимит параллелизма + отдельный поток."""
-    if _video_semaphore is None or _video_executor is None:
+    """CPU-bound обработка видео в отдельном потоке."""
+    if _video_semaphore is None:
         return fn(*args, **kwargs)
 
     async with _video_semaphore:
@@ -70,17 +73,14 @@ async def run_video_task(fn: Callable[..., T], *args, **kwargs) -> T:
 
 @app.on_event("startup")
 async def startup_event():
-    global _video_semaphore, _video_executor
-
-    concurrent = max_concurrent_videos()
-    _video_semaphore = asyncio.Semaphore(concurrent)
-    _video_executor = ThreadPoolExecutor(max_workers=concurrent)
+    global _video_semaphore
+    _video_semaphore = asyncio.Semaphore(max_concurrent_videos())
 
     logger.info(
         "CV concurrency: uvicorn_workers=%s max_concurrent_videos=%s (max ~%s videos in parallel)",
         uvicorn_workers(),
-        concurrent,
-        uvicorn_workers() * concurrent,
+        max_concurrent_videos(),
+        uvicorn_workers() * max_concurrent_videos(),
     )
 
     try:
@@ -93,10 +93,7 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global _video_executor
-    if _video_executor is not None:
-        _video_executor.shutdown(wait=True, cancel_futures=False)
-        _video_executor = None
+    _video_executor.shutdown(wait=False, cancel_futures=True)
 
 @app.get("/")
 async def root():
@@ -176,18 +173,49 @@ class ProcessFromMinioRequest(BaseModel):
     frame_interval: int = _DEFAULT_FRAME_INTERVAL
     bucket: Optional[str] = None
 
+
+def process_minio_shard_worker(
+    shard_id: int,
+    object_key: str,
+    bucket: Optional[str],
+    frame_interval: int,
+) -> dict:
+    """Скачивание + inference в worker-потоке, чтобы event loop отвечал на /processing_progress."""
+    clear_shard_progress(shard_id)
+    set_shard_progress(
+        shard_id,
+        {
+            "status": "processing",
+            "progress_percent": 0,
+            "processed_frames": 0,
+            "frames_to_process": 0,
+            "elapsed_seconds": 0,
+            "eta_seconds": None,
+        },
+    )
+
+    temp_path = None
+    try:
+        temp_path = download_from_minio(object_key, bucket)
+        return process_video_file(
+            temp_path,
+            frame_interval=frame_interval,
+            shard_id=shard_id,
+        )
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 @app.post("/process_video_shard_from_minio")
 async def process_video_shard_from_minio(payload: ProcessFromMinioRequest):
-    temp_path = None
-
     try:
-        temp_path = download_from_minio(payload.object_key, payload.bucket)
-        # В отдельном потоке: event loop свободен для GET /shards/{id}/processing_progress (ETA в UI).
         result = await run_video_task(
-            process_video_file,
-            temp_path,
-            frame_interval=payload.frame_interval,
-            shard_id=payload.shard_id,
+            process_minio_shard_worker,
+            payload.shard_id,
+            payload.object_key,
+            payload.bucket,
+            payload.frame_interval,
         )
 
         callback_delivered = False
@@ -220,9 +248,6 @@ async def process_video_shard_from_minio(payload: ProcessFromMinioRequest):
             except Exception:
                 pass
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.unlink(temp_path)
 
 @app.get("/model_info")
 async def model_info():
@@ -270,7 +295,7 @@ def process_video_file(
     shard_id: Optional[int] = None,
 ) -> dict:
     if frame_interval is None:
-        frame_interval = default_frame_interval()
+        frame_interval = 4
     try:
         detector = get_detector()
     except FileNotFoundError as e:

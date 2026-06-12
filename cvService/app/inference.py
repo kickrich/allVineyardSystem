@@ -6,12 +6,16 @@ from typing import List, Dict, Optional, Tuple, Callable
 from collections import defaultdict
 import os
 import time
+import threading
 from pathlib import Path
 
 from image_enhancement import VineTrunkEnhancer
 from progress import build_progress_payload
 
 _logger = logging.getLogger("cvservice")
+# Глобальный детектор + трекер не thread-safe: один process_video за раз (как preddeploy).
+_PROCESS_LOCK = threading.Lock()
+_STALE_TRACK_AGE_FRAMES = 120
 
 # Корень cvService/ — путь к ONNX не зависит от cwd при запуске uvicorn.
 _CV_ROOT = Path(__file__).resolve().parent.parent
@@ -48,12 +52,9 @@ def _env_enhance_frames() -> bool:
 
 
 class ONNXYOLODetector:
-    def __init__(self, model_path: str = 'models/best.onnx', enhance_frames: Optional[bool] = None):
+    def __init__(self, model_path: str = 'models/best.onnx', enhance_frames: bool = True):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Модель не найдена: {model_path}")
-
-        if enhance_frames is None:
-            enhance_frames = _env_enhance_frames()
 
         self.session = ort.InferenceSession(model_path)
 
@@ -205,11 +206,22 @@ class ONNXYOLODetector:
         union = area1 + area2 - intersection
         
         return intersection / union if union > 0 else 0
+
+    def _prune_stale_tracks(self) -> None:
+        stale = [
+            track_id
+            for track_id, history in self.track_history.items()
+            if history and (self.current_frame - history[-1]["frame"]) > _STALE_TRACK_AGE_FRAMES
+        ]
+        for track_id in stale:
+            del self.track_history[track_id]
     
     def track_detections(self, detections: List[Dict]) -> List[Dict]:
         if not detections:
             self.track_history.clear()
             return []
+
+        self._prune_stale_tracks()
         
         if not self.track_history:
             for det in detections:
@@ -292,6 +304,15 @@ class ONNXYOLODetector:
         self.next_track_id = 0
     
     def process_video(
+        self,
+        video_path: str,
+        frame_interval: int = 4,
+        on_progress: Optional[Callable[[Dict], None]] = None,
+    ) -> Dict:
+        with _PROCESS_LOCK:
+            return self._process_video_locked(video_path, frame_interval, on_progress)
+
+    def _process_video_locked(
         self,
         video_path: str,
         frame_interval: int = 4,

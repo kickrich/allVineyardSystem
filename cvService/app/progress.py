@@ -1,10 +1,13 @@
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-_PROGRESS_DIR = Path(os.getenv("CV_PROGRESS_DIR", "/tmp/cv_shard_progress"))
+_PROGRESS_DIR = Path(
+    os.getenv("CV_PROGRESS_DIR", os.path.join(tempfile.gettempdir(), "cv_shard_progress"))
+)
 
 
 def _path(shard_id: int) -> Path:

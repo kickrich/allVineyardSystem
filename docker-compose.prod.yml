@@ -55,6 +55,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./cvService/models:/app/models
+      - ./cvService/app:/app/app
     environment:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -68,7 +69,7 @@ services:
       CV_ORT_INTRA_THREADS: ${CV_ORT_INTRA_THREADS:-4}
       CV_ORT_INTER_THREADS: ${CV_ORT_INTER_THREADS:-1}
       CV_UVICORN_WORKERS: ${CV_UVICORN_WORKERS:-1}
-      CV_MAX_CONCURRENT_VIDEOS: ${CV_MAX_CONCURRENT_VIDEOS:-1}
+      CV_MAX_CONCURRENT_VIDEOS: "1"
       OMP_NUM_THREADS: ${CV_ORT_INTRA_THREADS:-4}
       MKL_NUM_THREADS: ${CV_ORT_INTRA_THREADS:-4}
       OPENBLAS_NUM_THREADS: ${CV_ORT_INTRA_THREADS:-4}
