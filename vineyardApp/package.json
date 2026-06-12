@@ -1,7 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "build": "node -e \"process.exit(0)\""
+    "build": "node -e \"process.exit(0)\"",
+    "build:css": "node -e \"process.exit(0)\""
   },
   "dependencies": {
     "tailwindcss": "^4.2.1"
