@@ -22,4 +22,9 @@ class ApplicationController < ActionController::Base
     path = "/#{path.delete_prefix("/")}"
     "#{base}#{path}"
   end
+
+  def default_url_options
+    base = app_base_path
+    base.present? ? { script_name: base } : {}
+  end
 end

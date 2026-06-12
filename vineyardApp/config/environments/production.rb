@@ -27,6 +27,13 @@ Rails.application.configure do
   # nginx: /vineyard/... → vineyard-app; без префикса ссылки ведут на frontend (/video/1).
   config.relative_url_root = ENV["RAILS_RELATIVE_URL_ROOT"].presence
 
+  session_path = ENV["RAILS_RELATIVE_URL_ROOT"].presence || "/"
+  config.session_store :cookie_store,
+                       key: "_vineyard_app_session",
+                       path: session_path,
+                       same_site: :lax,
+                       secure: ActiveModel::Type::Boolean.new.cast(ENV["BEHIND_SSL_PROXY"])
+
   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
   # config.asset_host = "http://assets.example.com"
 

@@ -161,12 +161,12 @@
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                   <%= link_to "Подробнее", app_path("/video/#{video.id}"), class: "btn-link btn-sm inline-block mr-2" %>
-                  <%= button_to "Удалить",
-                        app_path("/video/#{video.id}"),
-                        method: :delete,
-                        form: { style: "display: inline-block", data: { turbo: false } },
-                        data: { confirm: "Вы уверены? Видео и все его ряды будут удалены безвозвратно." },
-                        class: "btn-danger btn-sm inline-block" %>
+                  <button type="button"
+                          class="btn-danger btn-sm inline-block delete-video-btn"
+                          data-video-url="<%= app_path("/video/#{video.id}") %>"
+                          data-confirm="Вы уверены? Видео и все его ряды будут удалены безвозвратно.">
+                    Удалить
+                  </button>
                 </td>
               </tr>
             <% end %>
@@ -224,6 +224,40 @@
           console.error('Error:', error);
           showToast('Ошибка создания видео', 'error');
         }
+      });
+
+      document.querySelectorAll('.delete-video-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const message = btn.dataset.confirm || 'Удалить видео?';
+          if (!confirm(message)) return;
+
+          const csrf = document.querySelector('[name="csrf-token"]')?.content;
+          if (!csrf) {
+            showToast('CSRF-токен не найден, обновите страницу', 'error');
+            return;
+          }
+
+          try {
+            const response = await fetch(btn.dataset.videoUrl, {
+              method: 'DELETE',
+              headers: {
+                'X-CSRF-Token': csrf,
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+              }
+            });
+
+            if (response.ok) {
+              showToast('Видео удалено', 'success');
+              setTimeout(() => window.location.reload(), 800);
+            } else {
+              showToast('Не удалось удалить видео', 'error');
+            }
+          } catch (error) {
+            console.error('Delete video failed:', error);
+            showToast('Ошибка удаления', 'error');
+          }
+        });
       });
     });
   </script>
