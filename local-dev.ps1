@@ -1,5 +1,6 @@
 # Local deploy stack on http://localhost:8080
 # Requires Docker Desktop (Windows) or Docker Engine
+# Tip: Docker Desktop Settings -> Resources -> Memory 8 GB+
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -34,12 +35,34 @@ if ($envText -match '(?m)^CV_USE_GPU=(1|true|yes|on)\s*$') {
     Write-Host "GPU: docker-compose.gpu.yml"
 }
 
-Write-Host "==> Building and starting (first run may take 15-30 min)..."
-& docker @composeArgs --env-file $envFile up -d --build
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Less parallel builds = fewer Docker Desktop EOF crashes on Windows
+$env:COMPOSE_PARALLEL_LIMIT = "1"
+
+function Invoke-DockerCompose {
+    param([string[]]$ExtraArgs)
+    & docker @composeArgs --env-file $envFile @ExtraArgs
+    return $LASTEXITCODE
+}
+
+Write-Host "==> Building images (first run 15-30 min, one service at a time)..."
+$buildExit = Invoke-DockerCompose @("build")
+if ($buildExit -ne 0) {
+    Write-Host ""
+    Write-Host "Build failed. Often Docker Desktop ran out of memory at vineyard-app unpack."
+    Write-Host "1) Docker Desktop -> Settings -> Resources -> Memory 8 GB+"
+    Write-Host "2) Restart Docker Desktop"
+    Write-Host "3) Retry only vineyard-app:"
+    Write-Host '   docker compose -f docker-compose.prod.yml -f docker-compose.local.yml --env-file .env build vineyard-app'
+    Write-Host '   docker compose -f docker-compose.prod.yml -f docker-compose.local.yml --env-file .env up -d'
+    exit $buildExit
+}
+
+Write-Host "==> Starting containers..."
+$upExit = Invoke-DockerCompose @("up", "-d")
+if ($upExit -ne 0) { exit $upExit }
 
 Start-Sleep -Seconds 8
-& docker @composeArgs --env-file $envFile ps
+Invoke-DockerCompose @("ps") | Out-Null
 
 $base = "http://localhost:8080"
 Write-Host ""

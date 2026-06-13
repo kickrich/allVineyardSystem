@@ -5,6 +5,7 @@
 ## Требования
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS) или Docker Engine (Linux)
+- **Docker Desktop: Memory 8 GB+** (Settings -> Resources). Иначе сборка `vineyard-app` может упасть с `rpc error: EOF`
 - Модель **`cvService/models/best.onnx`** (не в git — положите вручную)
 - Опционально: видео в **`test_mission_shard_videos/`** для тестовых миссий
 
@@ -84,6 +85,22 @@ docker compose -f docker-compose.prod.yml -f docker-compose.local.yml down
 ```powershell
 docker compose -f docker-compose.prod.yml -f docker-compose.local.yml down -v
 ```
+
+## Ошибка `vineyard-app: rpc error: EOF` при сборке
+
+Сборка почти завершилась (71/72), упала при распаковке образа — **нехватка RAM у Docker Desktop**.
+
+1. Docker Desktop -> **Settings -> Resources -> Memory: 8 GB** (лучше 10–12 GB)
+2. **Restart** Docker Desktop
+3. Дособрать только vineyard-app (остальные образы уже готовы):
+
+```powershell
+cd D:\misha\VKR\Diplom\1234\allVineyardSystem
+docker compose -f docker-compose.prod.yml -f docker-compose.local.yml --env-file .env build vineyard-app
+docker compose -f docker-compose.prod.yml -f docker-compose.local.yml --env-file .env up -d
+```
+
+Проверка: `docker compose -f docker-compose.prod.yml -f docker-compose.local.yml ps`
 
 ## Сравнение с VPS
 
