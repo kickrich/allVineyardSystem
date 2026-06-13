@@ -17,21 +17,22 @@ _logger = logging.getLogger("cvservice")
 _PROCESS_LOCK = threading.Lock()
 
 
-def estimate_row_object_count(positions: List[Dict]) -> int:
-    """
-    Число объектов в ряду по кластерам median-x на track_id.
-    Устойчиво к «взрыву» track_id при сбое IoU-матчинга (тысячи ID → ~40–80 кустов).
-    """
+def _track_median_xs(positions: List[Dict]) -> List[float]:
     if not positions:
-        return 0
+        return []
 
     by_track: Dict[int, List[float]] = defaultdict(list)
     for p in positions:
         by_track[int(p["track_id"])].append(float(p["x"]))
+    return sorted(float(np.median(xs)) for xs in by_track.values())
 
-    medians = sorted(float(np.median(xs)) for xs in by_track.values())
-    if len(medians) <= 1:
-        return len(medians)
+
+def _cluster_sorted_medians(medians: List[float]) -> List[float]:
+    """Сливает близкие median-x в один объект; возвращает якоря кластеров."""
+    if not medians:
+        return []
+    if len(medians) == 1:
+        return medians
 
     gaps = [medians[i + 1] - medians[i] for i in range(len(medians) - 1)]
     positive_gaps = [g for g in gaps if g > 1.0]
@@ -41,13 +42,48 @@ def estimate_row_object_count(positions: List[Dict]) -> int:
     else:
         merge_threshold = 40.0
 
-    count = 1
+    anchors = [medians[0]]
     cluster_anchor = medians[0]
     for x in medians[1:]:
         if x - cluster_anchor > merge_threshold:
-            count += 1
+            anchors.append(x)
             cluster_anchor = x
-    return count
+    return anchors
+
+
+def estimate_row_object_count(positions: List[Dict]) -> int:
+    """
+    Число объектов в ряду по кластерам median-x на track_id.
+    Устойчиво к «взрыву» track_id при сбое IoU-матчинга (тысячи ID → ~40–80 кустов).
+    """
+    return len(_cluster_sorted_medians(_track_median_xs(positions)))
+
+
+def build_spatial_row_sequence(
+    bushes_positions: List[Dict],
+    gaps_positions: List[Dict],
+) -> Tuple[List[str], List[Dict]]:
+    """
+    row_sequence для схемы — те же spatial-кластеры, что и bushes_count/gaps_count.
+    Иначе в таблице ~50 кустов, а на схеме тысячи точек из сырых track_id.
+    """
+    items: List[Tuple[float, str]] = []
+    for median_x in _cluster_sorted_medians(_track_median_xs(bushes_positions)):
+        items.append((median_x, "bush"))
+    for median_x in _cluster_sorted_medians(_track_median_xs(gaps_positions)):
+        items.append((median_x, "gap"))
+
+    items.sort(key=lambda item: item[0])
+    display_sequence = [item[1] for item in items]
+    sequence_details = [
+        {
+            "position": idx + 1,
+            "type": item[1],
+            "median_x": item[0],
+        }
+        for idx, item in enumerate(items)
+    ]
+    return display_sequence, sequence_details
 
 # Корень cvService/ — путь к ONNX не зависит от cwd при запуске uvicorn.
 _CV_ROOT = Path(__file__).resolve().parent.parent
@@ -463,18 +499,6 @@ class ONNXYOLODetector:
                 )
             )
         
-        display_sequence = []
-        for item in sorted(row_sequence, key=lambda x: x['order']):
-            display_sequence.append(item['type'])
-        
-        sequence_details = []
-        for item in sorted(row_sequence, key=lambda x: x['order']):
-            sequence_details.append({
-                'position': item['order'],
-                'type': item['type'],
-                'track_id': item['track_id']
-            })
-        
         statistics = self.calculate_statistics(
             unique_bushes, 
             unique_gaps, 
@@ -484,13 +508,21 @@ class ONNXYOLODetector:
             fps
         )
 
+        # Схема ряда должна совпадать с bushes_count/gaps_count (spatial), не с track_id.
+        display_sequence, sequence_details = build_spatial_row_sequence(
+            bushes_positions,
+            gaps_positions,
+        )
+        raw_track_sequence_len = len(row_sequence)
+
         raw_bushes = len(unique_bushes)
         raw_gaps = len(unique_gaps)
         if raw_bushes > statistics["bushes_count"] * 2 and raw_bushes > 150:
             _logger.info(
-                "Bush count: spatial=%s raw_track_ids=%s positions=%s",
+                "Bush count: spatial=%s raw_track_ids=%s raw_row_sequence=%s positions=%s",
                 statistics["bushes_count"],
                 raw_bushes,
+                raw_track_sequence_len,
                 len(bushes_positions),
             )
         
@@ -509,11 +541,13 @@ class ONNXYOLODetector:
                 "unique_gaps": raw_gaps,
                 "spatial_bushes": statistics["bushes_count"],
                 "spatial_gaps": statistics["gaps_count"],
+                "raw_row_sequence_len": raw_track_sequence_len,
+                "spatial_row_sequence_len": len(display_sequence),
                 "total_tracks": raw_bushes + raw_gaps
             },
             "row_sequence": display_sequence,
             "sequence_details": sequence_details,
-            "row_length": len(row_sequence)
+            "row_length": len(display_sequence)
         }
     
     def calculate_statistics(self, unique_bushes, unique_gaps, bushes_positions, gaps_positions, total_frames, fps):
