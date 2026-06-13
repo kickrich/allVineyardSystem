@@ -5,7 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 COMPOSE_FILE="docker-compose.prod.yml"
+COMPOSE_GPU_FILE="docker-compose.gpu.yml"
 ENV_FILE=".env"
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Файл .env не найден."
@@ -27,14 +29,23 @@ require_var BACKEND_SECRET_KEY_BASE
 require_var VINEYARD_SECRET_KEY_BASE
 require_var PUBLIC_URL
 
+if grep -Eq '^CV_USE_GPU=(1|true|yes|on)' "$ENV_FILE" 2>/dev/null; then
+  if [[ ! -f "$COMPOSE_GPU_FILE" ]]; then
+    echo "CV_USE_GPU=true, но не найден $COMPOSE_GPU_FILE"
+    exit 1
+  fi
+  COMPOSE_ARGS+=(-f "$COMPOSE_GPU_FILE")
+  echo "==> GPU-режим CV: $COMPOSE_GPU_FILE"
+fi
+
 echo "==> Сборка и запуск production-стека..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build
+docker compose "${COMPOSE_ARGS[@]}" --env-file "$ENV_FILE" up -d --build
 
 echo "==> Ожидание healthcheck PostgreSQL..."
 sleep 5
 
 echo "==> Проверка контейнеров..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
+docker compose "${COMPOSE_ARGS[@]}" --env-file "$ENV_FILE" ps
 
 echo
 echo "Готово."

@@ -50,12 +50,47 @@ def _env_enhance_frames() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _env_use_gpu() -> bool:
+    raw = os.getenv("CV_USE_GPU", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return "CUDAExecutionProvider" in ort.get_available_providers()
+
+
+def create_onnx_session(model_path: str) -> ort.InferenceSession:
+    available = ort.get_available_providers()
+    use_gpu = _env_use_gpu()
+
+    if use_gpu and "CUDAExecutionProvider" in available:
+        providers: List = [
+            (
+                "CUDAExecutionProvider",
+                {"device_id": _env_int("CV_CUDA_DEVICE_ID", 0)},
+            ),
+            "CPUExecutionProvider",
+        ]
+    else:
+        providers = ["CPUExecutionProvider"]
+        if use_gpu:
+            _logger.warning(
+                "CV_USE_GPU включён, но CUDAExecutionProvider недоступен (available=%s)",
+                available,
+            )
+
+    session = ort.InferenceSession(model_path, providers=providers)
+    _logger.info("ONNX session providers: %s", session.get_providers())
+    return session
+
+
 class ONNXYOLODetector:
     def __init__(self, model_path: str = "models/best.onnx", enhance_frames: bool = True):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Модель не найдена: {model_path}")
 
-        self.session = ort.InferenceSession(model_path)
+        self.session = create_onnx_session(model_path)
+        self.onnx_providers = self.session.get_providers()
 
         in0 = self.session.get_inputs()[0]
         self.input_name = in0.name

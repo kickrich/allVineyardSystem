@@ -150,6 +150,57 @@ ssh -L 9001:127.0.0.1:9001 -L 9000:127.0.0.1:9000 root@ВАШ_IP
 docker compose -f docker-compose.prod.yml --env-file .env up -d minio
 ```
 
+## CV на GPU (NVIDIA)
+
+На VPS с видеокартой inference можно гнать через **CUDA** (быстрее, чем CPU).
+
+### 1. Драйвер и Docker GPU на хосте
+
+```bash
+# проверка GPU на хосте (не в контейнере)
+nvidia-smi
+
+# NVIDIA Container Toolkit (Ubuntu)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt update
+sudo apt install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# тест
+docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
+```
+
+### 2. В `.env`
+
+```env
+CV_DUMMY_INFERENCE=false
+CV_USE_GPU=true
+```
+
+### 3. Пересборка CV
+
+```bash
+./deploy.sh
+# или вручную:
+docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml --env-file .env up -d --build cv vineyard-app
+docker compose -f docker-compose.prod.yml restart nginx
+```
+
+### 4. Проверка
+
+```bash
+docker compose -f docker-compose.prod.yml exec cv python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+curl -s http://127.0.0.1:8000/ | python3 -m json.tool
+```
+
+В ответе должно быть `"onnx_providers": ["CUDAExecutionProvider", "CPUExecutionProvider"]`.
+
+Без GPU оставьте `CV_USE_GPU=false` — используется обычный CPU-образ (`Dockerfile`).
+
 ## CV-модель (опционально)
 
 Положите веса в `cvService/models/best.onnx`, затем в `.env`:

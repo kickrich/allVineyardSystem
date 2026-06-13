@@ -1,0 +1,12 @@
+# Подключать вместе с docker-compose.prod.yml на VPS с NVIDIA GPU:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --build cv
+# или CV_USE_GPU=true в .env и ./deploy.sh
+
+services:
+  cv:
+    build:
+      dockerfile: Dockerfile.gpu
+    gpus: all
+    environment:
+      CV_USE_GPU: "true"
+      NVIDIA_VISIBLE_DEVICES: all

@@ -104,11 +104,17 @@ async def root():
     except FileNotFoundError:
         classes = {}
         model_loaded = False
+    onnx_providers = []
+    if model_loaded:
+        onnx_providers = list(getattr(detector, "onnx_providers", []) or [])
+
     return {
         "service": "Vineyard CV Service",
         "status": "running",
         "model_loaded": model_loaded,
         "classes": classes,
+        "onnx_providers": onnx_providers,
+        "cv_use_gpu": os.getenv("CV_USE_GPU", ""),
         "concurrency": {
             "uvicorn_workers": uvicorn_workers(),
             "max_concurrent_videos": max_concurrent_videos(),
@@ -258,7 +264,8 @@ async def model_info():
         "num_classes": len(detector.class_names),
         "input_size": f"{detector.input_width}x{detector.input_height}",
         "conf_threshold": detector.conf_threshold,
-        "iou_threshold": detector.iou_threshold
+        "iou_threshold": detector.iou_threshold,
+        "onnx_providers": list(getattr(detector, "onnx_providers", []) or []),
     }
 
 @app.post("/process_video_sync")
