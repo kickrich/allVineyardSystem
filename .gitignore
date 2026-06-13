@@ -1,3 +1,9 @@
+# Env / secrets (не коммитить)
+.env
+backend/.env
+vineyardApp/.env
+frontend/.env
+
 # --- Monorepo root: backend (Rails), frontend (Vite), vineyardApp (Rails), cvService (Python) ---
 
 
