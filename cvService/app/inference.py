@@ -109,6 +109,7 @@ class ONNXYOLODetector:
         self.track_history = defaultdict(list)
         self.next_track_id = 0
         self.max_history = 30
+        self.max_stale_frames = _env_int("CV_TRACK_STALE_FRAMES", 120)
 
         self.enhance_frames = enhance_frames
         if enhance_frames:
@@ -245,9 +246,18 @@ class ONNXYOLODetector:
 
         return intersection / union if union > 0 else 0
 
+    def _prune_stale_tracks(self) -> None:
+        for track_id in list(self.track_history.keys()):
+            last_frame = self.track_history[track_id][-1]["frame"]
+            if self.current_frame - last_frame > self.max_stale_frames:
+                del self.track_history[track_id]
+
     def track_detections(self, detections: List[Dict]) -> List[Dict]:
+        self._prune_stale_tracks()
+
         if not detections:
-            self.track_history.clear()
+            # Не сбрасываем track_history: на пустом кадре иначе next_track_id
+            # растёт бесконечно → len(unique_bushes) в тысячи на длинном видео.
             return []
 
         if not self.track_history:
@@ -503,6 +513,18 @@ class ONNXYOLODetector:
             fps,
         )
 
+        raw_bushes = len(unique_bushes)
+        raw_gaps = len(unique_gaps)
+        if raw_bushes > 200:
+            _logger.warning(
+                "High bush track count: bushes=%s gaps=%s row_sequence=%s positions=%s processed_frames=%s",
+                raw_bushes,
+                raw_gaps,
+                len(row_sequence),
+                len(bushes_positions),
+                processed_frames,
+            )
+
         duration = (total_frames / fps) if fps > 0 else 0.0
         return {
             "video_info": {
@@ -537,6 +559,8 @@ class ONNXYOLODetector:
             "details": {
                 "processed_frames": len(set(p["frame"] for p in bushes_positions)),
                 "total_positions": len(bushes_positions),
+                "raw_track_bushes": len(unique_bushes),
+                "raw_track_gaps": len(unique_gaps),
                 "enhancement_enabled": self.enhance_frames,
             },
         }

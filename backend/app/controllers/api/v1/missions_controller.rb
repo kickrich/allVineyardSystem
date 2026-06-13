@@ -142,10 +142,8 @@ module Api
         gaps_positions = attrs.dig("result_json", "gaps_positions")
         row_sequences = attrs.dig("result_json", "row_sequences")
         bushes_count = attrs["bushes_count"]
-        bushes_count = Array(bushes_positions).size if bushes_count.nil?
         gaps_count = attrs["gaps_count"]
         gaps_count = attrs.dig("result_json", "gaps_count") if gaps_count.nil?
-        gaps_count = Array(gaps_positions).size if gaps_count.nil?
         rows_count = attrs["rows_count"] || attrs.dig("result_json", "shards_count")
 
         {
