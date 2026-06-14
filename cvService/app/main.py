@@ -115,6 +115,10 @@ async def root():
         "classes": classes,
         "onnx_providers": onnx_providers,
         "cv_use_gpu": os.getenv("CV_USE_GPU", ""),
+        "cv_enhance_frames": os.getenv("CV_ENHANCE_FRAMES", ""),
+        "cv_frame_interval": _DEFAULT_FRAME_INTERVAL,
+        "cv_skip_frame_decode": os.getenv("CV_SKIP_FRAME_DECODE", ""),
+        "cv_gpu_io_binding": os.getenv("CV_GPU_IO_BINDING", ""),
         "concurrency": {
             "uvicorn_workers": uvicorn_workers(),
             "max_concurrent_videos": max_concurrent_videos(),

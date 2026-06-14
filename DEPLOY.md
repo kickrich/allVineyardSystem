@@ -199,6 +199,35 @@ curl -s http://127.0.0.1:8000/ | python3 -m json.tool
 
 В ответе должно быть `"onnx_providers": ["CUDAExecutionProvider", "CPUExecutionProvider"]`.
 
+### 5. Максимальная скорость на GPU
+
+Главный тормоз — **не ONNX**, а CPU: декод всех кадров и `VineTrunkEnhancer` (bilateral, morphology) на каждом кадре.  
+При `CV_USE_GPU=true` `docker-compose.gpu.yml` уже задаёт быстрые значения по умолчанию:
+
+```env
+CV_USE_GPU=true
+CV_DUMMY_INFERENCE=false
+CV_ENHANCE_FRAMES=false      # обязательно off на GPU (иначе часы на 90-сек видео)
+CV_FRAME_INTERVAL=8          # 4=точнее, 12–16=ещё быстрее
+CV_GPU_IO_BINDING=true       # меньше копий CPU→GPU
+CV_SKIP_FRAME_DECODE=true    # grab() для пропущенных кадров
+CV_ORT_INTRA_THREADS=2
+CV_ORT_INTER_THREADS=1
+```
+
+Ожидаемо: **1–5 мин** на шард ~90 с (вместо 1–2 ч при `CV_ENHANCE_FRAMES=true`).
+
+Проверка нагрузки во время обработки:
+
+```bash
+watch -n 1 nvidia-smi
+docker compose -f docker-compose.prod.yml logs -f cv
+```
+
+Если `GPU-Util` низкий — смотрите `CV_ENHANCE_FRAMES` (должно быть `false`).
+
+Точность как на preddeploy с enhancement: `CV_ENHANCE_FRAMES=true` — но только на мощном CPU или для отладки.
+
 Без GPU оставьте `CV_USE_GPU=false` — используется обычный CPU-образ (`Dockerfile`).
 
 ## CV-модель (опционально)

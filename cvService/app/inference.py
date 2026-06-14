@@ -39,12 +39,32 @@ def _env_truthy(name: str) -> bool:
 
 
 def default_frame_interval() -> int:
-    v = _env_int("CV_FRAME_INTERVAL", 4)
-    return max(1, min(v, 120))
+    if _env_use_gpu():
+        default = _env_int("CV_GPU_FRAME_INTERVAL", _env_int("CV_FRAME_INTERVAL", 8))
+    else:
+        default = _env_int("CV_FRAME_INTERVAL", 4)
+    return max(1, min(default, 120))
 
 
 def _env_enhance_frames() -> bool:
     raw = os.getenv("CV_ENHANCE_FRAMES", "").strip().lower()
+    if not raw:
+        # На GPU VineTrunkEnhancer на CPU — главный тормоз (минуты на кадр на слабом VPS).
+        return not _env_use_gpu()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _env_gpu_io_binding() -> bool:
+    raw = os.getenv("CV_GPU_IO_BINDING", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return _env_use_gpu()
+
+
+def _env_skip_frame_decode() -> bool:
+    raw = os.getenv("CV_SKIP_FRAME_DECODE", "").strip().lower()
     if not raw:
         return True
     return raw in ("1", "true", "yes", "on")
@@ -59,16 +79,38 @@ def _env_use_gpu() -> bool:
     return "CUDAExecutionProvider" in ort.get_available_providers()
 
 
+def _build_session_options() -> ort.SessionOptions:
+    so = ort.SessionOptions()
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    so.intra_op_num_threads = max(1, _env_int("CV_ORT_INTRA_THREADS", 4))
+    so.inter_op_num_threads = max(1, _env_int("CV_ORT_INTER_THREADS", 1))
+    return so
+
+
+def _cuda_provider_options() -> dict:
+    algo = os.getenv("CV_CUDA_CUDNN_CONV_ALGO", "HEURISTIC").strip().upper()
+    if algo not in ("HEURISTIC", "EXHAUSTIVE", "DEFAULT"):
+        algo = "HEURISTIC"
+    opts = {
+        "device_id": _env_int("CV_CUDA_DEVICE_ID", 0),
+        "arena_extend_strategy": "kNextPowerOfTwo",
+        "cudnn_conv_algo_search": algo,
+        "do_copy_in_default_stream": True,
+    }
+    gpu_mem_mb = _env_int("CV_CUDA_GPU_MEM_MB", 0)
+    if gpu_mem_mb > 0:
+        opts["gpu_mem_limit"] = gpu_mem_mb * 1024 * 1024
+    return opts
+
+
 def create_onnx_session(model_path: str) -> ort.InferenceSession:
     available = ort.get_available_providers()
     use_gpu = _env_use_gpu()
+    so = _build_session_options()
 
     if use_gpu and "CUDAExecutionProvider" in available:
         providers: List = [
-            (
-                "CUDAExecutionProvider",
-                {"device_id": _env_int("CV_CUDA_DEVICE_ID", 0)},
-            ),
+            ("CUDAExecutionProvider", _cuda_provider_options()),
             "CPUExecutionProvider",
         ]
     else:
@@ -79,8 +121,13 @@ def create_onnx_session(model_path: str) -> ort.InferenceSession:
                 available,
             )
 
-    session = ort.InferenceSession(model_path, providers=providers)
-    _logger.info("ONNX session providers: %s", session.get_providers())
+    session = ort.InferenceSession(model_path, sess_options=so, providers=providers)
+    _logger.info(
+        "ONNX session providers: %s (intra=%s inter=%s)",
+        session.get_providers(),
+        so.intra_op_num_threads,
+        so.inter_op_num_threads,
+    )
     return session
 
 
@@ -112,6 +159,13 @@ class ONNXYOLODetector:
         self.max_stale_frames = _env_int("CV_TRACK_STALE_FRAMES", 120)
 
         self.enhance_frames = enhance_frames
+        self._cuda_device_id = _env_int("CV_CUDA_DEVICE_ID", 0)
+        self._use_gpu_iobinding = (
+            _env_gpu_io_binding()
+            and "CUDAExecutionProvider" in self.onnx_providers
+        )
+        self._io_binding = None
+        self._input_ort = None
         if enhance_frames:
             self.enhancer = VineTrunkEnhancer(
                 {
@@ -219,18 +273,28 @@ class ONNXYOLODetector:
         if not detections:
             return []
 
-        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
-        keep = []
+        boxes = []
+        scores = []
+        for det in detections:
+            x1, y1, x2, y2 = det["bbox"]
+            boxes.append([x1, y1, x2 - x1, y2 - y1])
+            scores.append(det["confidence"])
 
-        while detections:
-            best = detections.pop(0)
-            keep.append(best)
+        indices = cv2.dnn.NMSBoxes(
+            boxes,
+            scores,
+            self.conf_threshold,
+            self.iou_threshold,
+        )
+        if len(indices) == 0:
+            return []
 
-            detections = [
-                d for d in detections if self.iou(best["bbox"], d["bbox"]) < self.iou_threshold
-            ]
+        if isinstance(indices, np.ndarray):
+            indices = indices.flatten().tolist()
+        else:
+            indices = [int(i[0]) if isinstance(i, (list, tuple, np.ndarray)) else int(i) for i in indices]
 
-        return keep
+        return [detections[i] for i in indices]
 
     def iou(self, box1: List[float], box2: List[float]) -> float:
         x1 = max(box1[0], box2[0])
@@ -332,15 +396,34 @@ class ONNXYOLODetector:
             enhanced_frame = frame
 
         orig_shape = enhanced_frame.shape[:2]
-        input_tensor = self.preprocess(enhanced_frame)
-
-        outputs = self.session.run(self.output_names, {self.input_name: input_tensor})
-
+        input_tensor = np.ascontiguousarray(self.preprocess(enhanced_frame))
+        outputs = self._run_inference(input_tensor)
         detections = self.postprocess(outputs, orig_shape)
 
         detections = self.track_detections(detections)
 
         return detections
+
+    def _run_inference(self, input_tensor: np.ndarray) -> List[np.ndarray]:
+        if not self._use_gpu_iobinding:
+            return self.session.run(self.output_names, {self.input_name: input_tensor})
+
+        if self._io_binding is None:
+            self._io_binding = self.session.io_binding()
+
+        if self._input_ort is None or tuple(self._input_ort.shape()) != tuple(input_tensor.shape):
+            self._input_ort = ort.OrtValue.ortvalue_from_numpy(
+                input_tensor, "cuda", self._cuda_device_id
+            )
+        else:
+            self._input_ort.update_inplace(input_tensor)
+
+        self._io_binding.clear_binding_inputs()
+        self._io_binding.bind_ortvalue_input(self.input_name, self._input_ort)
+        for name in self.output_names:
+            self._io_binding.bind_output(name, "cuda", self._cuda_device_id)
+        self.session.run_with_iobinding(self._io_binding)
+        return self._io_binding.copy_outputs_to_cpu()
 
     def process_video(
         self,
@@ -360,10 +443,12 @@ class ONNXYOLODetector:
         self.track_history.clear()
         self.next_track_id = 0
 
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             raise RuntimeError(f"Не удалось открыть видео: {video_path}")
 
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        skip_decode = _env_skip_frame_decode()
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         if fps <= 0:
@@ -404,11 +489,10 @@ class ONNXYOLODetector:
         report_progress(force=True)
 
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
             if frame_count % interval == 0:
+                ret, frame = cap.read()
+                if not ret:
+                    break
                 detections = self.detect_frame(frame, frame_count)
 
                 detections.sort(key=lambda d: (d["bbox"][0] + d["bbox"][2]) / 2)
@@ -471,6 +555,13 @@ class ONNXYOLODetector:
 
                 processed_frames += 1
                 report_progress()
+            elif skip_decode:
+                if not cap.grab():
+                    break
+            else:
+                ret, _ = cap.read()
+                if not ret:
+                    break
 
             frame_count += 1
             if total_frames <= 0 and frame_count % 120 == 0:
