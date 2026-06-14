@@ -483,6 +483,37 @@ docker compose -f docker-compose.prod.yml exec nginx wget -q -O- http://backend:
 
 `PUBLIC_URL` в `.env` должен совпадать с URL в браузере (например `http://195.209.216.226`, без лишнего порта, если nginx на :80).
 
+## 404 на главной `/` (X-Runtime в curl)
+
+Симптом: `curl -I http://IP/` → **404** и заголовок **`X-Runtime`** (это **backend Rails**, не React).
+
+`/vineyard/` при этом может открываться (**200**).
+
+Причина: nginx проксирует `/` не во **frontend**, а в backend (устаревший `default.conf` или `backup` в upstream на сервере).
+
+**Проверка на VPS:**
+
+```bash
+docker compose -f docker-compose.prod.yml exec nginx cat /etc/nginx/conf.d/default.conf | tail -25
+curl -I http://127.0.0.1/
+curl -I http://195.209.216.226/
+```
+
+В конфиге для `/` должно быть `proxy_pass http://frontend_upstream`, **без** `backup backend`.
+
+**Исправление:**
+
+```bash
+cd /opt/allVineyardSystem
+git pull origin allVineyardSystem-deploy
+docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate nginx
+curl -I http://195.209.216.226/
+```
+
+Ожидается **200** и `Content-Type: text/html` **без** `X-Runtime`.
+
+Пока чините — дашборд шардов: **http://195.209.216.226/vineyard/**
+
 ## Устранение проблем
 
 | Симптом | Решение |
