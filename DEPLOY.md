@@ -426,6 +426,15 @@ docker compose up -d          # только MinIO + CV
 
 Nginx отвечает, но **upstream не доступен** (контейнер не запущен, упал или ещё стартует).
 
+**Backend healthy, но `/api/` и `/up` — 502:** nginx запущен **раньше** recreate backend и держит **старый IP** upstream.  
+Проверка: `exec nginx wget http://backend:80/up` — OK, `curl http://127.0.0.1/up` — 502.
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env restart nginx
+# или после git pull с fix resolver:
+docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate nginx
+```
+
 ### 1. Статус контейнеров (на VPS)
 
 ```bash
