@@ -331,19 +331,11 @@ docker compose -f docker-compose.prod.yml down -v
 
 ## Локальная разработка
 
-Полный стек **как на deploy**, на `http://localhost:8080`:
-
-```powershell
-cd allVineyardSystem
-.\local-dev.ps1
-```
-
-Подробно: **[LOCAL-DEV.md](./LOCAL-DEV.md)** (модель `best.onnx`, GPU, проверка шардов).
-
-Минимальный стек только MinIO + CV:
+Для разработки по-прежнему используйте:
 
 ```bash
-docker compose up -d
+docker compose up -d          # только MinIO + CV
+# + rails s в backend и vineyardApp, npm run dev во frontend
 ```
 
 ## Устранение проблем
