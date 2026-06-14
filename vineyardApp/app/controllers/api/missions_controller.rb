@@ -122,6 +122,13 @@ class Api::MissionsController < ApplicationController
           shard.destroy
           return render json: { error: "Не удалось прикрепить файл" }, status: :unprocessable_entity
         end
+
+        begin
+          VideoShardMinioStorageService.new(shard).ensure_uploaded!
+        rescue => e
+          shard.destroy
+          return render json: { error: "MinIO: #{e.message}" }, status: :unprocessable_entity
+        end
       end
 
       job = ProcessVideoShardJob.perform_later(shard.id)

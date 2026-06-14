@@ -1,7 +1,5 @@
 require "faraday"
 require "faraday/multipart"
-require "aws-sdk-s3"
-require "securerandom"
 require "uri"
 require "json"
 require "cgi"
@@ -41,17 +39,19 @@ class VideoShardProcessorService
   private
 
   def send_to_cv_service
-    source = source_payload_from_shard
+    storage = VideoShardMinioStorageService.new(@shard)
+    source = storage.current_source
     object_key = source[:object_key]
     bucket = source[:bucket]
 
     if object_key.blank? && @shard.video_file.attached?
-      object_key = upload_blob_to_minio(@shard.video_file.blob)
-      bucket = ENV.fetch('MINIO_BUCKET')
+      source = storage.ensure_uploaded!
+      object_key = source[:object_key]
+      bucket = source[:bucket]
     end
 
     if object_key.blank?
-      raise "Не найден object_key для обработки (и нет прикрепленного файла)"
+      raise "Не найден object_key для обработки (и нет прикреплённого файла)"
     end
 
     conn = Faraday.new(url: @cv_service_url) do |faraday|
@@ -93,50 +93,6 @@ class VideoShardProcessorService
     response
   end
 
-  def upload_blob_to_minio(blob)
-    s3 = Aws::S3::Client.new(
-      endpoint: ENV.fetch('MINIO_ENDPOINT'),
-      region: ENV.fetch('MINIO_REGION', 'us-east-1'),
-      access_key_id: ENV.fetch('MINIO_ACCESS_KEY'),
-      secret_access_key: ENV.fetch('MINIO_SECRET_KEY'),
-      force_path_style: true
-    )
-
-    bucket = ENV.fetch('MINIO_BUCKET')
-    ensure_bucket!(s3, bucket)
-    object_key = "video-shards/#{@shard.video_id}/#{@shard.id}/#{SecureRandom.uuid}-#{blob.filename}"
-
-    blob.open do |file|
-      file_size = File.size(file.path)
-      if file_size == 0
-        raise "Скачанный файл имеет нулевой размер"
-      end
-
-      s3.put_object(
-        bucket: bucket,
-        key: object_key,
-        body: file,
-        content_type: blob.content_type || 'video/mp4'
-      )
-    end
-
-    object_key
-  rescue Aws::S3::Errors::ServiceError => e
-    raise "Ошибка загрузки в MinIO: #{e.message}"
-  rescue KeyError => e
-    raise "Не задана переменная окружения: #{e.message}"
-  rescue => e
-    raise
-  ensure
-    # Здесь intentionally no-op: blob.open сам закрывает временный файл
-  end
-
-  def ensure_bucket!(s3, bucket)
-    s3.head_bucket(bucket: bucket)
-  rescue Aws::S3::Errors::NotFound, Aws::S3::Errors::NoSuchBucket
-    s3.create_bucket(bucket: bucket)
-  end
-
   # cvService отдаёт те же поля, что и колбэк /api/video_shards/:id/results (если колбэк из Docker не дошёл до localhost).
   def apply_cv_result_from_response!(parsed)
     p = parsed.stringify_keys
@@ -171,35 +127,7 @@ class VideoShardProcessorService
   end
 
   def source_payload_from_shard
-    source = (@shard.result_json || {})['source'] || {}
-    object_key = source['object_key'].to_s.presence
-    bucket = source['bucket'].to_s.presence
-    video_url = source['video_url'].to_s.presence
-
-    if object_key.blank? && video_url.present?
-      parsed_bucket, parsed_key = parse_key_from_url(video_url)
-      object_key = parsed_key if parsed_key.present?
-      bucket = parsed_bucket if bucket.blank? && parsed_bucket.present?
-    end
-
-    bucket ||= ENV['MINIO_BUCKET'].to_s.presence
-
-    {
-      object_key: object_key,
-      bucket: bucket
-    }
-  end
-
-  def parse_key_from_url(video_url)
-    uri = URI.parse(video_url)
-    segments = uri.path.to_s.split('/').reject(&:blank?)
-    return [nil, nil] if segments.size < 2
-
-    bucket = CGI.unescape(segments.first)
-    key = CGI.unescape(segments[1..].join('/'))
-    [bucket, key]
-  rescue URI::InvalidURIError
-    [nil, nil]
+    VideoShardMinioStorageService.new(@shard).current_source
   end
 
   def send_to_cv_service_legacy

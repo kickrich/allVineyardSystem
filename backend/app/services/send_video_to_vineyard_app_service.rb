@@ -60,6 +60,8 @@ class SendVideoToVineyardAppService
 
   # Предпочитаем MinIO (object_key + url), чтобы не тянуть большой файл через Backend.
   def upload_shards
+    ensure_media_upload_in_minio_if_needed!
+
     if minio_payload_available?
       @last_shard_response = upload_shard_with_url
     elsif @media_upload.media_file.attached?
@@ -69,6 +71,14 @@ class SendVideoToVineyardAppService
     else
       raise "Нет ни файла, ни URL для отправки в VineyardApp"
     end
+  end
+
+  def ensure_media_upload_in_minio_if_needed!
+    return if minio_payload_available?
+    return unless @media_upload.media_file.attached?
+
+    MediaUploadMinioStorageService.new(@media_upload).ensure_uploaded!
+    @media_upload.reload
   end
 
   def minio_payload_available?

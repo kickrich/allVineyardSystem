@@ -238,6 +238,31 @@ docker compose -f docker-compose.prod.yml logs -f cv
 
 Без GPU оставьте `CV_USE_GPU=false` — используется обычный CPU-образ (`Dockerfile`).
 
+## MinIO: где лежат видео
+
+Бакет по умолчанию: **`vineyard-videos`** (из `MINIO_BUCKET` в `.env`).
+
+| Источник | Путь в MinIO |
+|----------|----------------|
+| Backend (тестовые шарды, multipart) | `missions/{mission_id}/uploads/...` |
+| vineyardApp (файл шарда) | `video-shards/{video_id}/{shard_id}/...` |
+
+Консоль MinIO на VPS (SSH-туннель с ПК):
+
+```powershell
+ssh -L 9001:127.0.0.1:9001 ubuntu@195.209.216.226
+```
+
+В браузере: http://127.0.0.1:9001 — логин `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` из `.env`.
+
+Проверка из контейнера:
+
+```bash
+docker compose -f docker-compose.prod.yml exec minio mc ls local/vineyard-videos --recursive | tail -20
+```
+
+Если список пустой — на VPS должны быть файлы в `test_mission_shard_videos/` (для TEST-режима) или успешная multipart-загрузка с фронта.
+
 ## CV-модель (опционально)
 
 Положите веса в `cvService/models/best.onnx`, затем в `.env`:
