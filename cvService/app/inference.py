@@ -51,29 +51,45 @@ def _cluster_sorted_medians(medians: List[float]) -> List[float]:
     return anchors
 
 
-def _adaptive_min_track_hits(
-    bushes_positions: List[Dict],
-    gaps_positions: List[Dict],
-    processed_frames: int,
-) -> Tuple[int, int]:
-    """Больше min_hits при джиттере трекера (много track_id на кадр)."""
-    min_bush = max(2, _env_int("CV_MIN_BUSH_HITS", 2))
-    min_gap = max(2, _env_int("CV_MIN_GAP_HITS", 3))
+def _summarize_positions(
+    positions: List[Dict],
+    obj_type: str,
+    min_hits: int,
+) -> List[Dict]:
+    by_track: Dict[int, Dict] = {}
+    for p in positions:
+        track_id = int(p["track_id"])
+        entry = by_track.setdefault(
+            track_id,
+            {
+                "track_id": track_id,
+                "type": obj_type,
+                "xs": [],
+                "confs": [],
+                "frames": set(),
+            },
+        )
+        entry["xs"].append(float(p["x"]))
+        entry["confs"].append(float(p["confidence"]))
+        entry["frames"].add(int(p["frame"]))
 
-    bush_frames = len(set(p["frame"] for p in bushes_positions))
-    raw_bush_tracks = len(set(p["track_id"] for p in bushes_positions))
-    if bush_frames > 0:
-        density = raw_bush_tracks / bush_frames
-        if density > 1.4:
-            min_bush = max(min_bush, 3)
-        if density > 2.2:
-            min_bush = max(min_bush, 4)
-
-    if processed_frames > 0 and processed_frames < 35:
-        min_bush = max(min_bush, 3)
-        min_gap = max(min_gap, 4)
-
-    return min_bush, min_gap
+    summaries: List[Dict] = []
+    for entry in by_track.values():
+        hits = len(entry["frames"])
+        if hits < min_hits:
+            continue
+        summaries.append(
+            {
+                "track_id": entry["track_id"],
+                "median_x": float(np.median(entry["xs"])),
+                "type": obj_type,
+                "hits": hits,
+                "max_conf": float(max(entry["confs"])),
+                "first_frame": min(entry["frames"]),
+                "last_frame": max(entry["frames"]),
+            }
+        )
+    return sorted(summaries, key=lambda s: s["median_x"])
 
 
 def _summarize_tracks(
@@ -83,47 +99,45 @@ def _summarize_tracks(
     min_gap_hits: int = 3,
 ) -> List[Dict]:
     """Один summary на track_id; отсекаем одноразовые ложные детекции."""
-    by_track: Dict[int, Dict] = {}
-
-    def ingest(positions: List[Dict], obj_type: str) -> None:
-        for p in positions:
-            track_id = int(p["track_id"])
-            entry = by_track.setdefault(
-                track_id,
-                {
-                    "track_id": track_id,
-                    "type": obj_type,
-                    "xs": [],
-                    "confs": [],
-                    "frames": set(),
-                },
-            )
-            entry["type"] = obj_type
-            entry["xs"].append(float(p["x"]))
-            entry["confs"].append(float(p["confidence"]))
-            entry["frames"].add(int(p["frame"]))
-
-    ingest(bushes_positions, "bush")
-    ingest(gaps_positions, "gap")
-
-    summaries: List[Dict] = []
-    for entry in by_track.values():
-        hits = len(entry["frames"])
-        min_hits = min_gap_hits if entry["type"] == "gap" else min_bush_hits
-        if hits < min_hits:
-            continue
-        summaries.append(
-            {
-                "track_id": entry["track_id"],
-                "median_x": float(np.median(entry["xs"])),
-                "type": entry["type"],
-                "hits": hits,
-                "max_conf": float(max(entry["confs"])),
-                "first_frame": min(entry["frames"]),
-                "last_frame": max(entry["frames"]),
-            }
-        )
+    summaries = _summarize_positions(bushes_positions, "bush", min_bush_hits)
+    summaries.extend(_summarize_positions(gaps_positions, "gap", min_gap_hits))
     return sorted(summaries, key=lambda s: s["median_x"])
+
+
+def _cluster_summaries_by_x(
+    summaries: List[Dict],
+    same_type_threshold: Optional[float] = None,
+    cross_type_threshold: Optional[float] = None,
+) -> List[Dict]:
+    """Слияние track_id по близости median-x (устойчиво к джиттеру GPU-трекера)."""
+    if not summaries:
+        return []
+
+    xs = sorted(s["median_x"] for s in summaries)
+    if same_type_threshold is None or cross_type_threshold is None:
+        same_type_threshold, cross_type_threshold = _merge_threshold_from_xs(xs)
+
+    clusters: List[Dict] = []
+    for summary in summaries:
+        if not clusters:
+            clusters.append({"members": [summary], "anchor_x": summary["median_x"]})
+            continue
+
+        cluster = clusters[-1]
+        dist = summary["median_x"] - cluster["anchor_x"]
+        last_type = cluster["members"][-1]["type"]
+        same_type = summary["type"] == last_type
+        threshold = same_type_threshold if same_type else cross_type_threshold
+
+        if dist <= threshold:
+            cluster["members"].append(summary)
+            cluster["anchor_x"] = float(
+                np.median([m["median_x"] for m in cluster["members"]])
+            )
+        else:
+            clusters.append({"members": [summary], "anchor_x": summary["median_x"]})
+
+    return clusters
 
 
 def _merge_threshold_from_xs(xs: List[float]) -> Tuple[float, float]:
@@ -146,11 +160,10 @@ def cluster_row_tracks(
     gaps_positions: List[Dict],
     min_bush_hits: int = 2,
     min_gap_hits: int = 3,
-    frame_interval: int = 4,
 ) -> List[Dict]:
     """
-    Кластеризация по времени + X: один куст при движении камеры даёт много track_id
-    с разным median_x — склеиваем фрагменты одного прохода, разные кусты не трогаем.
+    Единая кластеризация кустов и пропусков по X для row_sequence.
+    Счётчики bushes/gaps считаются отдельно в build_spatial_row_sequence.
     """
     summaries = _summarize_tracks(bushes_positions, gaps_positions, min_bush_hits, min_gap_hits)
     if not summaries:
@@ -158,57 +171,9 @@ def cluster_row_tracks(
 
     xs = sorted(s["median_x"] for s in summaries)
     same_type_threshold, cross_type_threshold = _merge_threshold_from_xs(xs)
-    fragment_gap = max(frame_interval * 2, _env_int("CV_TRACK_FRAGMENT_GAP", 8))
-    x_sweep_max = float(_env_int("CV_TRACK_X_SWEEP_MAX", 320))
-
-    summaries_by_time = sorted(summaries, key=lambda s: (s["first_frame"], s["median_x"]))
-
-    clusters: List[Dict] = []
-    for summary in summaries_by_time:
-        if not clusters:
-            clusters.append(
-                {
-                    "members": [summary],
-                    "anchor_x": summary["median_x"],
-                    "first_frame": summary["first_frame"],
-                    "last_frame": summary["last_frame"],
-                }
-            )
-            continue
-
-        cluster = clusters[-1]
-        gap_frames = summary["first_frame"] - cluster["last_frame"]
-        time_overlap = summary["first_frame"] <= cluster["last_frame"]
-        x_dist = abs(summary["median_x"] - cluster["anchor_x"])
-        last_type = cluster["members"][-1]["type"]
-        same_type = summary["type"] == last_type
-        type_threshold = same_type_threshold if same_type else cross_type_threshold
-
-        overlap_merge = same_type and time_overlap and x_dist <= x_sweep_max
-        fragment_merge = (
-            same_type
-            and not time_overlap
-            and 0 <= gap_frames <= fragment_gap
-            and x_dist <= x_sweep_max
-        )
-        spatial_merge = same_type and time_overlap and x_dist <= type_threshold
-
-        if overlap_merge or fragment_merge or spatial_merge:
-            cluster["members"].append(summary)
-            cluster["anchor_x"] = float(
-                np.median([m["median_x"] for m in cluster["members"]])
-            )
-            cluster["first_frame"] = min(cluster["first_frame"], summary["first_frame"])
-            cluster["last_frame"] = max(cluster["last_frame"], summary["last_frame"])
-        else:
-            clusters.append(
-                {
-                    "members": [summary],
-                    "anchor_x": summary["median_x"],
-                    "first_frame": summary["first_frame"],
-                    "last_frame": summary["last_frame"],
-                }
-            )
+    clusters = _cluster_summaries_by_x(
+        summaries, same_type_threshold, cross_type_threshold
+    )
 
     resolved: List[Dict] = []
     for cluster in clusters:
@@ -218,18 +183,24 @@ def cluster_row_tracks(
         gap_score = sum(
             m["hits"] * m["max_conf"] for m in cluster["members"] if m["type"] == "gap"
         )
-        obj_type = "gap" if gap_score > bush_score * 1.2 else "bush"
+        obj_type = "gap" if gap_score > bush_score * 1.35 else "bush"
         resolved.append(
             {
                 "median_x": cluster["anchor_x"],
                 "type": obj_type,
                 "bush_score": bush_score,
                 "gap_score": gap_score,
-                "first_frame": cluster["first_frame"],
-                "last_frame": cluster["last_frame"],
+                "first_frame": min(m["first_frame"] for m in cluster["members"]),
             }
         )
-    return sorted(resolved, key=lambda item: item["first_frame"])
+    return sorted(resolved, key=lambda item: item["median_x"])
+
+
+def _min_track_hits() -> Tuple[int, int]:
+    return (
+        max(2, _env_int("CV_MIN_BUSH_HITS", 2)),
+        max(3, _env_int("CV_MIN_GAP_HITS", 4)),
+    )
 
 
 def build_spatial_row_sequence(
@@ -238,15 +209,23 @@ def build_spatial_row_sequence(
     frame_interval: int = 4,
     processed_frames: int = 0,
 ) -> Tuple[List[str], List[Dict], int, int]:
-    min_bush, min_gap = _adaptive_min_track_hits(
-        bushes_positions, gaps_positions, processed_frames
-    )
+    del frame_interval, processed_frames
+    min_bush, min_gap = _min_track_hits()
+
+    bush_summaries = _summarize_positions(bushes_positions, "bush", min_bush)
+    gap_summaries = _summarize_positions(gaps_positions, "gap", min_gap)
+
+    all_xs = sorted(s["median_x"] for s in bush_summaries + gap_summaries)
+    same_type_threshold, _ = _merge_threshold_from_xs(all_xs) if len(all_xs) >= 2 else (50.0, 14.0)
+
+    bush_clusters = _cluster_summaries_by_x(bush_summaries, same_type_threshold, same_type_threshold)
+    gap_clusters = _cluster_summaries_by_x(gap_summaries, same_type_threshold, same_type_threshold)
+
     clusters = cluster_row_tracks(
         bushes_positions,
         gaps_positions,
         min_bush_hits=min_bush,
         min_gap_hits=min_gap,
-        frame_interval=frame_interval,
     )
     display_sequence = [c["type"] for c in clusters]
     sequence_details = [
@@ -259,8 +238,10 @@ def build_spatial_row_sequence(
         }
         for idx, item in enumerate(clusters)
     ]
-    bushes_count = sum(1 for item in clusters if item["type"] == "bush")
-    gaps_count = sum(1 for item in clusters if item["type"] == "gap")
+    bush_anchors = sorted(c["anchor_x"] for c in bush_clusters)
+    gap_anchors = sorted(c["anchor_x"] for c in gap_clusters)
+    bushes_count = len(_cluster_sorted_medians(bush_anchors)) if bush_anchors else 0
+    gaps_count = len(_cluster_sorted_medians(gap_anchors)) if gap_anchors else 0
     return display_sequence, sequence_details, bushes_count, gaps_count
 
 
@@ -902,7 +883,7 @@ class ONNXYOLODetector:
             and raw_bushes <= spatial_bushes + 5
             and raw_bushes >= int(spatial_bushes * 0.9)
         )
-        use_spatial = not stable_tracker or raw_bushes > max(int(spatial_bushes * 1.15), 50)
+        use_spatial = raw_total_tracks > spatial_threshold or not stable_tracker
 
         if use_spatial:
             display_sequence = spatial_display
@@ -982,9 +963,7 @@ class ONNXYOLODetector:
         processed_frames=0,
     ):
         row_spacing = self._calculate_row_spacing(bushes_positions)
-        min_bush, min_gap = _adaptive_min_track_hits(
-            bushes_positions, gaps_positions, processed_frames
-        )
+        min_bush, min_gap = _min_track_hits()
         _, _, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
             bushes_positions,
             gaps_positions,
