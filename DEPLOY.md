@@ -214,22 +214,26 @@ docker compose -f docker-compose.prod.yml exec cv curl -s http://127.0.0.1:8000/
 | Enhancement | CPU, мощный ПК | `CV_ENHANCE_FRAMES=true` на GPU → CPU bilateral **часы** | `false` (на GPU **игнорируется** в коде) |
 | GPU | CPU ONNX | GPU не используется или IO binding тормозил | `CV_USE_GPU=true` + `./deploy.sh` |
 | Параллелизм | 1 видео | 2–3 шарда делят GPU | `CV_MAX_CONCURRENT_VIDEOS=1`, `CV_JOB_CONCURRENCY=1` |
-| interval | 4 | 4 (но из .env мог быть другой) | `CV_FRAME_INTERVAL=4` |
+| interval | 4 | **6** (меньше кадров → ~1.5× быстрее) | `CV_FRAME_INTERVAL=6` |
 
-Рекомендуемый `.env` на GPU VPS (как old по скорости, точность сохраняется):
+Рекомендуемый `.env` на GPU VPS (скорость + точность):
 
 ```env
 CV_USE_GPU=true
 CV_DUMMY_INFERENCE=false
 CV_ENHANCE_FRAMES=false
-CV_FRAME_INTERVAL=4
+CV_FRAME_INTERVAL=6
 CV_GPU_IO_BINDING=false
+CV_SKIP_FRAME_DECODE=true
+CV_LIGHT_TRACKING=true
 CV_MAX_CONCURRENT_VIDEOS=1
 CV_JOB_CONCURRENCY=1
 CV_ORT_INTRA_THREADS=1
 ```
 
-Ожидаемо: **5–20 мин** на шард ~90 с (GPU RTX 3080), не 3–4 часа.
+Ещё быстрее (чуть грубее подсчёт): `CV_FRAME_INTERVAL=8` или `12`.
+
+Ожидаемо: **3–12 мин** на шард ~90 с (GPU RTX 3080), не 3–4 часа.
 
 Проверка:
 

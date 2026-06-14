@@ -311,6 +311,16 @@ def _env_skip_frame_decode() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _env_light_tracking() -> bool:
+    """Меньше метаданных в цикле кадров (row_sequence) — быстрее на GPU без enhancement."""
+    raw = os.getenv("CV_LIGHT_TRACKING", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return _env_use_gpu() and not _env_enhance_frames()
+
+
 def _env_use_gpu() -> bool:
     raw = os.getenv("CV_USE_GPU", "").strip().lower()
     if raw in ("0", "false", "no", "off"):
@@ -323,6 +333,9 @@ def _env_use_gpu() -> bool:
 def _build_session_options() -> ort.SessionOptions:
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    so.enable_mem_pattern = True
+    so.enable_cpu_mem_arena = True
+    so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     default_intra = 1 if _env_use_gpu() else 4
     so.intra_op_num_threads = max(1, _env_int("CV_ORT_INTRA_THREADS", default_intra))
     so.inter_op_num_threads = max(1, _env_int("CV_ORT_INTER_THREADS", 1))
@@ -337,6 +350,7 @@ def _cuda_provider_options() -> dict:
         "device_id": _env_int("CV_CUDA_DEVICE_ID", 0),
         "arena_extend_strategy": "kNextPowerOfTwo",
         "cudnn_conv_algo_search": algo,
+        "cudnn_conv_use_max_workspace": "1",
         "do_copy_in_default_stream": True,
     }
     gpu_mem_mb = _env_int("CV_CUDA_GPU_MEM_MB", 0)
@@ -427,6 +441,11 @@ class ONNXYOLODetector:
         else:
             self.enhancer = None
 
+        self._input_buffer = np.empty(
+            (1, 3, self.input_height, self.input_width), dtype=np.float32
+        )
+        self._light_tracking = _env_light_tracking()
+        self._prune_every = max(1, _env_int("CV_TRACK_PRUNE_EVERY", 5))
         self._setup_gpu_iobinding()
 
     def _setup_gpu_iobinding(self) -> None:
@@ -455,12 +474,14 @@ class ONNXYOLODetector:
         return 1.0 / (1.0 + np.exp(-x))
 
     def preprocess(self, image: np.ndarray) -> np.ndarray:
-        image = cv2.resize(image, (self.input_width, self.input_height))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = image.astype(np.float32) / 255.0
-        image = np.transpose(image, (2, 0, 1))
-        image = np.expand_dims(image, axis=0)
-        return image
+        resized = cv2.resize(
+            image,
+            (self.input_width, self.input_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        self._input_buffer[0][:] = rgb.transpose(2, 0, 1).astype(np.float32) * (1.0 / 255.0)
+        return self._input_buffer
 
     def postprocess(self, outputs: List[np.ndarray], orig_shape: Tuple[int, int]) -> List[Dict]:
         """
@@ -494,31 +515,46 @@ class ONNXYOLODetector:
         confidences = probs[np.arange(probs.shape[0], dtype=np.int64), class_ids]
         mask = confidences >= self.conf_threshold
         idxs = np.nonzero(mask)[0]
+        if idxs.size == 0:
+            return []
+
+        sel_boxes = boxes[idxs]
+        sel_class = class_ids[idxs]
+        sel_conf = confidences[idxs]
+
+        sx = orig_w / self.input_width
+        sy = orig_h / self.input_height
+        xc = sel_boxes[:, 0]
+        yc = sel_boxes[:, 1]
+        bw = sel_boxes[:, 2]
+        bh = sel_boxes[:, 3]
+
+        x1 = np.clip((xc - bw / 2) * sx, 0.0, max(0.0, orig_w - 1.0))
+        y1 = np.clip((yc - bh / 2) * sy, 0.0, max(0.0, orig_h - 1.0))
+        x2 = np.clip((xc + bw / 2) * sx, 0.0, max(0.0, orig_w - 1.0))
+        y2 = np.clip((yc + bh / 2) * sy, 0.0, max(0.0, orig_h - 1.0))
+        valid = (x2 > x1) & (y2 > y1)
+        if not np.any(valid):
+            return []
+
+        idxs = idxs[valid]
+        sel_class = sel_class[valid]
+        sel_conf = sel_conf[valid]
+        x1 = x1[valid]
+        y1 = y1[valid]
+        x2 = x2[valid]
+        y2 = y2[valid]
 
         detections = []
-        for i in idxs:
-            xc, yc, w, h = boxes[i]
-            class_id = int(class_ids[i])
-            confidence = float(confidences[i])
-
-            x1 = (xc - w / 2) * orig_w / self.input_width
-            y1 = (yc - h / 2) * orig_h / self.input_height
-            x2 = (xc + w / 2) * orig_w / self.input_width
-            y2 = (yc + h / 2) * orig_h / self.input_height
-
-            x1 = float(np.clip(x1, 0.0, max(0.0, orig_w - 1.0)))
-            y1 = float(np.clip(y1, 0.0, max(0.0, orig_h - 1.0)))
-            x2 = float(np.clip(x2, 0.0, max(0.0, orig_w - 1.0)))
-            y2 = float(np.clip(y2, 0.0, max(0.0, orig_h - 1.0)))
-            if x2 <= x1 or y2 <= y1:
-                continue
-
+        name_map = self.class_names
+        for i in range(idxs.shape[0]):
+            class_id = int(sel_class[i])
             detections.append(
                 {
-                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                    "confidence": confidence,
+                    "bbox": [float(x1[i]), float(y1[i]), float(x2[i]), float(y2[i])],
+                    "confidence": float(sel_conf[i]),
                     "class_id": class_id,
-                    "class_name": self.class_names.get(class_id, f"class_{class_id}"),
+                    "class_name": name_map.get(class_id, f"class_{class_id}"),
                 }
             )
 
@@ -528,20 +564,36 @@ class ONNXYOLODetector:
         if not detections:
             return []
 
-        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
-        keep = []
+        by_class: Dict[int, List[Tuple[int, Dict]]] = defaultdict(list)
+        for idx, det in enumerate(detections):
+            by_class[det["class_id"]].append((idx, det))
 
-        while detections:
-            best = detections.pop(0)
-            keep.append(best)
-            detections = [
-                d
-                for d in detections
-                if d["class_id"] != best["class_id"]
-                or self.iou(best["bbox"], d["bbox"]) < self.iou_threshold
-            ]
+        keep_indices: List[int] = []
+        for items in by_class.values():
+            boxes = []
+            scores = []
+            for _, det in items:
+                x1, y1, x2, y2 = det["bbox"]
+                boxes.append([x1, y1, x2 - x1, y2 - y1])
+                scores.append(det["confidence"])
+            indices = cv2.dnn.NMSBoxes(
+                boxes,
+                scores,
+                self.conf_threshold,
+                self.iou_threshold,
+            )
+            if len(indices) == 0:
+                continue
+            if isinstance(indices, np.ndarray):
+                indices = indices.flatten().tolist()
+            else:
+                indices = [
+                    int(i[0]) if isinstance(i, (list, tuple, np.ndarray)) else int(i)
+                    for i in indices
+                ]
+            keep_indices.extend(items[i][0] for i in indices)
 
-        return keep
+        return [detections[i] for i in keep_indices]
 
     def iou(self, box1: List[float], box2: List[float]) -> float:
         x1 = max(box1[0], box2[0])
@@ -591,7 +643,8 @@ class ONNXYOLODetector:
         self.next_track_id = 0
 
     def track_detections(self, detections: List[Dict]) -> List[Dict]:
-        self._prune_stale_tracks()
+        if self.current_frame % self._prune_every == 0:
+            self._prune_stale_tracks()
 
         if not detections:
             # Не сбрасываем track_history: на пустом кадре иначе next_track_id
@@ -674,7 +727,7 @@ class ONNXYOLODetector:
             enhanced_frame = frame
 
         orig_shape = enhanced_frame.shape[:2]
-        input_tensor = np.ascontiguousarray(self.preprocess(enhanced_frame))
+        input_tensor = self.preprocess(enhanced_frame)
         outputs = self._run_inference(input_tensor)
         detections = self.postprocess(outputs, orig_shape)
 
@@ -757,14 +810,15 @@ class ONNXYOLODetector:
 
         start_time = time.time()
         report_progress(force=True)
+        collect_row_sequence = not self._light_tracking
 
         while True:
-            if frame_count % interval == 0:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                detections = self.detect_frame(frame, frame_count)
+            ret, frame = cap.read()
+            if not ret:
+                break
 
+            if frame_count % interval == 0:
+                detections = self.detect_frame(frame, frame_count)
                 detections.sort(key=lambda d: (d["bbox"][0] + d["bbox"][2]) / 2)
 
                 for det in detections:
@@ -774,7 +828,6 @@ class ONNXYOLODetector:
 
                     if det["class_name"] == "grape_bush":
                         unique_bushes.add(det["track_id"])
-
                         bushes_positions.append(
                             {
                                 "track_id": det["track_id"],
@@ -784,8 +837,7 @@ class ONNXYOLODetector:
                                 "confidence": det["confidence"],
                             }
                         )
-
-                        if det["track_id"] not in tracked_objects:
+                        if collect_row_sequence and det["track_id"] not in tracked_objects:
                             tracked_objects[det["track_id"]] = {
                                 "order": len(row_sequence) + 1,
                                 "type": "bush",
@@ -809,8 +861,7 @@ class ONNXYOLODetector:
                                 "confidence": det["confidence"],
                             }
                         )
-
-                        if det["track_id"] not in tracked_objects:
+                        if collect_row_sequence and det["track_id"] not in tracked_objects:
                             tracked_objects[det["track_id"]] = {
                                 "order": len(row_sequence) + 1,
                                 "type": "gap",
@@ -825,15 +876,26 @@ class ONNXYOLODetector:
 
                 processed_frames += 1
                 report_progress()
-            elif skip_decode:
-                if not cap.grab():
+
+            frame_count += 1
+
+            if skip_decode and interval > 1:
+                for _ in range(interval - 1):
+                    if not cap.grab():
+                        ret = False
+                        break
+                    frame_count += 1
+                if not ret:
                     break
-            else:
-                ret, _ = cap.read()
+            elif not skip_decode and interval > 1:
+                for _ in range(interval - 1):
+                    if not cap.read()[0]:
+                        ret = False
+                        break
+                    frame_count += 1
                 if not ret:
                     break
 
-            frame_count += 1
             if total_frames <= 0 and frame_count % 120 == 0:
                 total_frames = frame_count
 
@@ -851,6 +913,13 @@ class ONNXYOLODetector:
                 )
             )
 
+        spatial_display, spatial_details, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
+            bushes_positions,
+            gaps_positions,
+            frame_interval=interval,
+            processed_frames=processed_frames,
+        )
+
         statistics = self.calculate_statistics(
             unique_bushes,
             unique_gaps,
@@ -860,6 +929,8 @@ class ONNXYOLODetector:
             fps,
             interval,
             processed_frames,
+            spatial_bushes=spatial_bushes,
+            spatial_gaps=spatial_gaps,
         )
 
         raw_bushes = len(unique_bushes)
@@ -870,15 +941,10 @@ class ONNXYOLODetector:
         track_display_sequence = [
             item["type"] for item in sorted(row_sequence, key=lambda x: x["order"])
         ]
-        spatial_display, spatial_details, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
-            bushes_positions,
-            gaps_positions,
-            frame_interval=interval,
-            processed_frames=processed_frames,
-        )
 
         stable_tracker = (
-            raw_total_tracks <= 90
+            collect_row_sequence
+            and raw_total_tracks <= 90
             and spatial_bushes > 0
             and raw_bushes <= spatial_bushes + 5
             and raw_bushes >= int(spatial_bushes * 0.9)
@@ -961,15 +1027,18 @@ class ONNXYOLODetector:
         fps,
         frame_interval=4,
         processed_frames=0,
+        spatial_bushes: Optional[int] = None,
+        spatial_gaps: Optional[int] = None,
     ):
         row_spacing = self._calculate_row_spacing(bushes_positions)
         min_bush, min_gap = _min_track_hits()
-        _, _, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
-            bushes_positions,
-            gaps_positions,
-            frame_interval=frame_interval,
-            processed_frames=processed_frames,
-        )
+        if spatial_bushes is None or spatial_gaps is None:
+            _, _, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
+                bushes_positions,
+                gaps_positions,
+                frame_interval=frame_interval,
+                processed_frames=processed_frames,
+            )
 
         return {
             "bushes_count": spatial_bushes,
@@ -986,6 +1055,7 @@ class ONNXYOLODetector:
                 "spatial_gaps": spatial_gaps,
                 "min_bush_hits": min_bush,
                 "min_gap_hits": min_gap,
+                "light_tracking": self._light_tracking,
                 "enhancement_enabled": self.enhance_frames,
             },
         }
