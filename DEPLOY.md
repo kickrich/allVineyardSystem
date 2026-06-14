@@ -422,6 +422,67 @@ docker compose up -d          # только MinIO + CV
 # + rails s в backend и vineyardApp, npm run dev во frontend
 ```
 
+## 502 Bad Gateway (nginx)
+
+Nginx отвечает, но **upstream не доступен** (контейнер не запущен, упал или ещё стартует).
+
+### 1. Статус контейнеров (на VPS)
+
+```bash
+cd /opt/allVineyardSystem
+docker compose -f docker-compose.prod.yml --env-file .env ps
+```
+
+Нужно **Up (healthy)** у `frontend`, `backend`, `vineyard-app`, `nginx`.  
+Если `Restarting`, `Exit` или `unhealthy` — смотрите логи этого сервиса.
+
+### 2. Логи
+
+```bash
+docker compose -f docker-compose.prod.yml logs frontend --tail 40
+docker compose -f docker-compose.prod.yml logs backend --tail 40
+docker compose -f docker-compose.prod.yml logs vineyard-app --tail 40
+docker compose -f docker-compose.prod.yml logs nginx --tail 20
+```
+
+### 3. Быстрое восстановление
+
+```bash
+cd /opt/allVineyardSystem
+git pull origin allVineyardSystem-deploy   # если ещё не обновляли
+
+# GPU — добавьте -f docker-compose.gpu.yml к командам ниже, если CV_USE_GPU=true
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build frontend backend vineyard-app nginx
+```
+
+Если `vineyard-app` не собирается (OOM / EOF при build):
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env build vineyard-app
+docker compose -f docker-compose.prod.yml --env-file .env up -d vineyard-app nginx
+```
+
+### 4. Проверка изнутри Docker-сети
+
+```bash
+docker compose -f docker-compose.prod.yml exec nginx wget -q -O- http://frontend:80/ | head -c 200
+docker compose -f docker-compose.prod.yml exec nginx wget -q -O- http://backend:80/up
+```
+
+Если здесь ошибка — проблема в контейнере, не в nginx снаружи.
+
+### 5. Частые причины
+
+| Симптом | Причина |
+|---------|---------|
+| Только `nginx` в статусе Up | Частичный деплой или build упал |
+| `backend` Restarting | Неверный `BACKEND_SECRET_KEY_BASE`, БД |
+| `vineyard-app` Restarting | Неверный `VINEYARD_SECRET_KEY_BASE`, нет postgres |
+| `frontend` Exit | Ошибка сборки образа |
+| 502 только первые 1–2 мин | Rails ещё стартует — подождите или обновите compose (healthcheck) |
+
+`PUBLIC_URL` в `.env` должен совпадать с URL в браузере (например `http://195.209.216.226`, без лишнего порта, если nginx на :80).
+
 ## Устранение проблем
 
 | Симптом | Решение |
@@ -430,6 +491,6 @@ docker compose up -d          # только MinIO + CV
 | `InvalidMessage` / `key must be 16 bytes` | Удалите `RAILS_MASTER_KEY*` из `.env`. Задайте только `BACKEND_SECRET_KEY_BASE` и `VINEYARD_SECRET_KEY_BASE` через `openssl rand -hex 64`. Пересоберите: `build --no-cache backend vineyard-app` |
 | backend не стартует | `docker compose logs backend` — проверьте `SECRET_KEY_BASE` (128 hex-символов, не master.key) |
 | CV не отвечает | `docker compose logs cv` |
-| 502 от nginx | Дождитесь запуска backend/vineyard-app: `docker compose ps` |
+| 502 от nginx | См. раздел **502 Bad Gateway** ниже |
 | Видео в MinIO, нет в vineyardApp | `media_uploads:retry_pipeline`, проверьте `vineyard-app` и `cv` в `docker compose ps` |
 | vineyardApp без стилей | Пересоберите vineyard-app (`RAILS_RELATIVE_URL_ROOT=/vineyard`), URL: `/vineyard/` |
