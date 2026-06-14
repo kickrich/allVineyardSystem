@@ -7,17 +7,20 @@ from collections import defaultdict
 import os
 import time
 import threading
+import queue
+from contextlib import contextmanager
 from pathlib import Path
 
 from image_enhancement import VineTrunkEnhancer
 from progress import build_progress_payload
 
 _logger = logging.getLogger("cvservice")
-# Один process_video за раз — поток progress API в main.py.
-_PROCESS_LOCK = threading.Lock()
-
 # Корень cvService/ — путь к ONNX не зависит от cwd при запуске uvicorn.
 _CV_ROOT = Path(__file__).resolve().parent.parent
+
+
+def max_concurrent_videos() -> int:
+    return max(1, min(_env_int("CV_MAX_CONCURRENT_VIDEOS", 1), 8))
 
 
 def default_onnx_path() -> str:
@@ -431,8 +434,7 @@ class ONNXYOLODetector:
         frame_interval: int = 4,
         on_progress: Optional[Callable[[Dict], None]] = None,
     ) -> Dict:
-        with _PROCESS_LOCK:
-            return self._process_video_impl(video_path, frame_interval, on_progress)
+        return self._process_video_impl(video_path, frame_interval, on_progress)
 
     def _process_video_impl(
         self,
@@ -789,22 +791,22 @@ class DummyVideoDetector:
 
 
 _detector = None
+_detector_pool: Optional["DetectorPool"] = None
 
 
-def get_detector(model_path: Optional[str] = None, enhance_frames: Optional[bool] = None):
-    global _detector
-    if _detector is not None:
-        return _detector
+def _resolve_model_path(model_path: Optional[str] = None) -> str:
+    raw = (model_path or default_onnx_path()).strip()
+    return raw if os.path.isabs(raw) else str(_CV_ROOT / raw)
 
+
+def _build_detector(model_path: Optional[str] = None, enhance_frames: Optional[bool] = None):
     if enhance_frames is None:
         enhance_frames = _env_enhance_frames()
 
-    raw = (model_path or default_onnx_path()).strip()
-    path = raw if os.path.isabs(raw) else str(_CV_ROOT / raw)
+    path = _resolve_model_path(model_path)
 
     if os.path.isfile(path):
-        _detector = ONNXYOLODetector(path, enhance_frames)
-        return _detector
+        return ONNXYOLODetector(path, enhance_frames)
 
     if _env_truthy("CV_STRICT_MODEL"):
         raise FileNotFoundError(f"Модель не найдена: {path}")
@@ -820,5 +822,64 @@ def get_detector(model_path: Optional[str] = None, enhance_frames: Optional[bool
             path,
         )
 
-    _detector = DummyVideoDetector()
+    return DummyVideoDetector()
+
+
+class DetectorPool:
+    """Отдельный ONNX+трекер на каждое параллельное видео (без гонок track_id)."""
+
+    def __init__(self, size: int):
+        self._size = max(1, size)
+        self._slots = threading.Semaphore(self._size)
+        self._available: queue.Queue = queue.Queue()
+
+    def warmup(self) -> None:
+        for _ in range(self._size):
+            self._available.put(_build_detector())
+        _logger.info("Detector pool ready: size=%s", self._size)
+
+    @contextmanager
+    def borrow(self):
+        self._slots.acquire()
+        detector = None
+        created = False
+        try:
+            try:
+                detector = self._available.get_nowait()
+            except queue.Empty:
+                detector = _build_detector()
+                created = True
+            yield detector
+        finally:
+            if detector is not None:
+                if hasattr(detector, "track_history"):
+                    detector.track_history.clear()
+                    detector.next_track_id = 0
+                if not created:
+                    self._available.put(detector)
+            self._slots.release()
+
+
+def init_detector_pool(size: Optional[int] = None) -> None:
+    global _detector_pool
+    pool_size = max(1, min(size or max_concurrent_videos(), 8))
+    _detector_pool = DetectorPool(pool_size)
+    _detector_pool.warmup()
+
+
+@contextmanager
+def borrow_detector():
+    global _detector_pool
+    if _detector_pool is None:
+        init_detector_pool()
+    with _detector_pool.borrow() as detector:
+        yield detector
+
+
+def get_detector(model_path: Optional[str] = None, enhance_frames: Optional[bool] = None):
+    global _detector
+    if _detector is not None:
+        return _detector
+
+    _detector = _build_detector(model_path, enhance_frames)
     return _detector

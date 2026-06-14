@@ -24,7 +24,14 @@ import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
-from inference import get_detector, ONNXYOLODetector, default_frame_interval
+from inference import (
+    get_detector,
+    ONNXYOLODetector,
+    borrow_detector,
+    init_detector_pool,
+    max_concurrent_videos,
+    default_frame_interval,
+)
 from progress import clear_shard_progress, get_shard_progress, set_shard_progress
 
 app = FastAPI(title="Vineyard CV Service")
@@ -34,6 +41,7 @@ _DEFAULT_FRAME_INTERVAL = default_frame_interval()
 T = TypeVar("T")
 
 _video_semaphore: asyncio.Semaphore | None = None
+_video_executor: ThreadPoolExecutor | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -46,16 +54,12 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def max_concurrent_videos() -> int:
-    # Один ONNX-детектор на процесс; параллельные потоки ломают track_id (тысячи «кустов»).
-    return 1
+def max_concurrent_videos_limit() -> int:
+    return max_concurrent_videos()
 
 
 def uvicorn_workers() -> int:
     return max(1, _env_int("CV_UVICORN_WORKERS", 1))
-
-
-_video_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cv-worker")
 
 
 async def run_video_task(fn: Callable[..., T], *args, **kwargs) -> T:
@@ -66,34 +70,44 @@ async def run_video_task(fn: Callable[..., T], *args, **kwargs) -> T:
     async with _video_semaphore:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            _video_executor,
+            _video_executor_workers(),
             lambda: fn(*args, **kwargs),
         )
+
+
+def _video_executor_workers() -> ThreadPoolExecutor:
+    global _video_executor
+    if _video_executor is None:
+        workers = max_concurrent_videos_limit()
+        _video_executor = ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="cv-worker",
+        )
+    return _video_executor
 
 
 @app.on_event("startup")
 async def startup_event():
     global _video_semaphore
-    _video_semaphore = asyncio.Semaphore(max_concurrent_videos())
+    parallel = max_concurrent_videos()
+    _video_semaphore = asyncio.Semaphore(parallel)
+    _video_executor_workers()
+    init_detector_pool(parallel)
 
     logger.info(
         "CV concurrency: uvicorn_workers=%s max_concurrent_videos=%s (max ~%s videos in parallel)",
         uvicorn_workers(),
-        max_concurrent_videos(),
-        uvicorn_workers() * max_concurrent_videos(),
+        parallel,
+        uvicorn_workers() * parallel,
     )
-
-    try:
-        get_detector()
-    except FileNotFoundError as e:
-        logger.warning("Модель не загружена при старте: %s", e)
-    except Exception as e:
-        logger.warning("Инициализация детектора при старте: %s", e)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    _video_executor.shutdown(wait=False, cancel_futures=True)
+    global _video_executor
+    if _video_executor is not None:
+        _video_executor.shutdown(wait=False, cancel_futures=True)
+        _video_executor = None
 
 @app.get("/")
 async def root():
@@ -123,6 +137,7 @@ async def root():
             "uvicorn_workers": uvicorn_workers(),
             "max_concurrent_videos": max_concurrent_videos(),
             "max_parallel_videos": uvicorn_workers() * max_concurrent_videos(),
+            "cv_job_concurrency_hint": os.getenv("CV_JOB_CONCURRENCY", ""),
         },
     }
 
@@ -308,25 +323,24 @@ def process_video_file(
     if frame_interval is None:
         frame_interval = 4
     try:
-        detector = get_detector()
+        with borrow_detector() as detector:
+            if shard_id is not None:
+                clear_shard_progress(shard_id)
+
+            def on_progress(data: dict) -> None:
+                if shard_id is not None:
+                    set_shard_progress(shard_id, data)
+
+            results = detector.process_video(
+                video_path,
+                frame_interval=frame_interval,
+                on_progress=on_progress if shard_id is not None else None,
+            )
     except FileNotFoundError as e:
         raise RuntimeError(
             "Модель ONNX не найдена (включён CV_STRICT_MODEL): положите cvService/models/best.onnx "
             "или уберите CV_STRICT_MODEL для режима заглушки."
         ) from e
-
-    if shard_id is not None:
-        clear_shard_progress(shard_id)
-
-    def on_progress(data: dict) -> None:
-        if shard_id is not None:
-            set_shard_progress(shard_id, data)
-
-    results = detector.process_video(
-        video_path,
-        frame_interval=frame_interval,
-        on_progress=on_progress if shard_id is not None else None,
-    )
 
     return {
         "bushes_count": results["statistics"]["bushes_count"],

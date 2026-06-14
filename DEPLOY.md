@@ -254,18 +254,32 @@ CV_ENHANCE_FRAMES=false      # без тяжёлого улучшения кад
 CV_ORT_INTRA_THREADS=4
 ```
 
-**Параллелизм** (в `.env`, пересборка `cv` + `vineyard-app`):
+**Параллелизм — несколько шардов одновременно** (в `.env`, пересборка `cv` + `vineyard-app`):
 
 ```env
-CV_UVICORN_WORKERS=1           # процессы uvicorn (каждый держит копию ONNX в RAM)
-CV_MAX_CONCURRENT_VIDEOS=1     # видео одновременно в одном worker
-CV_JOB_CONCURRENCY=1           # сколько shard-джобов vineyardApp шлёт в CV параллельно
+CV_MAX_CONCURRENT_VIDEOS=2   # сколько видео CV обрабатывает параллельно (пул ONNX)
+CV_JOB_CONCURRENCY=2         # столько же — vineyardApp шлёт столько shard-джобов
+CV_UVICORN_WORKERS=1         # держите 1; параллелизм через пул детекторов
 ```
 
-Максимум одновременных видео в CV ≈ `CV_UVICORN_WORKERS × CV_MAX_CONCURRENT_VIDEOS`.  
-Проверка: `curl -s http://127.0.0.1:8000/` (из контейнера cv) — поле `concurrency`.
+На **GPU (RTX 3080)** с `docker-compose.gpu.yml` по умолчанию уже `2×2`. Для 3 шардов сразу:
 
-На VPS **4 CPU / 6 GB** безопасно `1/1/1`. Для 2 параллельных видео попробуйте `CV_UVICORN_WORKERS=2`, `CV_MAX_CONCURRENT_VIDEOS=1`, `CV_JOB_CONCURRENCY=2` и следите за RAM.
+```env
+CV_MAX_CONCURRENT_VIDEOS=3
+CV_JOB_CONCURRENCY=3
+CV_ORT_INTRA_THREADS=1       # меньше потоков на детектор при нескольких видео
+```
+
+Максимум одновременных видео ≈ `CV_UVICORN_WORKERS × CV_MAX_CONCURRENT_VIDEOS` (лимит пула — 8).  
+`CV_JOB_CONCURRENCY` должен быть **≤ CV_MAX_CONCURRENT_VIDEOS**, иначе лишние джобы будут ждать в очереди.
+
+Проверка:
+
+```bash
+docker compose -f docker-compose.prod.yml exec cv python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/').read().decode())"
+```
+
+На VPS **4 CPU / 6 GB без GPU** безопасно `1/1/1`.
 
 Перезапуск:
 
