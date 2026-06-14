@@ -15,6 +15,187 @@ from image_enhancement import VineTrunkEnhancer
 from progress import build_progress_payload
 
 _logger = logging.getLogger("cvservice")
+
+
+def _track_median_xs(positions: List[Dict]) -> List[float]:
+    if not positions:
+        return []
+
+    by_track: Dict[int, List[float]] = defaultdict(list)
+    for p in positions:
+        by_track[int(p["track_id"])].append(float(p["x"]))
+    return sorted(float(np.median(xs)) for xs in by_track.values())
+
+
+def _cluster_sorted_medians(medians: List[float]) -> List[float]:
+    """Сливает близкие median-x в один объект; возвращает якоря кластеров."""
+    if not medians:
+        return []
+    if len(medians) == 1:
+        return medians
+
+    gaps = [medians[i + 1] - medians[i] for i in range(len(medians) - 1)]
+    positive_gaps = [g for g in gaps if g > 1.0]
+    if positive_gaps:
+        typical_gap = float(np.median(positive_gaps))
+        merge_threshold = max(20.0, min(100.0, typical_gap * 0.45))
+    else:
+        merge_threshold = 40.0
+
+    anchors = [medians[0]]
+    cluster_anchor = medians[0]
+    for x in medians[1:]:
+        if x - cluster_anchor > merge_threshold:
+            anchors.append(x)
+            cluster_anchor = x
+    return anchors
+
+
+def _summarize_tracks(
+    bushes_positions: List[Dict],
+    gaps_positions: List[Dict],
+    min_bush_hits: int = 2,
+    min_gap_hits: int = 3,
+) -> List[Dict]:
+    """Один summary на track_id; отсекаем одноразовые ложные детекции."""
+    by_track: Dict[int, Dict] = {}
+
+    def ingest(positions: List[Dict], obj_type: str) -> None:
+        for p in positions:
+            track_id = int(p["track_id"])
+            entry = by_track.setdefault(
+                track_id,
+                {
+                    "track_id": track_id,
+                    "type": obj_type,
+                    "xs": [],
+                    "confs": [],
+                    "frames": set(),
+                },
+            )
+            entry["type"] = obj_type
+            entry["xs"].append(float(p["x"]))
+            entry["confs"].append(float(p["confidence"]))
+            entry["frames"].add(int(p["frame"]))
+
+    ingest(bushes_positions, "bush")
+    ingest(gaps_positions, "gap")
+
+    summaries: List[Dict] = []
+    for entry in by_track.values():
+        hits = len(entry["frames"])
+        min_hits = min_gap_hits if entry["type"] == "gap" else min_bush_hits
+        if hits < min_hits:
+            continue
+        summaries.append(
+            {
+                "track_id": entry["track_id"],
+                "median_x": float(np.median(entry["xs"])),
+                "type": entry["type"],
+                "hits": hits,
+                "max_conf": float(max(entry["confs"])),
+                "first_frame": min(entry["frames"]),
+            }
+        )
+    return sorted(summaries, key=lambda s: s["median_x"])
+
+
+def _merge_threshold_from_xs(xs: List[float]) -> Tuple[float, float]:
+    """Порог слияния дубликатов track_id и более жёсткий порог bush+gap в одной точке."""
+    if len(xs) < 2:
+        return 50.0, 14.0
+
+    gaps = [xs[i + 1] - xs[i] for i in range(len(xs) - 1) if xs[i + 1] - xs[i] > 1.0]
+    if not gaps:
+        return 50.0, 14.0
+
+    typical_gap = float(np.median(gaps))
+    same_type = float(np.clip(typical_gap * 0.58, 28.0, 110.0))
+    cross_type = min(16.0, same_type * 0.28)
+    return same_type, cross_type
+
+
+def cluster_row_tracks(
+    bushes_positions: List[Dict],
+    gaps_positions: List[Dict],
+) -> List[Dict]:
+    """
+    Единая кластеризация кустов и пропусков по X.
+    Склеивает дубли track_id при сбое IoU-матчинга (тысячи ID → ~40–80 объектов).
+    """
+    summaries = _summarize_tracks(bushes_positions, gaps_positions)
+    if not summaries:
+        return []
+
+    xs = sorted(s["median_x"] for s in summaries)
+    same_type_threshold, cross_type_threshold = _merge_threshold_from_xs(xs)
+
+    clusters: List[Dict] = []
+    for summary in summaries:
+        if not clusters:
+            clusters.append({"members": [summary], "anchor_x": summary["median_x"]})
+            continue
+
+        cluster = clusters[-1]
+        dist = summary["median_x"] - cluster["anchor_x"]
+        last_type = cluster["members"][-1]["type"]
+        same_type = summary["type"] == last_type
+        threshold = same_type_threshold if same_type else cross_type_threshold
+
+        if dist <= threshold:
+            cluster["members"].append(summary)
+            cluster["anchor_x"] = float(
+                np.median([m["median_x"] for m in cluster["members"]])
+            )
+        else:
+            clusters.append({"members": [summary], "anchor_x": summary["median_x"]})
+
+    resolved: List[Dict] = []
+    for cluster in clusters:
+        bush_score = sum(
+            m["hits"] * m["max_conf"] for m in cluster["members"] if m["type"] == "bush"
+        )
+        gap_score = sum(
+            m["hits"] * m["max_conf"] for m in cluster["members"] if m["type"] == "gap"
+        )
+        obj_type = "gap" if gap_score > bush_score * 1.2 else "bush"
+        resolved.append(
+            {
+                "median_x": cluster["anchor_x"],
+                "type": obj_type,
+                "bush_score": bush_score,
+                "gap_score": gap_score,
+                "first_frame": min(m["first_frame"] for m in cluster["members"]),
+            }
+        )
+    return sorted(resolved, key=lambda item: item["median_x"])
+
+
+def build_spatial_row_sequence(
+    bushes_positions: List[Dict],
+    gaps_positions: List[Dict],
+) -> Tuple[List[str], List[Dict], int, int]:
+    clusters = cluster_row_tracks(bushes_positions, gaps_positions)
+    display_sequence = [c["type"] for c in clusters]
+    sequence_details = [
+        {
+            "position": idx + 1,
+            "type": item["type"],
+            "median_x": item["median_x"],
+            "bush_score": item["bush_score"],
+            "gap_score": item["gap_score"],
+        }
+        for idx, item in enumerate(clusters)
+    ]
+    bushes_count = sum(1 for item in clusters if item["type"] == "bush")
+    gaps_count = sum(1 for item in clusters if item["type"] == "gap")
+    return display_sequence, sequence_details, bushes_count, gaps_count
+
+
+def _spatial_count_threshold() -> int:
+    return max(40, _env_int("CV_SPATIAL_COUNT_THRESHOLD", 120))
+
+
 # Корень cvService/ — путь к ONNX не зависит от cwd при запуске uvicorn.
 _CV_ROOT = Path(__file__).resolve().parent.parent
 
@@ -162,9 +343,13 @@ class ONNXYOLODetector:
         }
 
         self.track_history = defaultdict(list)
+        self.track_classes: Dict[int, str] = {}
         self.next_track_id = 0
         self.max_history = 30
         self.max_stale_frames = _env_int("CV_TRACK_STALE_FRAMES", 120)
+        self.track_match_iou = float(
+            np.clip(_env_int("CV_TRACK_IOU_MATCH", 20) / 100.0, 0.05, 0.6)
+        )
 
         self.enhance_frames = enhance_frames
         self._cuda_device_id = _env_int("CV_CUDA_DEVICE_ID", 0)
@@ -290,28 +475,20 @@ class ONNXYOLODetector:
         if not detections:
             return []
 
-        boxes = []
-        scores = []
-        for det in detections:
-            x1, y1, x2, y2 = det["bbox"]
-            boxes.append([x1, y1, x2 - x1, y2 - y1])
-            scores.append(det["confidence"])
+        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
+        keep = []
 
-        indices = cv2.dnn.NMSBoxes(
-            boxes,
-            scores,
-            self.conf_threshold,
-            self.iou_threshold,
-        )
-        if len(indices) == 0:
-            return []
+        while detections:
+            best = detections.pop(0)
+            keep.append(best)
+            detections = [
+                d
+                for d in detections
+                if d["class_id"] != best["class_id"]
+                or self.iou(best["bbox"], d["bbox"]) < self.iou_threshold
+            ]
 
-        if isinstance(indices, np.ndarray):
-            indices = indices.flatten().tolist()
-        else:
-            indices = [int(i[0]) if isinstance(i, (list, tuple, np.ndarray)) else int(i) for i in indices]
-
-        return [detections[i] for i in indices]
+        return keep
 
     def iou(self, box1: List[float], box2: List[float]) -> float:
         x1 = max(box1[0], box2[0])
@@ -327,11 +504,38 @@ class ONNXYOLODetector:
 
         return intersection / union if union > 0 else 0
 
+    @staticmethod
+    def _bbox_center(bbox: List[float]) -> Tuple[float, float]:
+        return (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+
+    def track_match_score(self, track_bbox: List[float], det_bbox: List[float]) -> float:
+        iou = self.iou(track_bbox, det_bbox)
+        if iou >= self.track_match_iou:
+            return iou
+
+        tcx, tcy = self._bbox_center(track_bbox)
+        dcx, dcy = self._bbox_center(det_bbox)
+        ref_w = max(track_bbox[2] - track_bbox[0], det_bbox[2] - det_bbox[0], 24.0)
+        x_dist = abs(dcx - tcx)
+        y_dist = abs(dcy - tcy)
+
+        # Камера едет вдоль ряда: bbox смещается по X, Y почти стабилен.
+        if y_dist <= ref_w * 0.9 and x_dist <= ref_w * 3.0:
+            x_score = max(0.0, 1.0 - x_dist / (ref_w * 3.0))
+            return max(iou, x_score * 0.9)
+        return iou
+
     def _prune_stale_tracks(self) -> None:
         for track_id in list(self.track_history.keys()):
             last_frame = self.track_history[track_id][-1]["frame"]
             if self.current_frame - last_frame > self.max_stale_frames:
                 del self.track_history[track_id]
+                self.track_classes.pop(track_id, None)
+
+    def reset_tracker(self) -> None:
+        self.track_history.clear()
+        self.track_classes.clear()
+        self.next_track_id = 0
 
     def track_detections(self, detections: List[Dict]) -> List[Dict]:
         self._prune_stale_tracks()
@@ -344,6 +548,7 @@ class ONNXYOLODetector:
         if not self.track_history:
             for det in detections:
                 det["track_id"] = self.next_track_id
+                self.track_classes[self.next_track_id] = det["class_name"]
                 self.track_history[self.next_track_id].append(
                     {
                         "bbox": det["bbox"],
@@ -353,24 +558,27 @@ class ONNXYOLODetector:
                 self.next_track_id += 1
             return detections
 
-        matched = []
         unmatched_detections = list(range(len(detections)))
         unmatched_tracks = list(self.track_history.keys())
 
-        iou_matrix = np.zeros((len(unmatched_tracks), len(detections)))
+        score_matrix = np.zeros((len(unmatched_tracks), len(detections)))
         for i, track_id in enumerate(unmatched_tracks):
+            track_class = self.track_classes.get(track_id)
             last_pos = self.track_history[track_id][-1]["bbox"]
             for j, det_idx in enumerate(unmatched_detections):
-                iou_matrix[i, j] = self.iou(last_pos, detections[det_idx]["bbox"])
+                det = detections[det_idx]
+                if track_class and det["class_name"] != track_class:
+                    continue
+                score_matrix[i, j] = self.track_match_score(last_pos, det["bbox"])
 
-        while iou_matrix.size > 0 and unmatched_tracks and unmatched_detections:
-            max_iou_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
-            max_iou = iou_matrix[max_iou_idx]
+        while score_matrix.size > 0 and unmatched_tracks and unmatched_detections:
+            max_idx = np.unravel_index(np.argmax(score_matrix), score_matrix.shape)
+            max_score = score_matrix[max_idx]
 
-            if max_iou < 0.3:
+            if max_score < self.track_match_iou:
                 break
 
-            track_idx, det_idx = max_iou_idx
+            track_idx, det_idx = max_idx
             track_id = unmatched_tracks[track_idx]
             det_index = unmatched_detections[det_idx]
 
@@ -381,15 +589,15 @@ class ONNXYOLODetector:
                     "frame": self.current_frame,
                 }
             )
-            matched.append(det_index)
 
             unmatched_tracks.pop(track_idx)
             unmatched_detections.pop(det_idx)
-            iou_matrix = np.delete(iou_matrix, track_idx, axis=0)
-            iou_matrix = np.delete(iou_matrix, det_idx, axis=1)
+            score_matrix = np.delete(score_matrix, track_idx, axis=0)
+            score_matrix = np.delete(score_matrix, det_idx, axis=1)
 
         for det_idx in unmatched_detections:
             detections[det_idx]["track_id"] = self.next_track_id
+            self.track_classes[self.next_track_id] = detections[det_idx]["class_name"]
             self.track_history[self.next_track_id].append(
                 {
                     "bbox": detections[det_idx]["bbox"],
@@ -450,8 +658,7 @@ class ONNXYOLODetector:
         frame_interval: int = 4,
         on_progress: Optional[Callable[[Dict], None]] = None,
     ) -> Dict:
-        self.track_history.clear()
-        self.next_track_id = 0
+        self.reset_tracker()
 
         cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
@@ -591,20 +798,6 @@ class ONNXYOLODetector:
                 )
             )
 
-        display_sequence = []
-        for item in sorted(row_sequence, key=lambda x: x["order"]):
-            display_sequence.append(item["type"])
-
-        sequence_details = []
-        for item in sorted(row_sequence, key=lambda x: x["order"]):
-            sequence_details.append(
-                {
-                    "position": item["order"],
-                    "type": item["type"],
-                    "track_id": item["track_id"],
-                }
-            )
-
         statistics = self.calculate_statistics(
             unique_bushes,
             unique_gaps,
@@ -616,12 +809,58 @@ class ONNXYOLODetector:
 
         raw_bushes = len(unique_bushes)
         raw_gaps = len(unique_gaps)
-        if raw_bushes > 200:
+        raw_total_tracks = raw_bushes + raw_gaps
+        spatial_threshold = _spatial_count_threshold()
+
+        track_display_sequence = [
+            item["type"] for item in sorted(row_sequence, key=lambda x: x["order"])
+        ]
+        spatial_display, spatial_details, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
+            bushes_positions,
+            gaps_positions,
+        )
+
+        use_spatial = raw_total_tracks > spatial_threshold or (
+            spatial_bushes > 0 and raw_bushes > max(spatial_bushes * 2, 80)
+        )
+
+        if use_spatial:
+            display_sequence = spatial_display
+            sequence_details = spatial_details
+            statistics["bushes_count"] = spatial_bushes
+            statistics["gaps_count"] = spatial_gaps
+            count_source = "spatial"
+        else:
+            display_sequence = track_display_sequence
+            sequence_details = [
+                {
+                    "position": item["order"],
+                    "type": item["type"],
+                    "track_id": item["track_id"],
+                }
+                for item in sorted(row_sequence, key=lambda x: x["order"])
+            ]
+            statistics["bushes_count"] = raw_bushes
+            statistics["gaps_count"] = raw_gaps
+            count_source = "tracker"
+
+        raw_track_sequence_len = len(row_sequence)
+        if raw_bushes > statistics["bushes_count"] * 2 and raw_bushes > 100:
+            _logger.info(
+                "Bush count: source=%s spatial=%s raw_track_ids=%s raw_row_sequence=%s positions=%s threshold=%s",
+                count_source,
+                statistics["bushes_count"],
+                raw_bushes,
+                raw_track_sequence_len,
+                len(bushes_positions),
+                spatial_threshold,
+            )
+        elif raw_bushes > 200:
             _logger.warning(
                 "High bush track count: bushes=%s gaps=%s row_sequence=%s positions=%s processed_frames=%s",
                 raw_bushes,
                 raw_gaps,
-                len(row_sequence),
+                raw_track_sequence_len,
                 len(bushes_positions),
                 processed_frames,
             )
@@ -637,23 +876,32 @@ class ONNXYOLODetector:
             },
             "statistics": statistics,
             "tracking_stats": {
-                "unique_bushes": len(unique_bushes),
-                "unique_gaps": len(unique_gaps),
-                "total_tracks": len(unique_bushes) + len(unique_gaps),
+                "unique_bushes": raw_bushes,
+                "unique_gaps": raw_gaps,
+                "spatial_bushes": statistics["bushes_count"],
+                "spatial_gaps": statistics["gaps_count"],
+                "count_source": count_source,
+                "raw_row_sequence_len": raw_track_sequence_len,
+                "spatial_row_sequence_len": len(spatial_display),
+                "total_tracks": raw_total_tracks,
             },
             "row_sequence": display_sequence,
             "sequence_details": sequence_details,
-            "row_length": len(row_sequence),
+            "row_length": len(display_sequence),
         }
 
     def calculate_statistics(
         self, unique_bushes, unique_gaps, bushes_positions, gaps_positions, total_frames, fps
     ):
         row_spacing = self._calculate_row_spacing(bushes_positions)
+        _, _, spatial_bushes, spatial_gaps = build_spatial_row_sequence(
+            bushes_positions,
+            gaps_positions,
+        )
 
         return {
-            "bushes_count": len(unique_bushes),
-            "gaps_count": len(unique_gaps),
+            "bushes_count": spatial_bushes,
+            "gaps_count": spatial_gaps,
             "row_spacing": row_spacing,
             "bushes_positions": bushes_positions,
             "gaps_positions": gaps_positions,
@@ -662,6 +910,8 @@ class ONNXYOLODetector:
                 "total_positions": len(bushes_positions),
                 "raw_track_bushes": len(unique_bushes),
                 "raw_track_gaps": len(unique_gaps),
+                "spatial_bushes": spatial_bushes,
+                "spatial_gaps": spatial_gaps,
                 "enhancement_enabled": self.enhance_frames,
             },
         }
@@ -860,9 +1110,13 @@ class DetectorPool:
             yield detector
         finally:
             if detector is not None:
-                if hasattr(detector, "track_history"):
+                if hasattr(detector, "reset_tracker"):
+                    detector.reset_tracker()
+                elif hasattr(detector, "track_history"):
                     detector.track_history.clear()
                     detector.next_track_id = 0
+                    if hasattr(detector, "track_classes"):
+                        detector.track_classes.clear()
                 if not created:
                     self._available.put(detector)
             self._slots.release()
