@@ -207,36 +207,44 @@ docker compose -f docker-compose.prod.yml exec cv curl -s http://127.0.0.1:8000/
 
 В ответе должно быть `"onnx_providers": ["CUDAExecutionProvider", "CPUExecutionProvider"]`.
 
-### 5. Максимальная скорость на GPU
+### 5. Скорость CV (allVineyardSystem-old ~10–15 мин vs deploy 3–4 ч)
 
-Главный тормоз — **не ONNX**, а CPU: декод всех кадров и `VineTrunkEnhancer` (bilateral, morphology) на каждом кадре.  
-При `CV_USE_GPU=true` `docker-compose.gpu.yml` уже задаёт быстрые значения по умолчанию:
+| Фактор | old (локально) | deploy (медленно) | Исправление |
+|--------|----------------|-------------------|-------------|
+| Enhancement | CPU, мощный ПК | `CV_ENHANCE_FRAMES=true` на GPU → CPU bilateral **часы** | `false` (на GPU **игнорируется** в коде) |
+| GPU | CPU ONNX | GPU не используется или IO binding тормозил | `CV_USE_GPU=true` + `./deploy.sh` |
+| Параллелизм | 1 видео | 2–3 шарда делят GPU | `CV_MAX_CONCURRENT_VIDEOS=1`, `CV_JOB_CONCURRENCY=1` |
+| interval | 4 | 4 (но из .env мог быть другой) | `CV_FRAME_INTERVAL=4` |
+
+Рекомендуемый `.env` на GPU VPS (как old по скорости, точность сохраняется):
 
 ```env
 CV_USE_GPU=true
 CV_DUMMY_INFERENCE=false
-CV_ENHANCE_FRAMES=false      # обязательно off на GPU (иначе часы на 90-сек видео)
-CV_FRAME_INTERVAL=8          # 4=точнее, 12–16=ещё быстрее
-CV_GPU_IO_BINDING=true       # меньше копий CPU→GPU
-CV_SKIP_FRAME_DECODE=true    # grab() для пропущенных кадров
-CV_ORT_INTRA_THREADS=2
-CV_ORT_INTER_THREADS=1
+CV_ENHANCE_FRAMES=false
+CV_FRAME_INTERVAL=4
+CV_GPU_IO_BINDING=false
+CV_MAX_CONCURRENT_VIDEOS=1
+CV_JOB_CONCURRENCY=1
+CV_ORT_INTRA_THREADS=1
 ```
 
-Ожидаемо: **1–5 мин** на шард ~90 с (вместо 1–2 ч при `CV_ENHANCE_FRAMES=true`).
+Ожидаемо: **5–20 мин** на шард ~90 с (GPU RTX 3080), не 3–4 часа.
 
-Проверка нагрузки во время обработки:
+Проверка:
 
 ```bash
 watch -n 1 nvidia-smi
 docker compose -f docker-compose.prod.yml logs -f cv
+curl -s http://127.0.0.1:8000/ | python3 -m json.tool
+# cv_enhance_frames: false, onnx_providers: CUDAExecutionProvider
 ```
 
-Если `GPU-Util` низкий — смотрите `CV_ENHANCE_FRAMES` (должно быть `false`).
+Если `GPU-Util` 0–10% — enhancement всё ещё включён или GPU не подключён.
 
-Точность как на preddeploy с enhancement: `CV_ENHANCE_FRAMES=true` — но только на мощном CPU или для отладки.
+Точность как old **с** enhancement на CPU-only: `CV_USE_GPU=false`, `CV_ENHANCE_FRAMES=true` (медленно на VPS).
 
-Без GPU оставьте `CV_USE_GPU=false` — используется обычный CPU-образ (`Dockerfile`).
+Без GPU оставьте `CV_USE_GPU=false` — CPU-образ (`Dockerfile`).
 
 ## MinIO: где лежат видео
 

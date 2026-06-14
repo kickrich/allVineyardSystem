@@ -321,7 +321,7 @@ def process_video_file(
     shard_id: Optional[int] = None,
 ) -> dict:
     if frame_interval is None:
-        frame_interval = 4
+        frame_interval = default_frame_interval()
     try:
         with borrow_detector() as detector:
             if shard_id is not None:

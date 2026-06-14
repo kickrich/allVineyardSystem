@@ -67,7 +67,7 @@ class VideoShardProcessorService
       shard_id: @shard.id,
       object_key: object_key,
       callback_url: callback_url,
-      frame_interval: 4
+      frame_interval: cv_frame_interval
     }
     payload[:bucket] = bucket if bucket.present?
 
@@ -124,6 +124,13 @@ class VideoShardProcessorService
 
   def cv_service_open_timeout
     ENV.fetch('CV_SERVICE_OPEN_TIMEOUT', '60').to_i
+  end
+
+  def cv_frame_interval
+    raw = ENV.fetch('CV_FRAME_INTERVAL', '4').to_s.strip
+    interval = raw.to_i
+    interval = 4 if interval < 1
+    [interval, 120].min
   end
 
   def source_payload_from_shard

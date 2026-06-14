@@ -42,18 +42,22 @@ def _env_truthy(name: str) -> bool:
 
 
 def default_frame_interval() -> int:
-    if _env_use_gpu():
-        default = _env_int("CV_GPU_FRAME_INTERVAL", _env_int("CV_FRAME_INTERVAL", 8))
-    else:
-        default = _env_int("CV_FRAME_INTERVAL", 4)
-    return max(1, min(default, 120))
+    return max(1, min(_env_int("CV_FRAME_INTERVAL", 4), 120))
 
 
 def _env_enhance_frames() -> bool:
     raw = os.getenv("CV_ENHANCE_FRAMES", "").strip().lower()
+    if _env_use_gpu():
+        if raw in ("1", "true", "yes", "on") and _env_truthy("CV_ALLOW_GPU_ENHANCE"):
+            return True
+        if raw in ("1", "true", "yes", "on"):
+            _logger.warning(
+                "CV_ENHANCE_FRAMES=true ignored on GPU (CPU enhancement → hours per video). "
+                "Set CV_ALLOW_GPU_ENHANCE=1 only for debugging."
+            )
+        return False
     if not raw:
-        # На GPU VineTrunkEnhancer на CPU — главный тормоз (минуты на кадр на слабом VPS).
-        return not _env_use_gpu()
+        return True
     return raw in ("1", "true", "yes", "on")
 
 
@@ -85,7 +89,8 @@ def _env_use_gpu() -> bool:
 def _build_session_options() -> ort.SessionOptions:
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    so.intra_op_num_threads = max(1, _env_int("CV_ORT_INTRA_THREADS", 4))
+    default_intra = 1 if _env_use_gpu() else 4
+    so.intra_op_num_threads = max(1, _env_int("CV_ORT_INTRA_THREADS", default_intra))
     so.inter_op_num_threads = max(1, _env_int("CV_ORT_INTER_THREADS", 1))
     return so
 
@@ -183,6 +188,15 @@ class ONNXYOLODetector:
             )
         else:
             self.enhancer = None
+
+        self._setup_gpu_iobinding()
+
+    def _setup_gpu_iobinding(self) -> None:
+        if not self._use_gpu_iobinding:
+            return
+        self._io_binding = self.session.io_binding()
+        for name in self.output_names:
+            self._io_binding.bind_output(name, "cuda", self._cuda_device_id)
 
     @staticmethod
     def _parse_spatial_hw(shape) -> Tuple[int, int]:
@@ -411,9 +425,6 @@ class ONNXYOLODetector:
         if not self._use_gpu_iobinding:
             return self.session.run(self.output_names, {self.input_name: input_tensor})
 
-        if self._io_binding is None:
-            self._io_binding = self.session.io_binding()
-
         if self._input_ort is None or tuple(self._input_ort.shape()) != tuple(input_tensor.shape):
             self._input_ort = ort.OrtValue.ortvalue_from_numpy(
                 input_tensor, "cuda", self._cuda_device_id
@@ -421,10 +432,7 @@ class ONNXYOLODetector:
         else:
             self._input_ort.update_inplace(input_tensor)
 
-        self._io_binding.clear_binding_inputs()
         self._io_binding.bind_ortvalue_input(self.input_name, self._input_ort)
-        for name in self.output_names:
-            self._io_binding.bind_output(name, "cuda", self._cuda_device_id)
         self.session.run_with_iobinding(self._io_binding)
         return self._io_binding.copy_outputs_to_cpu()
 

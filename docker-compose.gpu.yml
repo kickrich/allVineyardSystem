@@ -1,6 +1,8 @@
 # Подключать вместе с docker-compose.prod.yml на VPS с NVIDIA GPU:
 #   docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --build cv
 # или CV_USE_GPU=true в .env и ./deploy.sh
+#
+# Профиль скорости как allVineyardSystem-old (10–15 мин/шард): enhance=off, interval=4, 1 видео за раз.
 
 services:
   cv:
@@ -10,14 +12,14 @@ services:
     environment:
       CV_USE_GPU: "true"
       CV_ENHANCE_FRAMES: ${CV_ENHANCE_FRAMES:-false}
-      CV_FRAME_INTERVAL: ${CV_FRAME_INTERVAL:-8}
-      CV_GPU_IO_BINDING: ${CV_GPU_IO_BINDING:-true}
+      CV_FRAME_INTERVAL: ${CV_FRAME_INTERVAL:-4}
+      CV_GPU_IO_BINDING: ${CV_GPU_IO_BINDING:-false}
       CV_SKIP_FRAME_DECODE: ${CV_SKIP_FRAME_DECODE:-true}
-      CV_ORT_INTRA_THREADS: ${CV_ORT_INTRA_THREADS:-2}
+      CV_ORT_INTRA_THREADS: ${CV_ORT_INTRA_THREADS:-1}
       CV_ORT_INTER_THREADS: ${CV_ORT_INTER_THREADS:-1}
-      CV_MAX_CONCURRENT_VIDEOS: ${CV_MAX_CONCURRENT_VIDEOS:-2}
+      CV_MAX_CONCURRENT_VIDEOS: ${CV_MAX_CONCURRENT_VIDEOS:-1}
       NVIDIA_VISIBLE_DEVICES: all
 
   vineyard-app:
     environment:
-      CV_JOB_CONCURRENCY: ${CV_JOB_CONCURRENCY:-2}
+      CV_JOB_CONCURRENCY: ${CV_JOB_CONCURRENCY:-1}
