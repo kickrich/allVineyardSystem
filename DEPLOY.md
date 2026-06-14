@@ -197,6 +197,14 @@ docker compose -f docker-compose.prod.yml exec cv python -c "import onnxruntime 
 curl -s http://127.0.0.1:8000/ | python3 -m json.tool
 ```
 
+Если `curl` на хосте пустой — контейнер `cv` не запущен или порт ещё не проброшен после `up`. Проверка изнутри контейнера:
+
+```bash
+docker compose -f docker-compose.prod.yml ps cv
+docker compose -f docker-compose.prod.yml logs cv --tail 30
+docker compose -f docker-compose.prod.yml exec cv curl -s http://127.0.0.1:8000/
+```
+
 В ответе должно быть `"onnx_providers": ["CUDAExecutionProvider", "CPUExecutionProvider"]`.
 
 ### 5. Максимальная скорость на GPU

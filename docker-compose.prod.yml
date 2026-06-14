@@ -53,6 +53,9 @@ services:
       context: ./cvService
       dockerfile: Dockerfile
     restart: unless-stopped
+    # localhost на VPS — curl/отладка (см. DEPLOY.md); vineyard-app ходит на cv:8000 внутри сети
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./cvService/models:/app/models
       - ./cvService/app:/app/app
