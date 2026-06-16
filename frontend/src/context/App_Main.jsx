@@ -17,7 +17,6 @@ import {
   AI_RESULTS_POLL_INTERVAL_MS,
   MAP_MAX_ZOOM,
 } from '../constants/app';
-import { contentTypeFromCatalogItem } from '../utils/local_Video_Files';
 import {
   fetchDronesFromBackend,
   fetchUsersFromBackend,
@@ -52,8 +51,7 @@ import {
   multipartPresignPart,
   multipartCompleteForVideo,
   multipartListParts,
-  fetchLocalVideosCatalog,
-  downloadLocalVideoBlob,
+  uploadLocalVideosToMinio,
   clearApiSession,
 } from '../api/backend';
 import {
@@ -1225,6 +1223,7 @@ export function AppProvider({ children }) {
 
   const autoUploadLocalVideosForMission = async (droneId, missionId) => {
     if (missionId == null) return;
+    if (videoUploadInProgressRef.current.get(droneId)) return;
 
     const rowSplitState = videoRowSplitStateRef.current.get(droneId);
     const shiftSegments = rowSplitState?.shiftSegments ?? toNormalizedShiftSegmentsForDrone(droneId);
@@ -1233,21 +1232,30 @@ export function AppProvider({ children }) {
         ? rowSplitState.rowsCount
         : shiftSegments.length + 1) || 1;
 
-    const catalog = await fetchLocalVideosCatalog(rowsCount);
-    if (!catalog.length) return;
+    videoUploadInProgressRef.current.set(droneId, true);
+    try {
+      clearAiTrackingForDroneExcept(droneId, missionId);
+      missionDroneByMissionIdRef.current.set(missionId, droneId);
+      setAiPendingByMissionId((prev) => ({
+        ...prev,
+        [String(missionId)]: {
+          rowsCount,
+          phase: 'processing',
+          missionStatus: 'completed',
+          updatedAt: Date.now(),
+        },
+      }));
 
-    for (const item of catalog) {
-      const blob = await downloadLocalVideoBlob(item.download_path);
-      await uploadVideoMultipartForMission({
+      const uploads = await uploadLocalVideosToMinio({
         missionId,
-        droneId,
-        blob,
-        filename: item.name,
-        contentType: contentTypeFromCatalogItem(item, blob),
-        rowIndex: item.row_index,
         rowsCount,
         shiftSegmentIndices: shiftSegments,
       });
+      if (!uploads.length) return;
+
+      trackMissionId(missionId);
+    } finally {
+      videoUploadInProgressRef.current.delete(droneId);
     }
   };
 

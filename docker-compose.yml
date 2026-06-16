@@ -47,9 +47,6 @@ services:
       MINIO_BUCKET: vineyard-videos
       MINIO_REGION: us-east-1
       MINIO_SECURE: "false"
-      # Пока нет models/best.onnx — отдаёт нулевые метрики, но пайплайн S3→CV→callback работает.
-      # Положите веса в ./cvService/models/ и установите false.
-      CV_DUMMY_INFERENCE: "true"
     depends_on:
       minio-init:
         condition: service_completed_successfully

@@ -461,6 +461,48 @@ export async function downloadLocalVideoBlob(downloadPath) {
   return response.blob();
 }
 
+export async function uploadLocalVideosToMinio({
+  missionId,
+  rowsCount,
+  shiftSegmentIndices = [],
+} = {}) {
+  if (missionId == null) throw new Error('missionId is required');
+  if (!Number.isFinite(rowsCount) || rowsCount < 1) {
+    throw new Error('rowsCount must be >= 1');
+  }
+
+  const response = await apiRequest('/api/v1/local_videos/upload_to_minio', {
+    method: 'POST',
+    body: JSON.stringify({
+      mission_id: missionId,
+      rows_count: rowsCount,
+      shift_segment_indices: Array.isArray(shiftSegmentIndices) ? shiftSegmentIndices : [],
+    }),
+    timeoutMs: 600000,
+  });
+
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      const errors = payload?.errors;
+      if (Array.isArray(errors) && errors.length) {
+        detail = errors.join('; ');
+      } else if (typeof payload?.error === 'string') {
+        detail = payload.error;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(detail);
+  }
+
+  const payload = await response.json();
+  const data = extractData(payload);
+  const uploads = Array.isArray(data?.uploads) ? data.uploads : [];
+  return uploads;
+}
+
 export async function multipartInitForVideo({
   missionId,
   filename,

@@ -1,22 +1,18 @@
 default: &default
   adapter: postgresql
   encoding: unicode
-  # Настройки пула соединений
-  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
-  username: vineyard_user
-  password: A28v07r08a28
-  host: localhost
+  pool: <%= ENV.fetch("DB_POOL", 5).to_i %>
 
 development:
   <<: *default
-  database: vineyard_monitoring_development
+  database: <%= ENV.fetch("DB_NAME", "vineyard_app") %>
+  username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
+  password: <%= ENV.fetch("DB_PASSWORD", "1029") %>
+  host: <%= ENV.fetch("DB_HOST", "localhost") %>
 
 test:
   <<: *default
-  database: vineyard_monitoring_test
-
-production:
-  <<: *default
-  database: vineyard_monitoring_production
-  username: vineyard_user
-  password: <%= ENV["VINEYARD_DATABASE_PASSWORD"] %>
+  database: <%= ENV.fetch("DB_TEST_NAME", "vineyard_app_test") %>
+  username: <%= ENV.fetch("DB_USERNAME", "vineyard_user") %>
+  password: <%= ENV.fetch("DB_PASSWORD", "1029") %>
+  host: <%= ENV.fetch("DB_HOST", "localhost") %>

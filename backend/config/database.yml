@@ -1,12 +1,11 @@
 default: &default
   adapter: postgresql
   encoding: unicode
-  # Настройки пула соединений
   pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
   username: vineyard_user
-  password: A28v07r08a28
+  password: 1029
   host: localhost
-  
+  port: <%= ENV.fetch("DB_PORT") { 5432 } %>
 
 development:
   <<: *default

@@ -48,7 +48,9 @@ Rails.application.routes.draw do
       get "osm/buildings", to: "osm#buildings"
 
       get "local_videos", to: "local_videos#index"
+      post "local_videos/upload_to_minio", to: "local_videos#upload_to_minio"
       get "local_videos/:filename", to: "local_videos#show", constraints: { filename: %r{[^/]+} }
+      post "local_videos/upload_to_minio", to: "local_videos#upload_to_minio"
 
       # Endpoint для получения результатов от VineyardApp
       post '/vineyard_app/results', to: 'vineyard_app#results'
