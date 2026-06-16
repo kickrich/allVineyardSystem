@@ -929,9 +929,10 @@ export const Sidebar = ({
                       </div>
                     </div>
                     {selectedAiMissionId === result.missionId && (() => {
+                      const sequenceRows = buildRowsFromRowSequences(result);
                       const { bushes, gaps } = buildMissionSchemePoints(result);
                       const all = [...bushes, ...gaps];
-                      if (!all.length) {
+                      if (!all.length && !sequenceRows?.length) {
                         const rowsCount = Number(result?.rowsCount ?? 0);
                         if (rowsCount > 0) {
                           const w = 240;
@@ -976,7 +977,6 @@ export const Sidebar = ({
                           </div>
                         );
                       }
-                      const sequenceRows = buildRowsFromRowSequences(result);
                       const rowsCount = sequenceRows?.length
                         ? sequenceRows.length
                         : Math.max(1, Number(result.rowsCount || 0) || 1);
