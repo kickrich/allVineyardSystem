@@ -12,8 +12,24 @@ Rails.application.configure do
   # Full error reports are disabled.
   config.consider_all_requests_local = false
 
+  # Docker/production: SECRET_KEY_BASE из compose; при сборке образа — SECRET_KEY_BASE_DUMMY.
+  config.secret_key_base = ENV["SECRET_KEY_BASE"].presence || (
+    ENV["SECRET_KEY_BASE_DUMMY"].present? ? ("0" * 128) : ENV.fetch("SECRET_KEY_BASE")
+  )
+  config.require_master_key = false
+
   # Turn on fragment caching in view templates.
   config.action_controller.perform_caching = true
+
+  # nginx: /vineyard/... → vineyard-app; без префикса ссылки ведут на frontend (/video/1).
+  config.relative_url_root = ENV["RAILS_RELATIVE_URL_ROOT"].presence
+
+  session_path = ENV["RAILS_RELATIVE_URL_ROOT"].presence || "/"
+  config.session_store :cookie_store,
+                       key: "_vineyard_app_session",
+                       path: session_path,
+                       same_site: :lax,
+                       secure: ActiveModel::Type::Boolean.new.cast(ENV["BEHIND_SSL_PROXY"])
 
   # Cache assets for far-future expiry since they are all digest stamped.
   config.public_file_server.headers = { "cache-control" => "public, max-age=#{1.year.to_i}" }
@@ -25,10 +41,10 @@ Rails.application.configure do
   config.active_storage.service = :local
 
   # Assume all access to the app is happening through a SSL-terminating reverse proxy.
-  # config.assume_ssl = true
-
-  # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
-  # config.force_ssl = true
+  if ActiveModel::Type::Boolean.new.cast(ENV["BEHIND_SSL_PROXY"])
+    config.assume_ssl = true
+    config.force_ssl = true
+  end
 
   # Skip http-to-https redirect for the default health check endpoint.
   # config.ssl_options = { redirect: { exclude: ->(request) { request.path == "/up" } } }

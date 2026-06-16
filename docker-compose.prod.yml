@@ -1,0 +1,188 @@
+# Production stack for a single VPS.
+# Usage:
+#   cp .env.production.example .env
+#   # fill in secrets and PUBLIC_URL
+#   ./deploy.sh
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vineyard_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_USER:-vineyard_user}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vineyard_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      until mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD}; do sleep 1; done &&
+      until mc ready local; do sleep 1; done &&
+      mc mb local/${MINIO_BUCKET:-vineyard-videos} --ignore-existing &&
+      echo 'bucket ready'
+      "
+
+  cv:
+    build:
+      context: ./cvService
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./cvService/models:/app/models
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-vineyard-videos}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      MINIO_SECURE: "false"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/up >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${BACKEND_SECRET_KEY_BASE:?set BACKEND_SECRET_KEY_BASE in .env}
+      RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+      SOLID_QUEUE_IN_PUMA: "true"
+      DB_HOST: postgres
+      DB_USERNAME: ${POSTGRES_USER:-vineyard_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      VINEYARD_DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: vineyard_monitoring_production
+      S3_BUCKET: ${MINIO_BUCKET:-vineyard-videos}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_REGION: ${MINIO_REGION:-us-east-1}
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://minio:9000}
+      S3_FORCE_PATH_STYLE: "true"
+      VINEYARD_APP_URL: http://vineyard-app:80
+      BACKEND_PUBLIC_URL: http://backend:80
+      FRONTEND_ORIGINS: ${PUBLIC_URL}
+      CORS_ORIGINS: ${PUBLIC_URL}
+      BEHIND_SSL_PROXY: ${BEHIND_SSL_PROXY:-false}
+    volumes:
+      - backend-storage:/rails/storage
+
+  vineyard-app:
+    build:
+      context: ./vineyardApp
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/up >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      cv:
+        condition: service_started
+      backend:
+        condition: service_started
+    environment:
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${VINEYARD_SECRET_KEY_BASE:?set VINEYARD_SECRET_KEY_BASE in .env}
+      RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+      SOLID_QUEUE_IN_PUMA: "true"
+      DB_HOST: postgres
+      DB_USERNAME: ${POSTGRES_USER:-vineyard_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: vineyard_app_production
+      CV_SERVICE_URL: http://cv:8000
+      CV_SERVICE_HTTP_TIMEOUT_SECONDS: ${CV_SERVICE_HTTP_TIMEOUT_SECONDS:-14400}
+      RAILS_URL: http://vineyard-app:80
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-vineyard-videos}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      BEHIND_SSL_PROXY: ${BEHIND_SSL_PROXY:-false}
+      RAILS_RELATIVE_URL_ROOT: /vineyard
+      JOB_CONCURRENCY: ${JOB_CONCURRENCY:-1}
+    volumes:
+      - vineyard-app-storage:/rails/storage
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+        VITE_API_DIRECT: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      vineyard-app:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres-data:
+  minio-data:
+  backend-storage:
+  vineyard-app-storage:

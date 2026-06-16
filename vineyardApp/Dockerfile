@@ -16,7 +16,7 @@ WORKDIR /rails
 
 # Install base packages
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y curl libjemalloc2 libvips postgresql-client && \
+    apt-get install --no-install-recommends -y curl ffmpeg libffi8 libjemalloc2 libvips postgresql-client && \
     ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
@@ -32,8 +32,16 @@ FROM base AS build
 
 # Install packages needed to build gems
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y build-essential git libpq-dev libyaml-dev pkg-config && \
-    rm -rf /var/lib/apt/lists /var/cache/apt/archives
+    apt-get install --no-install-recommends -y \
+        build-essential \
+        git \
+        libpq-dev \
+        libyaml-dev \
+        libffi-dev \
+        nodejs \
+        npm \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install application gems
 COPY vendor/* ./vendor/
@@ -47,6 +55,8 @@ RUN bundle install && \
 # Copy application code
 COPY . .
 
+RUN rm -f config/credentials.yml.enc config/master.key
+
 # Precompile bootsnap code for faster boot times.
 # -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
 RUN bundle exec bootsnap precompile -j 1 app/ lib/
@@ -56,8 +66,11 @@ RUN chmod +x bin/* && \
     sed -i "s/\r$//g" bin/* && \
     sed -i 's/ruby\.exe$/ruby/' bin/*
 
-# Precompiling assets for production without requiring secret RAILS_MASTER_KEY
-RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
+# Precompiling assets for production without requiring secret RAILS_MASTER_KEY or real DB.
+RUN npm install --omit=dev && \
+    SECRET_KEY_BASE_DUMMY=1 RAILS_ENV=production DB_PASSWORD=build_dummy ./bin/rails tailwindcss:build && \
+    SECRET_KEY_BASE_DUMMY=1 RAILS_ENV=production DB_PASSWORD=build_dummy ./bin/rails assets:precompile && \
+    rm -rf node_modules
 
 
 
