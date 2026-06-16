@@ -2,12 +2,17 @@ class DashboardController < ApplicationController
   include Pagy::Method
 
   def index
-    @pagy, @videos = pagy(:offset, Video.order(created_at: :desc), limit: 10)
+    @pagy, @videos = pagy(:offset, Video.order(created_at: :desc), limit: 10, path: app_path(request.path))
   end
 
   def show
     @video = Video.find(params[:id])
-    @shards_pagy, @shards = pagy(:offset, @video.video_shards.order(:shard_index), limit: 5)
+    @shards_pagy, @shards = pagy(
+      :offset,
+      @video.video_shards.order(:shard_index),
+      limit: 5,
+      path: app_path(request.path)
+    )
   end
 
   def destroy
@@ -15,7 +20,7 @@ class DashboardController < ApplicationController
     video.destroy!
     
     respond_to do |format|
-      format.html { redirect_to root_path, notice: "Видео успешно удалено" }
+      format.html { redirect_to app_path("/"), notice: "Видео успешно удалено" }
       format.json { render json: { success: true } }
     end
   end
@@ -28,7 +33,7 @@ class DashboardController < ApplicationController
     video.recalculate_status!
     
     respond_to do |format|
-      format.html { redirect_to video_path(video.id), notice: "Ряд #{shard.shard_index} успешно удален" }
+      format.html { redirect_to app_path("/video/#{video.id}"), notice: "Ряд #{shard.shard_index} успешно удален" }
       format.json do
         render json: {
           success: true,
