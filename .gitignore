@@ -1,6 +1,9 @@
 # --- Monorepo root: backend (Rails), frontend (Vite), vineyardApp (Rails), cvService (Python) ---
 
-
+# Secrets / local env
+**/.env
+**/.env.*
+!**/.env.example
 
 # Ruby / Rails
 **/vendor/bundle/
