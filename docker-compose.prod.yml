@@ -105,8 +105,10 @@ services:
       FRONTEND_ORIGINS: ${PUBLIC_URL}
       CORS_ORIGINS: ${PUBLIC_URL}
       BEHIND_SSL_PROXY: ${BEHIND_SSL_PROXY:-false}
+      LOCAL_VIDEOS_FOLDER: /rails/local_videos
     volumes:
       - backend-storage:/rails/storage
+      - ./local_videos:/rails/local_videos:ro
 
   vineyard-app:
     build:

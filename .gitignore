@@ -40,6 +40,11 @@
 # Модели CV часто большие — при необходимости закоммить вручную с git add -f
 *.onnx
 
+# Тестовые видео (папка local_videos/ в корне репозитория)
+local_videos/*
+!local_videos/.gitkeep
+!local_videos/README.md
+
 # БД локально
 **/*.sqlite3
 **/*.sqlite3-*

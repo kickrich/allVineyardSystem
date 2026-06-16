@@ -6,7 +6,14 @@ class LocalVideosCatalogService
 
   class Error < StandardError; end
 
-  def initialize(folder: ENV["LOCAL_VIDEOS_FOLDER"].to_s)
+  def self.default_folder
+    explicit = ENV["LOCAL_VIDEOS_FOLDER"].to_s.strip
+    return explicit if explicit.present?
+
+    File.expand_path("../local_videos", Rails.root)
+  end
+
+  def initialize(folder: self.class.default_folder)
     @folder = folder.to_s.strip
   end
 
