@@ -54,10 +54,18 @@ nano .env
 | `MINIO_ROOT_PASSWORD` | Пароль MinIO |
 | `BACKEND_SECRET_KEY_BASE` | `openssl rand -hex 64` |
 | `VINEYARD_SECRET_KEY_BASE` | другой `openssl rand -hex 64` |
+| `VITE_VIDEO_FROM_FOLDER` | `true` — после миссии грузить `.mp4` из `local_videos/` в MinIO (нужна **пересборка** frontend) |
 
 Положите модель CV: `cvService/models/best.onnx`
 
-Тестовые видео для автозагрузки: положите `.mp4`/`.webm` в папку `local_videos/` в корне репозитория (в Docker она монтируется в backend автоматически).
+Тестовые видео: `.mp4`/`.webm` в `local_videos/` (на VPS: `/opt/allVineyardSystem/local_videos/`). В git видео не попадают — скопируйте через SFTP. Имена: `row_1.mp4`, `row_2.mp4` или по алфавиту.
+
+После изменения `VITE_VIDEO_FROM_FOLDER` пересоберите frontend:
+
+```bash
+docker compose -f docker-compose.prod.yml build --no-cache frontend
+docker compose -f docker-compose.prod.yml up -d frontend nginx
+```
 
 ## 5. Запуск
 
