@@ -5,9 +5,9 @@ module Api
     class ZonesController < BaseController
       before_action :set_zone, only: [:show, :update, :destroy]
 
-      # GET /api/v1/zones — список по имени
+      # GET /api/v1/zones — список по имени (только зоны текущего пользователя)
       def index
-        render_data(Zone.ordered_by_name)
+        render_data(@current_user.zones.ordered_by_name)
       end
 
       def show
@@ -15,7 +15,7 @@ module Api
       end
         
       def create
-        @zone = Zone.new(zone_params)
+        @zone = @current_user.zones.new(zone_params)
         return unless assign_boundary_from_kml!(@zone)
 
         if @zone.save
@@ -56,7 +56,7 @@ module Api
 
       # Поиск зоны в базе данных
       def set_zone
-        @zone = Zone.find(params[:id])
+        @zone = @current_user.zones.find(params[:id])
       end
       
       # Параметры зоны (boundary — массив пар [lng, lat]; permit(boundary: []) их режет)

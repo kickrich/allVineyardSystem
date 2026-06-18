@@ -1,6 +1,8 @@
 class Drone < ApplicationRecord
   STATUSES = %w[idle in_mission charging offline].freeze
 
+  belongs_to :user
+
   # При удалении дрона удаляем связанные миссии и их дочерние записи (маршруты, телеметрия и т.д.).
   has_many :missions, dependent: :destroy
   has_many :drone_logs, dependent: :nullify
@@ -17,6 +19,7 @@ class Drone < ApplicationRecord
   before_destroy :ensure_not_active
 
   # Валидации
+  validates :user, presence: { message: "должен быть указан" }
   validates :name, presence: { message: "не может быть пустым" },
                    length: { minimum: 2, maximum: 100, message: "должно быть от 2 до 100 символов" }
   validates :model, presence: { message: "не может быть пустым" },

@@ -69,7 +69,6 @@ import {
   normalizeRoutePath,
   inferRouteProgressFromPosition,
   normalizeShiftSegmentIndices,
-  createLocalDrones,
   mapBackendDroneToFrontend,
 } from '../utils/drone_Runtime';
 import {
@@ -269,7 +268,7 @@ export function AppProvider({ children }) {
     setTemplateToApplyId(null);
   }, [missionTemplates]);
 
-  const [drones, setDrones] = useState(() => createLocalDrones());
+  const [drones, setDrones] = useState([]);
   const [backendSync, setBackendSync] = useState({ status: 'idle', message: '' });
   const [authReady, setAuthReady] = useState(hasStoredApiToken);
   const [aiResultsByMissionId, setAiResultsByMissionId] = useState({});
@@ -587,6 +586,7 @@ export function AppProvider({ children }) {
             message: ''
           });
         } else {
+          setDrones([]);
           setBackendSync({
             status: 'connected-empty',
             message: ''
@@ -2660,7 +2660,7 @@ export function AppProvider({ children }) {
     backendContextRef.current = { userId: null, zoneId: null };
     activeTimersRef.current.forEach((id) => clearInterval(id));
     activeTimersRef.current.clear();
-    setDrones(createLocalDrones());
+    setDrones([]);
     setRouteShiftSegmentsByDroneId({});
     setBackendSync({ status: 'idle', message: '' });
     setAiResultsByMissionId({});

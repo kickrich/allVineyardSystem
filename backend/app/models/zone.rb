@@ -1,11 +1,14 @@
 # app/models/zone.rb
 class Zone < ApplicationRecord
+  belongs_to :user
+
   has_many :missions, dependent: :restrict_with_error
   has_many :route_templates, dependent: :nullify
   has_one_attached :kml_file
 
   before_validation :strip_name_and_description
 
+  validates :user, presence: { message: "должен быть указан" }
   validates :name, presence: { message: "не может быть пустым" },
                    length: { minimum: 2, maximum: 100, message: "должно быть от 2 до 100 символов" }
   validates :color, format: {
@@ -52,7 +55,7 @@ class Zone < ApplicationRecord
     current_ring = normalized_ring(boundary)
     return if current_ring.nil?
 
-    Zone.where.not(id: id).find_each do |other|
+    Zone.where(user_id: user_id).where.not(id: id).find_each do |other|
       other_ring = normalized_ring(other.boundary)
       next if other_ring.nil?
       next unless polygons_touch_or_overlap?(current_ring, other_ring)

@@ -70,6 +70,8 @@ class Mission < ApplicationRecord
   validate :drone_availability_on_creation, on: :create
   validate :sufficient_battery_to_start, if: :in_progress?
   validate :valid_status_transition, on: :update
+  validate :zone_belongs_to_user
+  validate :drone_belongs_to_user
 
   validates :vineyard_app_video_id, uniqueness: { allow_nil: true }
 
@@ -202,6 +204,20 @@ class Mission < ApplicationRecord
     return if drone.nil?
     return unless drone.missions.active.exists?
     errors.add(:drone, "уже назначен на активную или запланированную миссию")
+  end
+
+  def zone_belongs_to_user
+    return if user.nil? || zone.nil?
+    return if zone.user_id == user_id
+
+    errors.add(:zone, "не принадлежит текущему пользователю")
+  end
+
+  def drone_belongs_to_user
+    return if user.nil? || drone.nil?
+    return if drone.user_id == user_id
+
+    errors.add(:drone, "не принадлежит текущему пользователю")
   end
 
   def free_drone_if_needed
