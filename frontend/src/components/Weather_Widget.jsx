@@ -1,9 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
+const YANDEX_WEATHER_URL = 'https://api.weather.yandex.ru/v2/forecast';
+const YANDEX_API_KEY = '223925f1-823f-4ea1-94ab-b8cf13b328e2';
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
+
 const FETCH_TIMEOUT_MS = 15000;
 const COORD_DEBOUNCE_MS = 500;
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+
+let lastWorkingProvider = null;
 
 function normalizeCoords(latitude, longitude) {
   const lat = Number(latitude);
@@ -48,6 +53,29 @@ const weatherLabel = (code) => {
   return map[code] || { short: 'Погода', icon: '🌡️' };
 };
 
+const mapYandexConditionToCode = (condition) => {
+  const map = {
+    'clear': 0,
+    'partly-cloudy': 1,
+    'cloudy': 2,
+    'overcast': 3,
+    'drizzle': 51,
+    'light-rain': 61,
+    'rain': 63,
+    'heavy-rain': 65,
+    'showers': 80,
+    'wet-snow': 71,
+    'light-snow': 71,
+    'snow': 73,
+    'heavy-snow': 75,
+    'thunderstorm': 95,
+    'thunderstorm-with-rain': 95,
+    'thunderstorm-with-hail': 99,
+    'fog': 45,
+  };
+  return map[condition] ?? 0;
+};
+
 const PANEL_DURATION_MS = 220;
 
 const WIND_KMH_DANGER = 40;
@@ -77,6 +105,76 @@ function getFlightConditions(data) {
   };
 }
 
+async function fetchFromYandex(lat, lng, signal) {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lng),
+    lang: 'ru_RU',
+    limit: '1',
+    hours: 'false',
+    extra: 'false',
+  });
+  
+  const res = await fetch(`${YANDEX_WEATHER_URL}?${params}`, {
+    signal,
+    headers: {
+      'X-Yandex-API-Key': YANDEX_API_KEY,
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('YANDEX_FORBIDDEN');
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  const json = await res.json();
+  const fact = json.fact;
+  if (!fact) {
+    throw new Error('EMPTY_RESPONSE');
+  }
+
+  const weatherCode = mapYandexConditionToCode(fact.condition);
+  return {
+    temperature_2m: fact.temp,
+    apparent_temperature: fact.feels_like,
+    weather_code: weatherCode,
+    wind_speed_10m: fact.wind_speed,
+    wind_direction_10m: fact.wind_dir,
+    relative_humidity_2m: fact.humidity,
+    surface_pressure: fact.pressure_mm,
+    time: fact.uptime,
+    _provider: 'Яндекс.Погода',
+  };
+}
+
+async function fetchFromOpenMeteo(lat, lng, signal) {
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lng),
+    current: 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,apparent_temperature',
+    timezone: 'auto',
+  });
+  
+  const res = await fetch(`${OPEN_METEO_URL}?${params}`, { signal });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const json = await res.json();
+  if (json?.error) {
+    throw new Error(json.reason || 'Open-Meteo error');
+  }
+  const current = json.current;
+  if (!current) {
+    throw new Error('EMPTY_RESPONSE');
+  }
+  return {
+    ...current,
+    _provider: 'Open-Meteo',
+  };
+}
+
 export function WeatherWidget({ latitude, longitude, className = '', onFlightConditionsChange }) {
   const [expanded, setExpanded] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -86,6 +184,7 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [providerInfo, setProviderInfo] = useState('');
   const [coords, setCoords] = useState(() => normalizeCoords(latitude, longitude));
 
   useEffect(() => {
@@ -144,37 +243,68 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
 
     setLoading(true);
     setError(null);
+    setProviderInfo('');
+
     try {
-      const params = new URLSearchParams({
-        latitude: String(lat),
-        longitude: String(lng),
-        current:
-          'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,apparent_temperature',
-        timezone: 'auto',
-      });
-      const res = await fetch(`${OPEN_METEO_URL}?${params}`, { signal: ac.signal });
-      if (!res.ok) {
-        throw new Error(`Сервис погоды недоступен (HTTP ${res.status})`);
+      let result = null;
+      let usedProvider = '';
+
+      if (lastWorkingProvider !== 'openmeteo') {
+        try {
+          result = await fetchFromYandex(lat, lng, ac.signal);
+          usedProvider = 'Яндекс.Погода';
+          lastWorkingProvider = 'yandex';
+        } catch (yandexError) {
+          const msg = String(yandexError?.message ?? '');
+          if (msg.includes('YANDEX_FORBIDDEN') || msg.includes('403') || msg.includes('401')) {
+            console.warn('Яндекс.Погода запретила доступ, переключаемся на Open-Meteo');
+          } else {
+            console.warn('Ошибка Яндекса:', yandexError.message);
+          }
+          try {
+            result = await fetchFromOpenMeteo(lat, lng, ac.signal);
+            usedProvider = 'Open-Meteo';
+            lastWorkingProvider = 'openmeteo';
+          } catch (openError) {
+            throw new Error(`Яндекс: ${yandexError.message}. Open-Meteo: ${openError.message}`);
+          }
+        }
+      } else {
+        try {
+          result = await fetchFromOpenMeteo(lat, lng, ac.signal);
+          usedProvider = 'Open-Meteo';
+          lastWorkingProvider = 'openmeteo';
+        } catch (openError) {
+          console.warn('Open-Meteo ошибка:', openError.message);
+          try {
+            result = await fetchFromYandex(lat, lng, ac.signal);
+            usedProvider = 'Яндекс.Погода';
+            lastWorkingProvider = 'yandex';
+          } catch (yandexError) {
+            throw new Error(`Open-Meteo: ${openError.message}. Яндекс: ${yandexError.message}`);
+          }
+        }
       }
-      const json = await res.json();
-      if (json?.error) {
-        throw new Error(typeof json.reason === 'string' ? json.reason : 'Ошибка ответа сервиса погоды');
+
+      if (!result) {
+        throw new Error('Не удалось получить данные от обоих провайдеров');
       }
-      const current = json.current ? { ...json.current, time: json.current?.time } : null;
-      if (!current) {
-        throw new Error('Пустой ответ сервиса погоды');
-      }
-      setData(current);
+
+      setData(result);
+      setProviderInfo(`Источник: ${usedProvider}`);
     } catch (e) {
       if (String(e?.name) === 'AbortError') {
         if (fetchAbortRef.current !== ac) return;
-        setError('Таймаут запроса погоды. Нажмите «Обновить».');
+        setError('Таймаут запроса. Нажмите «Обновить».');
         setData(null);
         return;
       }
       const msg = String(e?.message ?? '');
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-        setError('Нет связи с сервисом погоды (Open-Meteo). Проверьте интернет или VPN.');
+        setError('Нет связи с сервисами погоды. Проверьте интернет.');
+      } else if (msg.includes('YANDEX_FORBIDDEN')) {
+        setError('Доступ к Яндекс.Погоде запрещён. Используется Open-Meteo (может требовать VPN)');
+        lastWorkingProvider = null;
       } else {
         setError(msg || 'Не удалось загрузить погоду');
       }
@@ -262,6 +392,9 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
         >
           <div className="flex justify-between items-center mb-3">
             <span className="text-sm font-semibold text-white">Погода</span>
+            {providerInfo && (
+              <span className="text-[10px] text-gray-500">{providerInfo}</span>
+            )}
           </div>
           {flightConditions.status !== 'ok' && data && (
             <div className={`mb-3 px-3 py-2 rounded-lg text-sm ${flightConditions.status === 'danger' ? 'bg-amber-900/40 border border-amber-600 text-amber-200' : 'bg-yellow-900/30 border border-yellow-600 text-yellow-200'}`}>
@@ -307,10 +440,10 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
               {pressure != null && (
                 <div className="flex justify-between">
                   <span className="text-gray-400">Давление</span>
-                  <span className="text-white">{Math.round(pressure * 0.75006)} мм рт. ст.</span>
+                  <span className="text-white">{pressure} мм рт. ст.</span>
                 </div>
               )}
-              <div className="pt-2 border-t border-gray-700 mt-2">
+              <div className="pt-2 border-t border-gray-700 mt-2 flex justify-between items-center">
                 <button
                   type="button"
                   onClick={fetchWeather}
@@ -319,6 +452,9 @@ export function WeatherWidget({ latitude, longitude, className = '', onFlightCon
                 >
                   {loading ? 'Обновление...' : 'Обновить'}
                 </button>
+                {data?._provider && (
+                  <span className="text-[9px] text-gray-600">{data._provider}</span>
+                )}
               </div>
             </div>
           )}

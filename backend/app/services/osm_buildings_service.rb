@@ -6,7 +6,8 @@ class OsmBuildingsService
   OVERPASS_ENDPOINTS = [
     "https://lz4.overpass-api.de/api/interpreter",
     "https://z.overpass-api.de/api/interpreter",
-    "https://overpass-api.de/api/interpreter"
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter"
   ].freeze
 
   MAX_BUILDING_FOOTPRINT_AREA_M2 = 25_000
@@ -15,11 +16,10 @@ class OsmBuildingsService
   STALE_CACHE_KEY = "osm_buildings:last_success"
   STALE_CACHE_TTL = 24.hours
 
-  READ_TIMEOUT = 12
-  OPEN_TIMEOUT = 5
-  OVERPASS_QUERY_TIMEOUT = 15
+  READ_TIMEOUT = 25
+  OPEN_TIMEOUT = 10
+  OVERPASS_QUERY_TIMEOUT = 30
 
-  # Overpass плохо переваривает большие bbox — обрезаем до ~6 км.
   MAX_BBOX_LAT_SPAN = 0.055
   MAX_BBOX_LNG_SPAN = 0.055
 
@@ -33,6 +33,8 @@ class OsmBuildingsService
   end
 
   def call
+    return [] if invalid_coordinates?
+
     validate_bbox!
     clamp_bbox_to_max_span!
 
@@ -48,7 +50,7 @@ class OsmBuildingsService
     end
 
     buildings.is_a?(Array) ? buildings : []
-  rescue Error => e
+  rescue Error, Faraday::Error => e
     Rails.logger.error("[OsmBuildingsService] #{e.message}")
     stale = Rails.cache.read(STALE_CACHE_KEY)
     return stale if stale.is_a?(Array)
@@ -58,6 +60,10 @@ class OsmBuildingsService
   end
 
   private
+
+  def invalid_coordinates?
+    [@south, @west, @north, @east].any? { |v| !v.finite? || v.nan? }
+  end
 
   def build_cache_key
     [
@@ -110,7 +116,8 @@ class OsmBuildingsService
 
     return result if result
 
-    raise Error, errors.last || "Не удалось загрузить здания OSM"
+    Rails.logger.warn("[OsmBuildingsService] Все эндпоинты Overpass недоступны. Ошибки: #{errors.join(', ')}")
+    []
   end
 
   def fetch_from_endpoint(endpoint)
@@ -145,6 +152,8 @@ class OsmBuildingsService
     parse_buildings(payload)
   rescue JSON::ParserError
     raise Error, "Некорректный ответ Overpass"
+  rescue Faraday::TimeoutError, Faraday::ConnectionFailed => e
+    raise Error, "Сетевая ошибка: #{e.message}"
   end
 
   def parse_buildings(payload)
