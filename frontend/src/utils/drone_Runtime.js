@@ -24,7 +24,8 @@ export function withRuntimeState(drone) {
     missionStartTime: null,
     missionElapsedTime: 0,
     missionParameters: null,
-    flightLog: []
+    flightLog: [],
+    readyForMissionStart: false,
   };
 }
 

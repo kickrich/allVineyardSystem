@@ -3,7 +3,7 @@ import { initialMapCenter, flightStatus } from '../constants/drones_data';
 import { AppContext } from './App_Context';
 import { resetTemplatesOnboardingForLogin, resetWorkspaceOnboardingForLogin } from '../constants/onboarding';
 import {
-  FIRST_WAYPOINT_TRANSIT_THRESHOLD_M,
+  FIRST_WAYPOINT_ARRIVAL_THRESHOLD_M,
   ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS,
   TEMPLATE_ROUTE_REJECT_COOLDOWN_MS,
   TELEMETRY_SEND_EVERY_MS,
@@ -55,6 +55,8 @@ import {
 import {
   calculateDistance,
   calculateBearing,
+  getDistanceToFirstWaypoint,
+  getFirstWaypointCoords,
 } from '../utils/flight_Calculator';
 import { computeMissionParamsFromPath } from '../utils/mission_Params';
 import {
@@ -355,7 +357,9 @@ export function AppProvider({ children }) {
       if (drone && path.length >= 2) {
         const params = computeMissionParamsFromPath(path, drone.maxSpeed, drone.battery);
         return next.map((d) =>
-          d.id === droneId ? { ...d, path, missionParameters: params } : d
+          d.id === droneId
+            ? { ...d, path, missionParameters: params, readyForMissionStart: false }
+            : d
         );
       }
       return next;
@@ -1421,7 +1425,8 @@ export function AppProvider({ children }) {
           missionParameters: null,
           flightProgress: 0,
           currentWaypointIndex: 0,
-          flightLog: []
+          flightLog: [],
+          readyForMissionStart: false,
         };
       })
     );
@@ -1467,7 +1472,8 @@ export function AppProvider({ children }) {
           missionTimerId: null,
           missionStartTime: null,
           missionElapsedTime: 0,
-          flightLog: []
+          flightLog: [],
+          readyForMissionStart: false,
         };
       })
     );
@@ -1551,7 +1557,7 @@ export function AppProvider({ children }) {
     setDrones((prev) =>
       prev.map((d) =>
         d.id === droneId
-          ? { ...d, position: { lat, lng } }
+          ? { ...d, position: { lat, lng }, readyForMissionStart: false }
           : d
       )
     );
@@ -1562,7 +1568,8 @@ export function AppProvider({ children }) {
       prev.map(d =>
         d.id === droneId ? {
           ...d,
-          path: [...d.path, [latlng.lat, latlng.lng]]
+          path: [...d.path, [latlng.lat, latlng.lng]],
+          readyForMissionStart: false,
         } : d
       )
     );
@@ -1614,6 +1621,7 @@ export function AppProvider({ children }) {
           ...d,
           path: normalizedPath,
           missionParameters: missionParams ?? d.missionParameters,
+          readyForMissionStart: false,
         };
       })
     );
@@ -1647,7 +1655,7 @@ export function AppProvider({ children }) {
 
     setDrones(prev =>
       prev.map(d =>
-        d.id === droneId ? { ...d, path: d.path.slice(0, -1) } : d
+        d.id === droneId ? { ...d, path: d.path.slice(0, -1), readyForMissionStart: false } : d
       )
     );
 
@@ -1666,7 +1674,8 @@ export function AppProvider({ children }) {
         d.id === droneId ? {
           ...d,
           path: [],
-          missionParameters: null
+          missionParameters: null,
+          readyForMissionStart: false,
         } : d
       )
     );
@@ -2230,15 +2239,7 @@ export function AppProvider({ children }) {
     };
   }, [authReady, dropStalePendingMission]);
 
-  const isDroneAtMissionStart = useCallback((drone) => {
-    if (!drone?.path || drone.path.length < 2 || !drone.position) return false;
-    const first = drone.path[0];
-    if (!Array.isArray(first) || first.length < 2) return false;
-    return (
-      calculateDistance(drone.position.lat, drone.position.lng, first[0], first[1]) <=
-      FIRST_WAYPOINT_TRANSIT_THRESHOLD_M
-    );
-  }, []);
+  const isDroneAtMissionStart = useCallback((drone) => Boolean(drone?.readyForMissionStart), []);
 
   const startDroneFlight = useCallback(async (droneId) => {
     const drone = drones.find(d => d.id === droneId);
@@ -2253,7 +2254,7 @@ export function AppProvider({ children }) {
     }
 
     if (!isDroneAtMissionStart(drone)) {
-      console.warn('Start flight blocked: drone must be at first waypoint');
+      console.warn('Start flight blocked: fly to first waypoint first');
       return;
     }
 
@@ -2277,11 +2278,15 @@ export function AppProvider({ children }) {
       setIsRouteEditMode(false);
     }
 
+    const firstWaypointCoords = getFirstWaypointCoords(drone);
+
     setDrones(prev =>
       prev.map(d => {
         if (d.id !== droneId) return d;
         return {
           ...d,
+          position: firstWaypointCoords ?? d.position,
+          readyForMissionStart: false,
           flightStatus: flightStatus.FLYING,
           isFlying: true,
           altitude: 100,
@@ -2533,7 +2538,8 @@ export function AppProvider({ children }) {
             missionTimerId: null,
             missionStartTime: null,
             missionElapsedTime: 0,
-            currentMission: null
+            currentMission: null,
+            readyForMissionStart: true,
           };
         })
       );
@@ -2583,7 +2589,8 @@ export function AppProvider({ children }) {
               ...d.currentMission,
               endTime: new Date().toISOString(),
               completed: true
-            }
+            },
+            readyForMissionStart: false,
           };
         })
       );
@@ -2633,7 +2640,8 @@ export function AppProvider({ children }) {
           missionStartTime: null,
           missionElapsedTime: 0,
           flightProgress: 0,
-          currentWaypointIndex: 0
+          currentWaypointIndex: 0,
+          readyForMissionStart: false,
         };
       })
     );
@@ -2698,8 +2706,6 @@ export function AppProvider({ children }) {
     setMapCenter([first[0], first[1]]);
   }, [drones, selectedDroneForSidebar]);
 
-  const MIN_FLY_TO_FIRST_DISTANCE_M = 0.5;
-
   const flyDroneToFirstWaypoint = useCallback((droneId) => {
     setIsRouteEditMode(false);
 
@@ -2726,6 +2732,7 @@ export function AppProvider({ children }) {
       missionStartTime: null,
       missionElapsedTime: 0,
       missionParameters: null,
+      readyForMissionStart: true,
     });
     if (!drone.position) {
       setDrones(prev =>
@@ -2734,13 +2741,8 @@ export function AppProvider({ children }) {
       addToDroneLog(droneId, '📍 Дрон размещён на первой точке миссии');
       return;
     }
-    const distToFirst = calculateDistance(
-      drone.position.lat,
-      drone.position.lng,
-      firstWaypoint[0],
-      firstWaypoint[1]
-    );
-    if (distToFirst <= MIN_FLY_TO_FIRST_DISTANCE_M) {
+    const distToFirst = getDistanceToFirstWaypoint(drone);
+    if (distToFirst != null && distToFirst <= FIRST_WAYPOINT_ARRIVAL_THRESHOLD_M) {
       setDrones(prev =>
         prev.map(d => (d.id !== droneId ? d : placeAtFirstWaypoint(d)))
       );

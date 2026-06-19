@@ -38,3 +38,23 @@ export const calculateOptimalSpeed = (distance, maxSpeed = 15) => {
   if (distance < 1000) return 10;
   return maxSpeed;
 };
+
+export function getFirstWaypointCoords(drone) {
+  if (!drone?.path?.length) return null;
+  const first = drone.path[0];
+  if (!Array.isArray(first) || first.length < 2) return null;
+  const lat = Number(first[0]);
+  const lng = Number(first[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+export function getDistanceToFirstWaypoint(drone) {
+  if (!drone?.path || drone.path.length < 2 || !drone.position) return null;
+  const firstCoords = getFirstWaypointCoords(drone);
+  if (!firstCoords) return null;
+  const lat = Number(drone.position.lat);
+  const lng = Number(drone.position.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return calculateDistance(lat, lng, firstCoords.lat, firstCoords.lng);
+}
