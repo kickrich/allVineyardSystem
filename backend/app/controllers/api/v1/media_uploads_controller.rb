@@ -150,7 +150,7 @@ module Api
           end
         end
 
-        # До 20 MB — один PUT. Больше — multipart: presign_part → PUT → list_parts → complete.
+        # До 100 MB — один PUT. Больше — multipart: presign_part → PUT → list_parts → complete.
         session_id = SecureRandom.hex(16)
         key = build_multipart_key(mission_id: mission.id, session_id: session_id, filename: filename)
 
@@ -189,7 +189,7 @@ module Api
           return
         end
 
-        chunk_size_bytes = S3MultipartUploadService::MIN_MULTIPART_PART_BYTES
+        chunk_size_bytes = S3MultipartUploadService.multipart_chunk_size_for(byte_size)
         total_parts = (byte_size.to_f / chunk_size_bytes).ceil
 
         upload_id = multipart_service.create_multipart_upload(key: key, content_type: content_type)

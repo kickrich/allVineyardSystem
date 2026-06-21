@@ -7,6 +7,7 @@ class RouteTemplate < ApplicationRecord
   validates :name, presence: { message: "не может быть пустым" },
                    length: { minimum: 2, maximum: 120, message: "должно быть от 2 до 120 символов" }
   validate :path_valid
+  validate :zone_belongs_to_user
 
   scope :ordered_recent, -> { order(created_at: :desc, id: :desc) }
 
@@ -37,5 +38,15 @@ class RouteTemplate < ApplicationRecord
         break
       end
     end
+  end
+
+  def zone_belongs_to_user
+    return if zone_id.blank? || user.nil?
+
+    zone_record = zone
+    return if zone_record.nil?
+    return if zone_record.user_id == user_id
+
+    errors.add(:zone_id, "не принадлежит текущему пользователю")
   end
 end

@@ -6,7 +6,8 @@ module Api
 
       # Список дронов GET /api/v1/drones
       def index
-        drones = Drone.all
+        UserDefaultFleetProvisioner.ensure!(@current_user)
+        drones = @current_user.drones
         drones = drones.by_status(params[:status]) if params[:status].present?
         drones = drones.available if truthy_param?(params[:available])
         render json: drones
@@ -19,7 +20,7 @@ module Api
       
       # Создание дрона POST /api/v1/drones
       def create
-        drone = Drone.new(drone_params)
+        drone = @current_user.drones.new(drone_params)
 
         if drone.save
           render json: drone, status: :created
@@ -60,7 +61,7 @@ module Api
       
       # Поиск дрона в базе данных
       def set_drone
-        @drone = Drone.find(params[:id])
+        @drone = @current_user.drones.find(params[:id])
       end
 
       # Параметры дрона

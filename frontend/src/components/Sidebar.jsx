@@ -694,7 +694,7 @@ export const Sidebar = ({
                             title={
                               atMissionStart
                                 ? 'Запустить миссию'
-                                : 'Миссия стартует только с первой точки маршрута — подведите дрон в радиус ~10 м от неё'
+                                : 'Сначала нажмите «К первой точке миссии» и дождитесь завершения подлёта'
                             }
                             className={`col-span-2 py-2 min-h-[44px] rounded flex items-center justify-center gap-2 ${
                               atMissionStart

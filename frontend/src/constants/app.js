@@ -1,7 +1,8 @@
 const VIEW_TRANSITION_MS = 900;
 const EXIT_PANELS_MS = VIEW_TRANSITION_MS;
 const DESKTOP_SWITCH_EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
-const FIRST_WAYPOINT_TRANSIT_THRESHOLD_M = 10;
+/** Дрон уже на первой точке — подлёт не нужен (только после «К первой точке миссии»). */
+const FIRST_WAYPOINT_ARRIVAL_THRESHOLD_M = 0.5;
 const ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS = 1200;
 const TEMPLATE_ROUTE_REJECT_COOLDOWN_MS = 1200;
 const TELEMETRY_SEND_EVERY_MS = 1000;
@@ -12,7 +13,8 @@ const VIDEO_CANVAS_HEIGHT = 360;
 const VIDEO_RECORDING_FPS = 15;
 const VIDEO_BACKEND_CONTENT_TYPE = 'video/webm';
 const VIDEO_RECORDER_MIME_CANDIDATES = ['video/webm;codecs=vp8', 'video/webm'];
-/** true — не записывать canvas; после миссии выбрать .mp4/.webm с диска (тот же multipart API). */
+/** true — backend кладёт видео из LOCAL_VIDEOS_FOLDER в MinIO (upload_to_minio).
+ *  false — те же файлы из папки, но загрузка через multipart (presigned PUT в MinIO). */
 const VIDEO_FROM_FOLDER =
   import.meta.env.VITE_VIDEO_FROM_FOLDER === 'true' ||
   import.meta.env.VITE_VIDEO_FROM_FOLDER === '1';
@@ -26,7 +28,7 @@ export {
 VIEW_TRANSITION_MS,
 EXIT_PANELS_MS,
 DESKTOP_SWITCH_EASE,
-FIRST_WAYPOINT_TRANSIT_THRESHOLD_M,
+FIRST_WAYPOINT_ARRIVAL_THRESHOLD_M,
 ROUTE_ZONE_REJECT_LOG_COOLDOWN_MS,
 TEMPLATE_ROUTE_REJECT_COOLDOWN_MS,
 TELEMETRY_SEND_EVERY_MS,

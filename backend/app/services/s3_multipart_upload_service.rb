@@ -4,8 +4,17 @@ class S3MultipartUploadService
   DEFAULT_EXPIRES_IN_SECONDS = 15.minutes.to_i
   # MinIO / S3: каждая часть multipart (кроме последней) >= 5 MB
   MIN_MULTIPART_PART_BYTES = 5 * 1024 * 1024
-  # До 20 MB — один presigned PUT; больше — multipart (presign_part + list_parts).
-  MAX_SINGLE_PUT_BYTES = 20 * 1024 * 1024
+  # До 100 MB — один presigned PUT; больше — multipart крупными частями.
+  MAX_SINGLE_PUT_BYTES = 100 * 1024 * 1024
+  MULTIPART_PART_BYTES = 100 * 1024 * 1024
+
+  def self.multipart_chunk_size_for(byte_size)
+    size = byte_size.to_i
+    return MIN_MULTIPART_PART_BYTES if size <= 0
+
+    chunk = [size, MULTIPART_PART_BYTES].min
+    [chunk, MIN_MULTIPART_PART_BYTES].max
+  end
 
   def initialize
     @bucket = ENV["S3_BUCKET"].to_s

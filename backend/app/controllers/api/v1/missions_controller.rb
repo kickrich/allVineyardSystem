@@ -6,7 +6,7 @@ module Api
       # GET /api/v1/missions
       # Параметры: status, drone_id, zone_id, active=1 (только planned/approved/in_progress)
       def index
-        missions = Mission.all
+        missions = @current_user.missions
         missions = missions.by_status(params[:status]) if params[:status].present?
         missions = missions.for_drone(params[:drone_id]) if params[:drone_id].present?
         missions = missions.where(zone_id: params[:zone_id]) if params[:zone_id].present?
@@ -21,7 +21,7 @@ module Api
 
       # Создание миссии POST /api/v1/missions
       def create
-        @mission = Mission.new(mission_params)
+        @mission = @current_user.missions.new(mission_params)
         @mission.status = Mission.statuses.fetch(:planned)
         if @mission.save
           render_message_data("api.missions.created", @mission, status: :created, default_message: "Миссия создана")
@@ -128,12 +128,12 @@ module Api
 
       # Поиск миссии в базе данных
       def set_mission
-        @mission = Mission.find(params[:id])
+        @mission = @current_user.missions.find(params[:id])
       end
             
       # Параметры миссии
       def mission_params
-        params.require(:mission).permit(:user_id, :zone_id, :drone_id, :status, :mission_type)
+        params.require(:mission).permit(:zone_id, :drone_id, :status, :mission_type)
       end
 
       def ai_result_payload(result)

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_28_132500) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_17_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -52,6 +52,22 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_132500) do
     t.integer "rows_count"
     t.string "status"
     t.datetime "updated_at", null: false
+    t.index ["mission_id"], name: "index_ai_results_on_mission_id"
+  end
+
+  create_table "bush_detections", force: :cascade do |t|
+    t.jsonb "bbox", default: {}, null: false
+    t.float "confidence", default: 0.0, null: false
+    t.datetime "created_at", null: false
+    t.float "latitude", null: false
+    t.float "longitude", null: false
+    t.bigint "mission_id", null: false
+    t.jsonb "payload", default: {}
+    t.string "source", default: "cv_service", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "zone_id", null: false
+    t.index ["mission_id"], name: "index_bush_detections_on_mission_id"
+    t.index ["zone_id"], name: "index_bush_detections_on_zone_id"
   end
 
   create_table "detections", force: :cascade do |t|
@@ -91,6 +107,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_132500) do
     t.jsonb "shift_segment_indices", default: [], null: false
     t.string "status"
     t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["user_id"], name: "index_drones_on_user_id"
   end
 
   create_table "media_uploads", force: :cascade do |t|
@@ -175,29 +193,59 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_132500) do
     t.datetime "updated_at", null: false
   end
 
-  create_table "videos", force: :cascade do |t|
+  create_table "video_shards", force: :cascade do |t|
+    t.float "bush_spacing_avg"
+    t.integer "bushes_count"
     t.datetime "created_at", null: false
+    t.integer "gaps_count"
+    t.string "job_id"
     t.string "original_filename"
     t.datetime "recorded_at"
-    t.string "status"
+    t.jsonb "result_json", default: {}
+    t.float "row_spacing"
+    t.integer "shard_index", null: false
+    t.integer "status", default: 0, null: false
     t.datetime "updated_at", null: false
+    t.bigint "video_id", null: false
+    t.index ["video_id", "shard_index"], name: "index_video_shards_on_video_id_and_shard_index", unique: true
+    t.index ["video_id"], name: "index_video_shards_on_video_id"
+  end
+
+  create_table "videos", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "external_callback_token", comment: "Токен для безопасности колбэка"
+    t.string "external_service_url", comment: "URL сервиса для отправки результатов"
+    t.string "mission_id", comment: "ID миссии от внешнего сервиса"
+    t.string "name"
+    t.datetime "recorded_at"
+    t.integer "row_index"
+    t.integer "rows_count"
+    t.integer "status", default: 0, null: false
+    t.datetime "updated_at", null: false
+    t.index ["mission_id", "row_index"], name: "index_videos_on_mission_id_and_row_index", unique: true
+    t.index ["mission_id"], name: "index_videos_on_mission_id"
   end
 
   create_table "zones", force: :cascade do |t|
     t.jsonb "boundary", default: []
-    t.string "color", default: "#22c55e", null: false
+    t.string "color"
     t.datetime "created_at", null: false
     t.text "description"
     t.string "name", null: false
     t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["user_id"], name: "index_zones_on_user_id"
   end
 
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "ai_results", "missions"
+  add_foreign_key "bush_detections", "missions"
+  add_foreign_key "bush_detections", "zones"
   add_foreign_key "detections", "videos"
   add_foreign_key "drone_logs", "drones"
   add_foreign_key "drone_logs", "users"
+  add_foreign_key "drones", "users"
   add_foreign_key "media_uploads", "missions"
   add_foreign_key "missions", "drones"
   add_foreign_key "missions", "users"
@@ -206,4 +254,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_132500) do
   add_foreign_key "route_templates", "zones", on_delete: :nullify
   add_foreign_key "routes", "missions"
   add_foreign_key "telemetries", "missions"
+  add_foreign_key "video_shards", "videos"
+  add_foreign_key "zones", "users"
 end

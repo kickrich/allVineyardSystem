@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir -r requirements.docker.txt
 
 COPY . /app
 
+ENV CV_DUMMY_INFERENCE=true
+
 EXPOSE 8000
 
 RUN chmod +x /app/docker-entrypoint.sh
