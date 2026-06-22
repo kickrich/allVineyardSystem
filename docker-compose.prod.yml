@@ -109,7 +109,8 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       S3_REGION: ${MINIO_REGION:-us-east-1}
       S3_ENDPOINT: http://minio:9000
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://minio:9000}
+      # Presigned PUT из браузера: тот же origin, что и фронт (nginx → /{bucket}/ → MinIO).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-${PUBLIC_URL}}
       S3_FORCE_PATH_STYLE: "true"
       VINEYARD_APP_URL: http://vineyard-app:80
       BACKEND_PUBLIC_URL: http://backend:80
@@ -173,7 +174,7 @@ services:
       args:
         VITE_API_BASE_URL: ""
         VITE_API_DIRECT: "true"
-        VITE_VIDEO_FROM_FOLDER: ${VITE_VIDEO_FROM_FOLDER:-true}
+        VITE_VIDEO_FROM_FOLDER: ${VITE_VIDEO_FROM_FOLDER:-false}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
@@ -192,10 +193,14 @@ services:
         condition: service_healthy
       vineyard-app:
         condition: service_healthy
+      minio:
+        condition: service_started
     ports:
       - "${HTTP_PORT:-80}:80"
+    environment:
+      MINIO_BUCKET: ${MINIO_BUCKET:-vineyard-videos}
     volumes:
-      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
 
 volumes:
   postgres-data:

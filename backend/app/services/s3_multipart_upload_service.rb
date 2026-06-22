@@ -25,22 +25,38 @@ class S3MultipartUploadService
     region = ENV.fetch("S3_REGION", "us-east-1")
     endpoint = ENV["S3_ENDPOINT"].to_s
     force_path_style = ENV.fetch("S3_FORCE_PATH_STYLE", "true") == "true"
+    public_endpoint = ENV["S3_PUBLIC_ENDPOINT"].to_s.presence || endpoint
 
-    @client = Aws::S3::Client.new(
-      access_key_id: access_key_id.presence,
-      secret_access_key: secret_access_key.presence,
-      region: region,
-      endpoint: endpoint.presence,
-      force_path_style: force_path_style
-    )
     @endpoint = endpoint
     @region = region
+
+    @client = build_s3_client(
+      endpoint: endpoint.presence,
+      access_key_id: access_key_id,
+      secret_access_key: secret_access_key,
+      region: region,
+      force_path_style: force_path_style
+    )
+
+    # Presigned URL для браузера: публичный endpoint (nginx → MinIO), не внутренний minio:9000.
+    @presign_client =
+      if public_endpoint.present? && public_endpoint != endpoint
+        build_s3_client(
+          endpoint: public_endpoint,
+          access_key_id: access_key_id,
+          secret_access_key: secret_access_key,
+          region: region,
+          force_path_style: force_path_style
+        )
+      else
+        @client
+      end
 
     ensure_bucket_exists!
   end
 
   def presign_put_object(key:, content_type:, expires_in: DEFAULT_EXPIRES_IN_SECONDS)
-    presigner = Aws::S3::Presigner.new(client: client)
+    presigner = Aws::S3::Presigner.new(client: presign_client)
     url = presigner.presigned_url(
       :put_object,
       bucket: bucket,
@@ -68,7 +84,7 @@ class S3MultipartUploadService
   end
 
   def presign_upload_part(key:, upload_id:, part_number:, expires_in: DEFAULT_EXPIRES_IN_SECONDS)
-    presigner = Aws::S3::Presigner.new(client: client)
+    presigner = Aws::S3::Presigner.new(client: presign_client)
     url = presigner.presigned_url(
       :upload_part,
       bucket: bucket,
@@ -134,7 +150,17 @@ class S3MultipartUploadService
 
   private
 
-  attr_reader :client, :bucket, :endpoint, :region
+  attr_reader :client, :presign_client, :bucket, :endpoint, :region
+
+  def build_s3_client(endpoint:, access_key_id:, secret_access_key:, region:, force_path_style:)
+    Aws::S3::Client.new(
+      access_key_id: access_key_id.presence,
+      secret_access_key: secret_access_key.presence,
+      region: region,
+      endpoint: endpoint.presence,
+      force_path_style: force_path_style
+    )
+  end
 
   def ensure_bucket_exists!
     client.head_bucket(bucket: bucket)

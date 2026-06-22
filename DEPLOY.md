@@ -54,7 +54,8 @@ nano .env
 | `MINIO_ROOT_PASSWORD` | Пароль MinIO |
 | `BACKEND_SECRET_KEY_BASE` | `openssl rand -hex 64` |
 | `VINEYARD_SECRET_KEY_BASE` | другой `openssl rand -hex 64` |
-| `VITE_VIDEO_FROM_FOLDER` | `true` — после миссии грузить `.mp4` из `local_videos/` в MinIO (нужна **пересборка** frontend) |
+| `VITE_VIDEO_FROM_FOLDER` | `false` (по умолчанию) — браузер грузит в MinIO через multipart; `true` — backend грузит из `local_videos/` (нужна **пересборка** frontend) |
+| `S3_PUBLIC_ENDPOINT` | Обычно пусто (= `PUBLIC_URL`). Нужен для presigned PUT при multipart из браузера |
 
 Положите модель CV: `cvService/models/best.onnx`
 
@@ -94,9 +95,11 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 
 ```
 Браузер → nginx:80
-            ├── /           → frontend (React)
-            ├── /api/       → backend (Rails API)
-            └── /vineyard/  → vineyardApp (дашборд)
+            ├── /                    → frontend (React)
+            ├── /api/                → backend (Rails API)
+            ├── /{MINIO_BUCKET}/     → MinIO (presigned multipart PUT из браузера)
+            └── /vineyard/           → vineyardApp (дашборд)
+```
 
 backend  → MinIO, vineyard-app, PostgreSQL
 vineyard-app → CV, MinIO, PostgreSQL
@@ -153,6 +156,8 @@ docker compose -f docker-compose.prod.yml down -v
 | Симптом | Решение |
 |---------|---------|
 | CORS error | `PUBLIC_URL` в `.env` должен совпадать с URL в браузере |
+| Видео не в MinIO (multipart) | `PUBLIC_URL` = URL в браузере; `S3_PUBLIC_ENDPOINT` пустой или = `PUBLIC_URL`; пересоберите `backend` и `nginx`; в Network смотрите PUT на `/{bucket}/`, не на `minio:9000` |
+| `PUT part failed` / `Failed to fetch` | Пересоберите стек: `docker compose -f docker-compose.prod.yml up -d --build backend nginx` |
 | `key must be 16 bytes` | Удалите `RAILS_MASTER_KEY*` из `.env`, используйте только `SECRET_KEY_BASE` |
 | backend не стартует | `docker compose logs backend` — проверьте `SECRET_KEY_BASE` (128 hex-символов) |
 | CV не отвечает | Проверьте `cvService/models/best.onnx` и `docker compose logs cv` |
